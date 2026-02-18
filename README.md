@@ -1,3 +1,5 @@
+### This is a personal project made for fun :)
+
 # CriTTS Recoded
 
 A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS uses Microsoft Edge's TTS engine (via edge-tts) to generate high-quality speech and can route audio to any output device, including virtual cables for Discord/VRChat integration.
@@ -263,3 +265,4 @@ This project is open source. Feel free to modify and distribute.
 
 
 **Enjoy CriTTS Recoded!** 🎙️
+
