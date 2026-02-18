@@ -7,6 +7,9 @@ import asyncio
 import threading
 from typing import Optional, Callable
 import os
+import time
+import datetime
+import logging
 
 from ..tts.text_preprocessor import TextPreprocessor
 from ..gui.keybind_manager import KeybindManager
@@ -89,10 +92,18 @@ class MainWindow:
         self._amplitude_analyzer: Optional[AmplitudeAnalyzer] = None
         
         # Typing animation state variables
-        self._typing_timer = None
+        self._typing_animation_timer = None
+        self._typing_debounce_timer = None
         self._typing_animation_state = 0
         self._is_typing_active = False
         self._last_typing_time = 0
+        
+        # Voice indicator debounce timer
+        self._voice_indicator_timer = None
+        self._voice_indicator_animating = False
+        
+        # Text preprocessor (reused across speak calls)
+        self._text_preprocessor = TextPreprocessor()
         
         self._setup_window()
         self._create_widgets()
@@ -413,7 +424,6 @@ class MainWindow:
     
     def _bind_shortcuts(self):
         """Bind keyboard shortcuts dynamically from settings."""
-        import logging
         logger = logging.getLogger(__name__)
         
         # Get keybinds from settings
@@ -473,7 +483,6 @@ class MainWindow:
     
     def _rebind_shortcuts(self):
         """Unregister and re-register all keybinds (called after settings change)."""
-        import logging
         logger = logging.getLogger(__name__)
         
         # Unbind widget-level bindings first
@@ -587,33 +596,31 @@ class MainWindow:
     
     def _animate_voice_indicator(self, new_text: str, new_color: str):
         """Animate the voice indicator with smooth transitions."""
+        # Guard: Skip if already animating to prevent orphaned animation chains
+        if self._voice_indicator_animating:
+            return
+        
         current_text = self.voice_indicator_value.cget("text")
-        current_color = self.voice_indicator_value.cget("text_color")
         
         # Only animate if the text actually changed
         if current_text != new_text:
+            self._voice_indicator_animating = True
             # Fade out current text
-            self._fade_out_text(0.15, lambda: self._fade_in_text(new_text, new_color, 0.15))
+            self._fade_out_text(0.15, lambda: self._fade_in_text_safe(new_text, new_color, 0.15))
+    
+    def _fade_in_text_safe(self, new_text: str, new_color: str, duration: float):
+        """Fade in the new text with animation state cleanup."""
+        try:
+            self._fade_in_text(new_text, new_color, duration)
+        finally:
+            self._voice_indicator_animating = False
     
     def _fade_out_text(self, duration: float, callback):
-        """Fade out the current text."""
-        steps = 10
-        delay = int((duration * 1000) / steps)
-        current_alpha = 1.0
-        
-        def fade_step():
-            nonlocal current_alpha
-            current_alpha -= 1.0 / steps
-            if current_alpha <= 0:
-                self.voice_indicator_value.configure(text="")
-                if callback:
-                    callback()
-            else:
-                # Apply fade effect by changing text color to gradually lighter
-                # This simulates a fade out effect
-                self.root.after(delay, fade_step)
-        
-        fade_step()
+        """Fade out the current text (simplified to single-step clear)."""
+        # CustomTkinter doesn't support alpha/color interpolation, so just clear and callback
+        self.voice_indicator_value.configure(text="")
+        if callback:
+            callback()
     
     def _fade_in_text(self, new_text: str, new_color: str, duration: float):
         """Fade in the new text."""
@@ -641,14 +648,22 @@ class MainWindow:
     
     def _on_text_changed(self):
         """Handle text input changes for typing animation."""
-        # Update voice indicator
-        self._update_voice_indicator()
+        # Debounce voice indicator update to reduce language detection calls
+        if self._voice_indicator_timer:
+            self.root.after_cancel(self._voice_indicator_timer)
+        self._voice_indicator_timer = self.root.after(300, self._update_voice_indicator)
         
         # Handle typing animation if OSC is enabled
         self._handle_typing_animation()
     
     def _handle_typing_animation(self):
         """Handle typing animation for VRChat OSC chatbox."""
+        # Guard: Don't restart typing animation while speaking
+        # This prevents KeyRelease events (like Enter key release) from restarting
+        # the animation that was just stopped by _on_speak()
+        if self._speaking:
+            return
+        
         # Check if OSC is enabled and connected
         if not self.osc_client or not self.settings.get("vrchat_osc_enabled", False):
             return
@@ -658,7 +673,6 @@ class MainWindow:
             return
         
         # Update last typing time
-        import time
         self._last_typing_time = time.time()
         
         # If not already typing, start typing animation
@@ -670,12 +684,12 @@ class MainWindow:
             self._animate_typing_indicator()
         
         # Reset debounce timer
-        if self._typing_timer:
-            self.root.after_cancel(self._typing_timer)
+        if self._typing_debounce_timer:
+            self.root.after_cancel(self._typing_debounce_timer)
         
         # Set new debounce timer to stop typing after timeout
         timeout_seconds = self.settings.get("vrchat_osc_typing_timeout", 2.0)
-        self._typing_timer = self.root.after(int(timeout_seconds * 1000), self._stop_typing_animation)
+        self._typing_debounce_timer = self.root.after(int(timeout_seconds * 1000), self._stop_typing_animation)
     
     def _animate_typing_indicator(self):
         """Animate the typing indicator with dots."""
@@ -686,8 +700,8 @@ class MainWindow:
         animation_texts = ["Typing.", "Typing..", "Typing..."]
         current_text = animation_texts[self._typing_animation_state]
         
-        # Send current animation text to chatbox
-        if self.osc_client:
+        # Send current animation text to chatbox (only if OSC is enabled)
+        if self.osc_client and self.settings.get("vrchat_osc_enabled", False):
             self.osc_client.send_to_chatbox(
                 current_text,
                 play_notification_sound=False,
@@ -697,22 +711,35 @@ class MainWindow:
         # Increment animation state
         self._typing_animation_state = (self._typing_animation_state + 1) % 3
         
-        # Schedule next animation frame (500ms interval)
-        self._typing_timer = self.root.after(500, self._animate_typing_indicator)
+        # Schedule next animation frame (1500ms interval to match VRChat rate limit)
+        self._typing_animation_timer = self.root.after(1500, self._animate_typing_indicator)
     
-    def _stop_typing_animation(self):
-        """Stop the typing animation."""
-        # Cancel animation timer
-        if self._typing_timer:
-            self.root.after_cancel(self._typing_timer)
-            self._typing_timer = None
+    def _stop_typing_animation(self, send_clear: bool = True):
+        """Stop the typing animation.
         
-        # Send typing indicator OFF
-        if self.osc_client:
+        Args:
+            send_clear: If True, clear the chatbox after stopping. Set to False
+                       when the actual message will replace the typing text,
+                       avoiding VRChat's rate limit on chatbox messages.
+        """
+        # Cancel animation timer
+        if self._typing_animation_timer:
+            self.root.after_cancel(self._typing_animation_timer)
+            self._typing_animation_timer = None
+        
+        # Cancel debounce timer
+        if self._typing_debounce_timer:
+            self.root.after_cancel(self._typing_debounce_timer)
+            self._typing_debounce_timer = None
+        
+        # Send typing indicator OFF (only if OSC is enabled)
+        if self.osc_client and self.settings.get("vrchat_osc_enabled", False):
             self.osc_client.send_typing_indicator(False)
         
-        # Clear chatbox
-        if self.osc_client:
+        # Clear chatbox (only if OSC is enabled and send_clear is True)
+        # Skip clearing when the actual message will replace the typing text,
+        # to avoid consuming VRChat's rate limit slot
+        if send_clear and self.osc_client and self.settings.get("vrchat_osc_enabled", False):
             self.osc_client.clear_chatbox()
         
         # Reset state
@@ -721,9 +748,9 @@ class MainWindow:
     
     def _on_speak(self):
         """Handle speak button click."""
-        # Stop typing animation when speaking
+        # Stop typing animation when speaking (skip clear to avoid rate limit)
         if self._is_typing_active:
-            self._stop_typing_animation()
+            self._stop_typing_animation(send_clear=False)
         
         with self._speaking_lock:
             if self._speaking:
@@ -747,12 +774,15 @@ class MainWindow:
         # Get abbreviations from settings and expand text (with cache)
         abbreviations = self.settings.get("abbreviations", {})
         if abbreviations:
-            cache_key = (text, id(abbreviations))
+            # Use a stable, content-based cache key instead of id()
+            cache_key = (text, tuple(sorted(abbreviations.items())))
             if cache_key in self._abbreviation_cache:
                 processed_text = self._abbreviation_cache[cache_key]
             else:
-                preprocessor = TextPreprocessor()
-                processed_text = preprocessor.expand_abbreviations(text, abbreviations)
+                # Cap cache size to prevent unbounded memory growth
+                if len(self._abbreviation_cache) > 100:
+                    self._abbreviation_cache.clear()
+                processed_text = self._text_preprocessor.expand_abbreviations(text, abbreviations)
                 self._abbreviation_cache[cache_key] = processed_text
         else:
             processed_text = text
@@ -762,7 +792,8 @@ class MainWindow:
             try:
                 self.osc_client.send_to_chatbox(
                     processed_text,
-                    play_notification_sound=self.settings.get("vrchat_osc_play_sound", True)
+                    play_notification_sound=self.settings.get("vrchat_osc_play_sound", True),
+                    priority=True  # Actual messages have priority over typing animation
                 )
             except Exception:
                 self._set_status("Failed to send to VRChat chatbox", "⚠️")
@@ -932,6 +963,10 @@ class MainWindow:
     
     def _on_stop(self):
         """Handle stop button click."""
+        # Stop typing animation when aborting (clear chatbox since no message will replace it)
+        if self._is_typing_active:
+            self._stop_typing_animation(send_clear=True)
+        
         # Set stop event to signal background thread to stop
         self._stop_event.set()
         self.audio_router.stop_playback()
@@ -945,6 +980,10 @@ class MainWindow:
     
     def _on_clear(self):
         """Handle clear button click."""
+        # Stop typing animation when clearing (clear chatbox since no message will replace it)
+        if self._is_typing_active:
+            self._stop_typing_animation(send_clear=True)
+        
         self.text_input.delete("1.0", "end")
         self.text_input.focus()
     
@@ -1003,7 +1042,10 @@ class MainWindow:
         button.configure(width=original_width + 2)
         
         def reset_size():
-            button.configure(width=original_width)
+            try:
+                button.configure(width=original_width)
+            except Exception:
+                pass  # Button may have been destroyed or reconfigured
         
         self.root.after(int(duration * 500), reset_size)
     
@@ -1030,22 +1072,11 @@ class MainWindow:
             self._fade_out_status(0.1, lambda: self._fade_in_status(new_text, 0.1))
     
     def _fade_out_status(self, duration: float, callback):
-        """Fade out the current status text."""
-        steps = 8
-        delay = int((duration * 1000) / steps)
-        current_alpha = 1.0
-        
-        def fade_step():
-            nonlocal current_alpha
-            current_alpha -= 1.0 / steps
-            if current_alpha <= 0:
-                self.status_label.configure(text="")
-                if callback:
-                    callback()
-            else:
-                self.root.after(delay, fade_step)
-        
-        fade_step()
+        """Fade out the current status text (simplified to single-step clear)."""
+        # CustomTkinter doesn't support alpha/color interpolation, so just clear and callback
+        self.status_label.configure(text="")
+        if callback:
+            callback()
     
     def _fade_in_status(self, new_text: str, duration: float):
         """Fade in the new status text."""

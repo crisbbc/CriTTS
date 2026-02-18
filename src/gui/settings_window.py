@@ -1352,6 +1352,85 @@ Examples:
         osc_amplitude_label.pack(anchor="w", pady=(0, 10))
         self._wraplength_labels.append(osc_amplitude_label)
         
+        # Separator
+        ctk.CTkFrame(self.osc_scroll, height=2, fg_color="gray").pack(fill="x", pady=15)
+        
+        # ========== Typing Indicator Section ==========
+        ctk.CTkLabel(
+            self.osc_scroll, 
+            text="Typing Indicator", 
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", pady=(10, 5))
+        
+        typing_indicator_info_label = ctk.CTkLabel(
+            self.osc_scroll,
+            text="Shows a typing animation in VRChat's chatbox while TTS is playing.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=500
+        )
+        typing_indicator_info_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(typing_indicator_info_label)
+        
+        # Enable typing indicator animation checkbox
+        self.typing_animation_var = ctk.BooleanVar(value=self.settings.get("vrchat_osc_typing_animation", False))
+        self.typing_animation_check = ctk.CTkCheckBox(
+            self.osc_scroll,
+            text="Enable Typing Indicator Animation",
+            variable=self.typing_animation_var,
+            font=ctk.CTkFont(size=12)
+        )
+        self.typing_animation_check.pack(anchor="w", pady=5)
+        
+        typing_animation_desc_label = ctk.CTkLabel(
+            self.osc_scroll,
+            text="When enabled, shows a typing indicator in VRChat while TTS audio is playing.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=500
+        )
+        typing_animation_desc_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(typing_animation_desc_label)
+        
+        # Typing timeout slider
+        ctk.CTkLabel(
+            self.osc_scroll,
+            text="Typing Indicator Timeout:",
+            font=ctk.CTkFont(size=12)
+        ).pack(anchor="w", pady=(10, 5))
+        
+        typing_timeout_frame = ctk.CTkFrame(self.osc_scroll, fg_color="transparent")
+        typing_timeout_frame.pack(fill="x", pady=5)
+        
+        # Convert timeout to tenths of a second for slider (0.5 to 10.0 seconds)
+        current_timeout = self.settings.get("vrchat_osc_typing_timeout", 2.0)
+        self.typing_timeout_var = ctk.DoubleVar(value=current_timeout)
+        self.typing_timeout_slider = ctk.CTkSlider(
+            typing_timeout_frame,
+            from_=0.5,
+            to=10.0,
+            number_of_steps=95,
+            variable=self.typing_timeout_var,
+            command=self._on_typing_timeout_change,
+            width=400
+        )
+        self.typing_timeout_slider.pack(side="left", fill="x", expand=True, padx=5)
+        
+        self.typing_timeout_value_label = ctk.CTkLabel(
+            typing_timeout_frame,
+            text=f"{current_timeout:.1f}s",
+            font=ctk.CTkFont(size=12),
+            width=50
+        )
+        self.typing_timeout_value_label.pack(side="right", padx=5)
+        
+        ctk.CTkLabel(
+            self.osc_scroll,
+            text="Seconds of inactivity before the typing indicator turns off automatically.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        ).pack(anchor="w", pady=(0, 10))
+        
         # Store viseme-related widgets for enabling/disabling based on OSC state
         self._viseme_widgets = [
             self.viseme_enabled_check,
@@ -1359,11 +1438,17 @@ Examples:
             self.viseme_amplitude_check,
         ]
         
+        # Store typing indicator widgets for enabling/disabling based on OSC state
+        self._typing_indicator_widgets = [
+            self.typing_animation_check,
+            self.typing_timeout_slider,
+        ]
+        
         # Initialize OSC enabled state
         self._on_osc_enabled_toggle()
     
     def _on_osc_enabled_toggle(self):
-        """Toggle viseme options based on OSC enabled state."""
+        """Toggle viseme and typing indicator options based on OSC enabled state."""
         osc_enabled = self.osc_enabled_var.get()
         
         # Enable/disable viseme-related widgets based on OSC state
@@ -1373,9 +1458,21 @@ Examples:
             except Exception:
                 pass
         
-        # If OSC is disabled, also disable viseme
+        # Enable/disable typing indicator widgets based on OSC state
+        for widget in self._typing_indicator_widgets:
+            try:
+                widget.configure(state="normal" if osc_enabled else "disabled")
+            except Exception:
+                pass
+        
+        # If OSC is disabled, also disable viseme and typing indicator
         if not osc_enabled:
             self.viseme_enabled_var.set(False)
+            self.typing_animation_var.set(False)
+    
+    def _on_typing_timeout_change(self, value):
+        """Update typing timeout label when slider changes."""
+        self.typing_timeout_value_label.configure(text=f"{value:.1f}s")
     
     def _create_advanced_tab(self):
         """Create Advanced settings tab with cache management, performance, and experimental features."""
@@ -2391,6 +2488,10 @@ Examples:
         self.settings.set("vrchat_viseme_enabled", self.viseme_enabled_var.get())
         self.settings.set("vrchat_viseme_smoothing", self.viseme_smoothing_var.get() / 100.0)
         self.settings.set("vrchat_voice_amplitude_enabled", self.viseme_amplitude_var.get())
+        
+        # Save typing indicator settings
+        self.settings.set("vrchat_osc_typing_animation", self.typing_animation_var.get())
+        self.settings.set("vrchat_osc_typing_timeout", self.typing_timeout_var.get())
         
         # Save abbreviations
         abbrev_raw = self.abbrev_text.get("1.0", "end-1c")

@@ -5,6 +5,7 @@ Handles sending messages to VRChat's chatbox via OSC protocol.
 
 import threading
 import logging
+import time
 from typing import Optional, Callable
 from pythonosc import udp_client
 from pythonosc.osc_message_builder import OscMessageBuilder
@@ -21,6 +22,7 @@ class VRChatOSCClient:
     DEFAULT_VRCHAT_IP = "127.0.0.1"
     DEFAULT_VRCHAT_PORT = 9000
     CHATBOX_ENDPOINT = "/chatbox/input"
+    CHATBOX_MIN_INTERVAL = 1.5  # Minimum seconds between chatbox messages (VRChat rate limit)
     
     def __init__(
         self,
@@ -43,6 +45,7 @@ class VRChatOSCClient:
         self._client: Optional[udp_client.SimpleUDPClient] = None
         self._connected = False
         self._logger = logging.getLogger('vrchat_osc')
+        self._last_chatbox_send_time: float = 0.0
         
         # Setup logging
         if not self._logger.handlers:
@@ -95,7 +98,8 @@ class VRChatOSCClient:
         self,
         message: str,
         play_notification_sound: bool = True,
-        show_keyboard: bool = False
+        show_keyboard: bool = False,
+        priority: bool = False
     ) -> bool:
         """
         Send a message to VRChat's chatbox.
@@ -104,6 +108,7 @@ class VRChatOSCClient:
             message: The text message to send
             play_notification_sound: Whether to play the notification sound
             show_keyboard: Whether to show the keyboard (typing indicator)
+            priority: If True, bypass rate limit (for actual messages vs typing animation)
             
         Returns:
             True if message sent successfully, False otherwise
@@ -116,6 +121,14 @@ class VRChatOSCClient:
             
             return False
         
+        # Rate limit guard - VRChat enforces ~1.5s between chatbox messages
+        # Priority messages bypass this limit (actual messages override typing animation)
+        if not priority:
+            elapsed = time.time() - self._last_chatbox_send_time
+            if elapsed < self.CHATBOX_MIN_INTERVAL:
+                self._logger.debug(f"Chatbox rate limit: skipping send ({self.CHATBOX_MIN_INTERVAL - elapsed:.2f}s remaining)")
+                return False
+        
         try:
             # VRChat expects the message as a string argument
             # The second argument controls notification sound (integer 0 or 1 for compatibility)
@@ -126,7 +139,12 @@ class VRChatOSCClient:
                 [message, play_sound_int, show_keyboard]
             )
             
-            self._logger.info(f"Sent message to chatbox (notification_sound={play_sound_int}): {message[:50]}...")
+            # Update last send time after successful send
+            self._last_chatbox_send_time = time.time()
+            
+            # Only append "..." if message was truncated
+            display_msg = message[:50] + "..." if len(message) > 50 else message
+            self._logger.info(f"Sent message to chatbox (notification_sound={play_sound_int}): {display_msg}")
             
             if self.status_callback:
                 self.status_callback("OSC: Message sent", False)
