@@ -1,352 +1,264 @@
 # CriTTS Recoded
 
-A modern, free Text-to-Speech (TTS) application with a beautiful dark mode GUI. CriTTS Recoded uses Microsoft Edge's TTS engine (via edge_tts) to generate high-quality speech and can route audio to any output device, including virtual cables for Discord integration.
+A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS uses Microsoft Edge's TTS engine (via edge-tts) to generate high-quality speech and can route audio to any output device, including virtual cables for Discord/VRChat integration.
 
 ## Features
 
+### Core TTS
 - **Free TTS Engine**: Uses Microsoft Edge's online TTS service (no API key required)
 - **100+ Voices**: Access to all Microsoft Edge voices in multiple languages
+- **Voice Customization**: Adjust speech rate (-100 to +100), volume (0-100), and pitch (-100 to +100)
+- **Auto Language Detection**: Automatically detects text language and selects appropriate voice
+- **Custom Language Mappings**: Set preferred voices for each language
+
+### Audio Processing
 - **Audio Routing**: Route TTS output to any audio device (including VB-Cable for Discord)
-- **Modern Dark Mode GUI**: Built with CustomTkinter for a sleek, modern interface
-- **Voice Customization**: Adjust speech rate, volume, and pitch
-- **High-Quality Audio**: 48kHz resampling with anti-aliasing and stereo enhancement via processing profiles
-- **Audio Normalization**: Peak and RMS normalization for consistent volume
-- **Professional Audio Processing**: Anti-aliasing resampling and stereo enhancement
-- **Persistent Settings**: Saves your preferences between sessions
-- **Configurable Keyboard Shortcuts**: Default Ctrl+Enter to speak, Escape to stop, Ctrl+T to clear — all editable in Settings > Keybinds
+- **Processing Profiles**: Choose between Fast Preview, Balanced, or High Quality
+- **Audio Normalization**: Peak, RMS, or LUFS normalization for consistent volume
+- **High-Quality Resampling**: 48kHz with Kaiser-windowed anti-aliasing filters
+- **Stereo Enhancement**: Converts mono TTS to natural-sounding stereo
 
-## Audio Processing Profiles
+### Performance
+- **Persistent Audio Cache**: Generated audio is cached to disk for instant replay
+- **LRU Cache Eviction**: Configurable cache size with automatic cleanup
+- **Phrase Pre-generation**: Frequently used phrases can be pre-generated
+- **Streaming Playback**: Experimental low-latency mode starts playing before generation completes
 
-CriTTS Recoded uses processing profiles to optimize audio quality for different use cases. Configure these in **Settings > Advanced**.
+### GUI
+- **Modern Interface**: Built with CustomTkinter for a sleek, modern look
+- **Dark/Light Mode**: Switch between themes or follow system setting
+- **Voice Search & Filters**: Search by name, filter by language/region/gender
+- **Voice Favorites**: Save favorite voices for quick access
+- **Configurable Keybinds**: All keyboard shortcuts are customizable
 
-### Audio Normalization Options
-
-Configure normalization in **Settings > Audio Output**. Available types:
-
-| Type | Description | Best For | Technical Details |
-|------|-------------|----------|-------------------|
-| **Peak** | Prevents clipping by limiting maximum amplitude to -1dB | General use, speech | Targets 0.891 amplitude (-1dB), safe headroom |
-| **RMS** | Ensures consistent loudness across different voices | Multi-voice projects | Targets 0.15 RMS level, 10x gain limit |
-| **LUFS** | Professional loudness standards | Streaming/broadcast | -14 LUFS (streaming) or -23 LUFS (broadcast) |
-| **None** | No processing | Custom audio workflows | Bypasses normalization entirely |
-
-**When to Use Each:**
-- **Peak**: Default choice for most users, prevents distortion
-- **RMS**: Use when voices have varying loudness levels
-- **LUFS**: Professional content for YouTube, Spotify, or broadcast
-- **None**: When using external audio processing software
-
-**Note:** LUFS normalization uses the `pyloudnorm` library, which is included in the dependencies.
-
-### Audio Processing Pipeline
-
-The audio pipeline includes:
-1. **High-Quality Resampling**: Uses scipy's polyphase resampling with Kaiser-windowed anti-aliasing filters
-2. **Normalization**: Prevents clipping and ensures consistent volume
-3. **Stereo Enhancement**: Converts mono TTS output to natural-sounding stereo with configurable width
-
-## VRChat Integration
-
-CriTTS Recoded includes built-in VRChat integration that automatically speaks incoming chat messages from other players using TTS.
-
-### ⚠️ Important Limitation
-
-**VRChat integration only monitors INCOMING messages from OTHER players.** Your own typed messages in VRChat are **NOT** logged by VRChat and cannot be detected by CriTTS. This is a VRChat limitation, not a CriTTS bug.
-
-### Quick Start
-
-1. Open **Settings** > **VRChat OSC** tab
-2. Check **"Enable VRChat Mode"**
-3. Configure log path (auto-detect usually works)
-4. Set message filters as desired
-5. Click **Save**
-
-### Features
-
-- **Auto-Detection**: Automatically finds VRChat log files
-- **Message Filtering**: Ignore system messages, joins/leaves, or specific users
-- **User Blacklist/Whitelist**: Control which users' messages are spoken
-- **Debug Diagnostics**: Test connection, view log files, see parsing details
-- **Real-time Status**: Message counter and hover tooltip with statistics
-
-### Testing & Diagnostics
-
-Use the built-in diagnostic tools:
-- **Test Connection**: Verifies log file access and shows recent chat messages
-- **View Log File**: Displays last 20 lines with parsing indicators
-- **Debug Mode**: Enable verbose logging to console for troubleshooting
-
-### VRChat OSC Chatbox and Notification Sound
-
-CriTTS can send TTS output to VRChat's in-game chatbox via OSC (e.g. when "Send to chatbox when speaking" is enabled in Settings > VRChat OSC).
-
-- **Notification sound**: The "Play notification sound when sending" option uses VRChat's built-in chatbox notification sound. It is controlled by VRChat, not a custom sound file.
-- **Requirements**: VRChat must have OSC enabled in its settings. The notification sound may not work in all VRChat versions.
-- **If notification sound doesn't work**: Ensure OSC is enabled in VRChat, that you are using a supported VRChat version, and try toggling the setting off and on. Behavior can vary by VRChat build.
+### VRChat Integration
+- **OSC Chatbox**: Send TTS text to VRChat's in-game chatbox
+- **Viseme Animation**: Automatic lip-sync for your avatar
+- **Voice Amplitude**: Real-time mouth movement based on audio volume
+- **Typing Indicator**: Show typing animation in VRChat while composing
 
 ## Installation
 
-
 ### Prerequisites
-
 - Python 3.8 or higher
 - Windows, macOS, or Linux
 
-### Install Dependencies
+### Quick Start
 
 ```bash
+# Clone the repository
+git clone https://github.com/k1rk11/CriTTS.git
+cd CriTTS
+
+# Install dependencies
 pip install -r requirements.txt
-```
 
-Or install manually:
-
-```bash
-pip install customtkinter edge-tts>=7.2.3 sounddevice soundfile>=0.12.0 numpy>=1.21.0 scipy>=1.9.0 pyloudnorm>=0.1.0 Pillow watchdog>=3.0.0 python-osc>=1.8.0
-```
-
-### VB-Cable Setup (for Discord Integration)
-
-To use CriTTS Recoded with Discord or other applications:
-
-1. **Download VB-Cable**:
-   - Visit [VB-Audio Software](https://vb-audio.com/Cable/)
-   - Download and install VB-Cable (free version available)
-
-2. **Set Up Discord**:
-   - Open Discord settings
-   - Go to Voice & Video
-   - Set Input Device to "CABLE Output (VB-Audio Virtual Cable)"
-   - Disable "Automatically determine input sensitivity"
-   - Set input sensitivity to minimum (-100dB)
-
-3. **Configure CriTTS Recoded**:
-   - Open CriTTS Recoded
-   - Click "Settings"
-   - Go to "Audio Output" tab
-   - Select "CABLE Input (VB-Audio Virtual Cable)" as output device
-   - Save settings
-
-4. **Usage**:
-   - Type text in CriTTS Recoded
-   - Click "Speak" or press Ctrl+Enter
-   - Audio will be routed to Discord automatically
-
-## Usage
-
-### Running the Application
-
-```bash
+# Run the application
 python main.py
 ```
 
-### Basic Usage
+### Dependencies
+
+```
+customtkinter
+edge-tts>=7.2.3
+sounddevice
+soundfile>=0.12.0
+numpy>=1.21.0
+scipy>=1.9.0
+pyloudnorm>=0.1.0
+Pillow
+watchdog>=3.0.0
+python-osc>=1.8.0
+```
+
+## Usage
+
+### Basic Operation
 
 1. **Enter Text**: Type or paste text in the main text area
-2. **Speak**: Click the "Speak" button or press Ctrl+Enter
-3. **Stop**: Click "Stop" or press Escape to stop playback
-4. **Clear**: Click "Clear" or press Ctrl+T to clear text
+2. **Speak**: Click "Speak" or press `Ctrl+Enter`
+3. **Stop**: Click "Stop" or press `Escape`
+4. **Clear**: Click "Clear" or press `Ctrl+T`
 
-### Changing Settings
+### Settings
 
-1. Click "Settings" button
-2. Navigate through the tabs:
-   - **Voice Tab**: Select voice, adjust rate, volume, and pitch; manage favorites; preview voices
-   - **Audio Output Tab**: Select output device, configure normalization type and toggle
-   - **Appearance Tab**: Switch between Dark/Light/System mode
-   - **Abbreviations Tab**: Define text expansion shortcuts
-   - **Keybinds Tab**: Customize all keyboard shortcuts
-   - **Behavior Tab**: Configure speak mode, auto-language detection, and language-voice mappings
-   - **VRChat OSC Tab**: Configure OSC chatbox, viseme/amplitude settings
-   - **Advanced Tab**: Manage audio cache, select processing profile, enable streaming (experimental)
-3. Click "Save" to apply changes
+Access settings by clicking the "Settings" button or pressing `Ctrl+,`
 
-### Voice Search and Filters
+#### Voice Tab
+- Select voice from the list (100+ voices available)
+- Adjust rate, volume, and pitch
+- Preview voices before selecting
+- Manage favorite voices
 
-In the Voice settings tab, use the search box and filter dropdowns to find voices:
+#### Audio Output Tab
+- Select output device
+- Enable/disable normalization
+- Choose normalization type (Peak, RMS, LUFS)
 
-- **Search box**: Find voices by name (e.g., "Aria", "Guy"), locale (e.g., "en-US", "es-ES"), or language code.
-- **Language filter**: Dropdown is populated from loaded voices (e.g., "All Languages", "en", "es", "fr", "ja"). Select a language to show only voices for that language.
-- **Region filter**: Dropdown lists locales from loaded voices (e.g., "All Regions", "en-US", "en-GB", "es-ES"). Select a region to narrow by locale.
-- **Gender filter**: Choose "All", "Male", or "Female".
+#### Appearance Tab
+- Switch between Dark, Light, or System theme
 
-Filters are applied together. Use **Clear** to reset all filters to "All" / "All Languages" / "All Regions".
+#### Abbreviations Tab
+- Define text expansion shortcuts (e.g., "idk" → "I don't know")
+
+#### Keybinds Tab
+- Customize all keyboard shortcuts
+
+#### Behavior Tab
+- Configure speak mode (current line or all text)
+- Enable auto language detection
+- Set language-to-voice mappings
+
+#### VRChat OSC Tab
+- Enable OSC integration
+- Configure chatbox settings
+- Set up viseme/amplitude for lip-sync
+
+#### Advanced Tab
+- Manage audio cache settings
+- Select processing profile
+- Enable streaming playback (experimental)
+
+## VB-Cable Setup (Discord Integration)
+
+To route TTS audio to Discord or other applications:
+
+1. **Install VB-Cable**
+   - Download from [VB-Audio Software](https://vb-audio.com/Cable/)
+   - Install the virtual audio cable
+
+2. **Configure CriTTS**
+   - Open Settings > Audio Output
+   - Select "CABLE Input (VB-Audio Virtual Cable)"
+
+3. **Configure Discord**
+   - Open Discord Settings > Voice & Video
+   - Set Input Device to "CABLE Output"
+   - Disable "Automatically determine input sensitivity"
+
+4. **Use**
+   - Type text in CriTTS and click Speak
+   - Audio will be routed to Discord
+
+## Audio Processing Profiles
+
+| Profile | Sample Rate | Anti-Aliasing | Stereo Width | Best For |
+|---------|-------------|---------------|--------------|----------|
+| Fast Preview | Original | None | None | Quick testing |
+| Balanced | 48kHz | Kaiser β=5 | 0.3 | General use (default) |
+| High Quality | 48kHz | Kaiser β=8 | 0.5 | Important content |
+
+## Normalization Types
+
+| Type | Description | Best For |
+|------|-------------|----------|
+| **Peak** | Limits maximum amplitude to -1dB | General use, prevents clipping |
+| **RMS** | Ensures consistent loudness | Multi-voice projects |
+| **LUFS** | Professional loudness standards (-14 LUFS) | Streaming, broadcast |
+| **None** | No processing | External audio workflows |
+
+## VRChat Integration
+
+### Setup
+
+1. Enable VRChat OSC in Settings > VRChat OSC
+2. Ensure OSC is enabled in VRChat (Settings > OSC > Enable OSC)
+3. Configure desired features:
+   - **Send to Chatbox**: Display TTS text in VRChat
+   - **Viseme Animation**: Animate avatar mouth
+   - **Voice Amplitude**: Real-time mouth movement
+
+### Features
+
+- **Chatbox Integration**: TTS text appears in VRChat's chatbox
+- **Lip-Sync**: Avatar mouth moves in sync with speech
+- **Typing Indicator**: Shows typing animation while composing
+
+### Limitations
+
+- Only incoming messages from other players can be monitored (VRChat limitation)
+- Your own typed messages in VRChat are not logged by VRChat
 
 ## Project Structure
 
 ```
 CriTTS/
-├── image.ico
-├── main.py
-├── requirements.txt
-├── README.md
+├── main.py                    # Application entry point
+├── requirements.txt           # Python dependencies
+├── README.md                  # This file
 └── src/
-    ├── __init__.py
     ├── config/
-    │   ├── __init__.py
-    │   └── settings_manager.py       # JSON settings persistence
+    │   └── settings_manager.py    # JSON settings persistence
     ├── tts/
-    │   ├── __init__.py
-    │   ├── tts_engine.py             # TTS orchestration
-    │   ├── text_preprocessor.py      # Text cleaning & abbreviation expansion
-    │   ├── audio_cache.py            # Persistent LRU audio cache
+    │   ├── tts_engine.py          # TTS orchestration
+    │   ├── text_preprocessor.py   # Text cleaning & abbreviation expansion
+    │   ├── audio_cache.py         # Persistent LRU audio cache
     │   └── providers/
-    │       ├── __init__.py
-    │       └── edge_tts_provider.py  # edge_tts integration
+    │       └── edge_tts_provider.py   # edge-tts integration
     ├── audio/
-    │   ├── __init__.py
-    │   └── audio_router.py           # sounddevice audio routing & processing
+    │   └── audio_router.py        # Audio device routing & processing
     ├── gui/
-    │   ├── __init__.py
-    │   ├── main_window.py            # Main application window
-    │   ├── settings_window.py        # Settings dialog (8 tabs)
-    │   ├── keybind_manager.py        # Dynamic keybind registration
-    │   └── theme_constants.py        # UI theme & layout constants
+    │   ├── main_window.py         # Main application window
+    │   ├── settings_window.py     # Settings dialog
+    │   ├── keybind_manager.py     # Dynamic keybind registration
+    │   └── theme_constants.py     # UI theme & layout constants
     └── vrchat/
-        ├── __init__.py
-        ├── osc_client.py             # VRChat OSC chatbox client
-        └── viseme_mapper.py          # Phoneme-to-viseme mapping
+        ├── osc_client.py          # VRChat OSC client
+        └── viseme_mapper.py       # Phoneme-to-viseme mapping
 ```
+
+## Keyboard Shortcuts
+
+| Default Shortcut | Action |
+|------------------|--------|
+| `Ctrl+Enter` | Speak text |
+| `Escape` | Stop playback |
+| `Ctrl+T` | Clear text |
+| `Ctrl+,` | Open Settings |
+
+All shortcuts are customizable in Settings > Keybinds.
 
 ## Troubleshooting
 
 ### No Audio Output
+1. Check output device in Settings > Audio Output
+2. Ensure device is not muted in system settings
+3. Try "System Default" device
 
-1. Check that the correct output device is selected in Settings > Audio Output
-2. Ensure the selected device is not muted in Windows Sound settings
-3. Try "System Default" device to use your main speakers
-
-### VB-Cable Not Working with Discord
-
+### VB-Cable Not Working
 1. Verify VB-Cable is installed correctly
-2. Check Discord input device is set to "CABLE Output"
-3. Disable noise suppression and echo cancellation in Discord
-4. Run both CriTTS Recoded and Discord as administrator (if needed)
+2. Check Discord input device is "CABLE Output"
+3. Disable noise suppression in Discord
 
-### TTS Not Working / No Voices Load
+### TTS Not Working
+1. Check internet connection (edge-tts requires internet)
+2. Verify firewall is not blocking Python
+3. Try refreshing voices in Settings
 
-1. Check internet connection (edge_tts requires internet)
-2. Verify firewall is not blocking Python/edge_tts
-3. Try refreshing voices in Settings (click Refresh button)
+### VRChat Integration Issues
+1. Ensure OSC is enabled in VRChat settings
+2. Check IP/port configuration (default: 127.0.0.1:9000)
+3. Use "Test Connection" in Settings > VRChat OSC
 
-### Application Won't Start
+## Performance Tips
 
-1. Ensure all dependencies are installed: `pip install -r requirements.txt`
-2. Check Python version: `python --version` (must be 3.8+)
-3. Try running from command line to see error messages: `python main.py`
-
-### VRChat Messages Not Detected
-
-1. **Check VRChat is running** - Logs are only written while VRChat is active
-2. **Verify log path** - Use "Test Connection" in Settings > VRChat OSC
-3. **Check for chat activity** - Someone needs to send a message for detection
-4. **Enable debug mode** - Check "Log all lines" to see what's being read
-5. **View log file** - Use "View Log File" to see recent entries and parsing results
-
-**Note:** Your own messages typed in VRChat will NOT be detected (VRChat limitation). Only messages from other players are logged.
-
-### Audio Quality Issues
-
-1. Open Settings and go to the "Advanced" tab
-2. Select a higher quality processing profile: "Balanced" or "High Quality"
-3. Enable audio normalization in Settings > Audio Output for consistent volume
-4. Try different voices - some have better quality than others
-5. Adjust speech rate - very fast/slow rates may affect clarity
-
-**Processing Profiles:**
-- **Fast Preview**: No processing, fastest generation. Good for quick testing.
-- **Balanced**: 48kHz with anti-aliasing and stereo enhancement. Recommended for most use cases.
-- **High Quality**: 48kHz with stronger anti-aliasing and wider stereo. Best for important content.
-
-
-## Keyboard Shortcuts
-
-| Shortcut (default) | Action |
-|--------------------|--------|
-| Ctrl+Enter | Speak text |
-| Escape | Stop playback |
-| Ctrl+T | Clear text |
-| Ctrl+, | Open Settings |
-
-All shortcuts are configurable in Settings > Keybinds.
-
-## Performance Optimizations
-
-CriTTS Recoded includes several performance optimizations for faster TTS generation:
-
-### Audio Cache
-
-- **Persistent Disk Cache**: Generated audio is cached to disk, so identical text won't need regeneration
-- **LRU Eviction**: Oldest cached items are removed when cache size limit is reached
-- **Configurable Size**: Adjust cache size in Settings (default: 500MB)
-- **Cache Statistics**: View hits, misses, and saved time in Settings
-
-### Phrase Pre-generation
-
-- **Usage Tracking**: Commonly used phrases are tracked automatically
-- **Pre-generation**: Frequently used phrases can be pre-generated for instant playback
-- **Configurable Thresholds**: Set minimum uses and maximum phrases to pre-generate
-
-### Text Processing Cache
-
-- **Preprocessing Cache**: Text preprocessing results are cached for faster repeated generation
-- **Configurable Size**: Adjust text cache size in Settings
-
-## VRChat Lip-Sync Integration
-
-CriTTS Recoded can animate your VRChat avatar's mouth to match TTS output:
-
-### Viseme Animation
-
-- **Automatic Lip-Sync**: Avatar mouth moves in sync with generated speech
-- **Rule-Based Phoneme Detection**: Text is analyzed to determine mouth shapes
-- **15 VRChat Visemes**: Full support for all VRChat viseme values
-
-### Voice Amplitude
-
-- **Real-Time Amplitude**: Avatar mouth opens based on audio volume
-- **Smooth Transitions**: Amplitude values are smoothed for natural movement
-
-### Setup
-
-1. Enable VRChat OSC in Settings > VRChat OSC
-2. Enable "Viseme Animation" for lip-sync
-3. Enable "Voice Amplitude" for volume-based mouth movement
-4. Ensure VRChat has OSC enabled in its settings
-
-### Requirements
-
-- VRChat must have OSC enabled (Settings > OSC > Enable OSC)
-- Avatar must support Viseme and Voice parameters
-- Works with most avatars that have lip-sync support
-
-## Quality Presets
-
-CriTTS Recoded supports processing profiles for different use cases:
-
-| Profile | Description | Best For |
-|---------|-------------|----------|
-| **Fast Preview** | No resampling, no processing | Quick testing |
-| **Balanced** | 48kHz with Kaiser β=5 anti-aliasing, stereo width 0.3 | General use (default) |
-| **High Quality** | 48kHz with Kaiser β=8 anti-aliasing, stereo width 0.5 | Important content |
-
-Configure profiles in Settings > Advanced.
+1. **Enable Audio Cache**: Reduces regeneration of repeated phrases
+2. **Use Balanced Profile**: Good quality without excessive processing
+3. **Pre-generate Phrases**: Common phrases load instantly
+4. **Enable Streaming**: Lower latency for long text (experimental)
 
 ## Credits
 
-- **GUI Framework**: [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) by Tom Schimansky
-- **TTS Engine**: [edge-tts](https://github.com/rany2/edge-tts) by rany2
-- **Audio Routing**: [sounddevice](https://python-sounddevice.readthedocs.io/) and [soundfile](https://pysoundfile.readthedocs.io/)
-- **VB-Cable**: [VB-Audio Software](https://vb-audio.com/Cable/)
+- **GUI Framework**: [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)
+- **TTS Engine**: [edge-tts](https://github.com/rany2/edge-tts)
+- **Audio I/O**: [sounddevice](https://python-sounddevice.readthedocs.io/), [soundfile](https://pysoundfile.readthedocs.io/)
+- **Virtual Audio**: [VB-Audio Cable](https://vb-audio.com/Cable/)
 
 ## License
 
-This project is open source. Feel free to modify and distribute according to your needs.
-
-## Support
-
-For issues, questions, or contributions, please refer to the project repository or contact the developer.
+This project is open source. Feel free to modify and distribute.
 
 ---
 
 **Enjoy CriTTS Recoded!** 🎙️
-
