@@ -1575,7 +1575,7 @@ Examples:
         self._wraplength_labels.append(experimental_warning_label)
         
         # Streaming playback checkbox
-        self.streaming_playback_var = ctk.BooleanVar(value=self.settings.get("enable_streaming", False))
+        self.streaming_playback_var = ctk.BooleanVar(value=self.settings.get("enable_streaming_playback", False))
         self.streaming_playback_check = ctk.CTkCheckBox(
             self.advanced_scroll,
             text="Enable Streaming Playback (Experimental)",
@@ -2385,7 +2385,7 @@ Examples:
             self.settings.set("text_cache_size", 1000)
         
         # Save experimental features
-        self.settings.set("enable_streaming", self.streaming_playback_var.get())
+        self.settings.set("enable_streaming_playback", self.streaming_playback_var.get())
         
         # Save VRChat viseme settings
         self.settings.set("vrchat_viseme_enabled", self.viseme_enabled_var.get())

@@ -227,8 +227,9 @@ class KeybindManager:
         if key in key_mapping:
             key = key_mapping[key]
         elif len(key) == 1 and key.isalnum():
-            # Single alphanumeric key - capitalize it
-            key = key.upper()
+            # Single alphanumeric key - use lowercase for Tkinter
+            # (Tkinter uses lowercase for key names, e.g., <Control-t> not <Control-T>)
+            key = key.lower()
         else:
             # Unknown key
             return ""

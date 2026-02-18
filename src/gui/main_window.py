@@ -81,6 +81,9 @@ class MainWindow:
         # Initialize keybind manager
         self.keybind_manager = KeybindManager()
         
+        # Track text-widget-level bindings for keybinds (to override class bindings)
+        self._text_widget_bound_sequences = []
+        
         # Initialize viseme mapper for lip-sync
         self._viseme_mapper: Optional[VisemeMapper] = None
         self._amplitude_analyzer: Optional[AmplitudeAnalyzer] = None
@@ -189,7 +192,8 @@ class MainWindow:
         self.text_input.bind("<ButtonRelease>", lambda e: self._highlight_current_line())
         self.text_input.bind("<KeyRelease>", lambda e: self._on_text_changed(), add="+")
         
-        # Bind Shift+Enter to allow line breaks
+        # Bind Enter to trigger speak, Shift+Enter to allow line breaks
+        self.text_input.bind("<Return>", self._on_enter_key)
         self.text_input.bind("<Shift-Return>", self._on_shift_enter_key)
         
         # Add explicit bindings for text editing shortcuts
@@ -439,11 +443,46 @@ class MainWindow:
                     logger.warning(f"Failed to register keybind for '{action_name}': '{keybind_string}'")
             except Exception as e:
                 logger.warning(f"Error registering keybind for '{action_name}': {e}")
+        
+        # Also bind each keybind directly to text_input widget (widget-level binding)
+        # This overrides the Text widget's class bindings (e.g., Ctrl+T transpose)
+        # Widget-level bindings have higher priority than class bindings
+        for action_name, callback in actions.items():
+            keybind_string = keybinds.get(action_name)
+            
+            if not keybind_string:
+                continue
+            
+            try:
+                tk_format = self.keybind_manager.parse_keybind(keybind_string)
+                if tk_format:
+                    # Bind directly to text_input with widget-level priority
+                    # Return "break" to prevent class binding and bind_all from firing
+                    self.text_input.bind(tk_format, lambda e, cb=callback: self._handle_widget_keybind(e, cb))
+                    self._text_widget_bound_sequences.append(tk_format)
+            except Exception as e:
+                logger.warning(f"Error binding widget-level keybind for '{action_name}': {e}")
+    
+    def _handle_widget_keybind(self, event, callback):
+        """Handle widget-level keybind event."""
+        try:
+            callback()
+        except Exception:
+            pass
+        return "break"  # Prevent class binding and bind_all from firing
     
     def _rebind_shortcuts(self):
         """Unregister and re-register all keybinds (called after settings change)."""
         import logging
         logger = logging.getLogger(__name__)
+        
+        # Unbind widget-level bindings first
+        for sequence in self._text_widget_bound_sequences:
+            try:
+                self.text_input.unbind(sequence)
+            except Exception:
+                pass
+        self._text_widget_bound_sequences.clear()
         
         try:
             self.keybind_manager.unregister_all(self.root)
@@ -761,7 +800,7 @@ class MainWindow:
             enable_normalization = self.settings.get("enable_normalization", True)
             normalization_type = self.settings.get("normalization_type", "Peak")
             processing_profile = self.settings.get("processing_profile", "balanced")
-            enable_streaming = self.settings.get("enable_streaming", False)
+            enable_streaming = self.settings.get("enable_streaming_playback", False)
 
             # Check if stop was requested before generation
             if self._stop_event.is_set():

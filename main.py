@@ -49,8 +49,8 @@ class CriTTSApp(ctk.CTk):
         # Settings manager
         self.settings_manager = SettingsManager()
         
-        # TTS engine
-        self.tts_engine = TTSEngine()
+        # TTS engine - inject settings manager to avoid re-instantiation
+        self.tts_engine = TTSEngine(settings_manager=self.settings_manager)
         
         # Audio router
         self.audio_router = AudioRouter()
@@ -167,6 +167,10 @@ class CriTTSApp(ctk.CTk):
         # Apply appearance mode from saved settings
         appearance_mode = self.settings_manager.get("appearance_mode", "Dark")
         ctk.set_appearance_mode(appearance_mode)
+        
+        # Reload TTS engine cache settings to pick up any changes
+        if hasattr(self, 'tts_engine'):
+            self.tts_engine.reload_cache_settings()
         
         # Refresh main window status
         if hasattr(self, 'main_window'):

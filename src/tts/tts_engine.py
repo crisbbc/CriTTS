@@ -25,8 +25,14 @@ logger = logging.getLogger(__name__)
 class TTSEngine:
     """Manages text-to-speech generation using edge_tts."""
     
-    def __init__(self):
-        """Initialize the TTS engine."""
+    def __init__(self, settings_manager: Optional['SettingsManager'] = None):
+        """Initialize the TTS engine.
+        
+        Args:
+            settings_manager: Optional SettingsManager instance. If provided, it will be used
+                            for all settings access instead of creating new instances.
+        """
+        self._settings_manager = settings_manager
         self._voices_cache: Optional[List[Dict]] = None
         self._cache_timestamp: float = 0
         self._cache_duration: float = 300  # Cache voices for 5 minutes
@@ -45,10 +51,49 @@ class TTSEngine:
         # Load cache settings
         self._load_cache_settings()
     
+    def _get_settings(self) -> 'SettingsManager':
+        """Get the settings manager instance, using injected one or creating new as fallback."""
+        if self._settings_manager is not None:
+            return self._settings_manager
+        return SettingsManager()
+    
+    def reload_cache_settings(self):
+        """
+        Reload cache-related settings from the settings manager.
+        
+        This method should be called after settings are changed to update
+        cache behavior without requiring a restart.
+        """
+        try:
+            settings = self._get_settings()
+            
+            # Get cache settings
+            cache_enabled = settings.get("audio_cache_enabled", True)
+            max_size_mb = settings.get("audio_cache_max_size_mb", 500)
+            cache_path = settings.get("audio_cache_path")
+            
+            # Update audio cache settings if cache exists
+            if self._audio_cache:
+                self._audio_cache._enabled = cache_enabled
+                self._audio_cache._max_size_mb = max_size_mb
+                # If cache path changed, we'd need to reinitialize - log a warning
+                current_cache_dir = str(self._audio_cache._cache_dir) if self._audio_cache._cache_dir else None
+                new_cache_path = str(Path(cache_path)) if cache_path else None
+                if current_cache_dir != new_cache_path:
+                    logger.warning("Cache path change requires restart to take effect")
+            
+            # Update text cache size from settings
+            self._max_cache_size = settings.get("text_cache_size", 1000)
+            
+            logger.info(f"Cache settings reloaded: enabled={cache_enabled}, max_size={max_size_mb}MB, text_cache_size={self._max_cache_size}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to reload cache settings: {e}")
+    
     def _load_cache_settings(self):
         """Load cache settings from settings manager."""
         try:
-            settings = SettingsManager()
+            settings = self._get_settings()
             
             # Get cache settings
             cache_enabled = settings.get("audio_cache_enabled", True)
@@ -109,7 +154,7 @@ class TTSEngine:
         if not self._phrase_tracker or not self._audio_cache:
             return 0
         
-        settings = SettingsManager()
+        settings = self._get_settings()
         min_uses = settings.get("pregenerate_min_uses", 3)
         max_phrases = settings.get("pregenerate_max_phrases", 20)
         
@@ -522,8 +567,7 @@ class TTSEngine:
     def _get_current_voice_language(self) -> str:
         """Get the language code of the current voice."""
         try:
-            from ..config.settings_manager import SettingsManager
-            settings_manager = SettingsManager()
+            settings_manager = self._get_settings()
             current_voice = settings_manager.get("voice", "en-US-AriaNeural")
             
             # Extract language from voice short name
@@ -640,7 +684,7 @@ class TTSEngine:
         # Check settings for auto language detection (only for Edge TTS)
         auto_language = False
         try:
-            settings_manager = SettingsManager()
+            settings_manager = self._get_settings()
             auto_language = settings_manager.get("auto_language_detection", False)
             # Only apply auto language detection for Edge TTS
             if auto_language:
@@ -750,7 +794,7 @@ class TTSEngine:
         actual_voice = voice
         auto_language = False
         try:
-            settings_manager = SettingsManager()
+            settings_manager = self._get_settings()
             auto_language = settings_manager.get("auto_language_detection", False)
             if auto_language:
                 detected_voice = self._detect_language_voice(text)
@@ -1146,8 +1190,7 @@ class TTSEngine:
     def _get_custom_language_voice(self, text: str, detected_voice: str) -> Optional[str]:
         """Get custom voice mapping for the detected language."""
         try:
-            from ..config.settings_manager import SettingsManager
-            settings_manager = SettingsManager()
+            settings_manager = self._get_settings()
             language_mappings = settings_manager.get("language_voice_mappings", {})
             
             if not language_mappings:
