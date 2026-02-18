@@ -77,7 +77,7 @@ python-osc>=1.8.0
 ### Basic Operation
 
 1. **Enter Text**: Type or paste text in the main text area
-2. **Speak**: Click "Speak" or press `Ctrl+Enter`
+2. **Speak**: Click "Speak" or press `Enter`
 3. **Stop**: Click "Stop" or press `Escape`
 4. **Clear**: Click "Clear" or press `Ctrl+T`
 
@@ -260,5 +260,6 @@ All shortcuts are customizable in Settings > Keybinds.
 This project is open source. Feel free to modify and distribute.
 
 ---
+
 
 **Enjoy CriTTS Recoded!** 🎙️
