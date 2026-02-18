@@ -9,42 +9,33 @@ A modern, free Text-to-Speech (TTS) application with a beautiful dark mode GUI. 
 - **Audio Routing**: Route TTS output to any audio device (including VB-Cable for Discord)
 - **Modern Dark Mode GUI**: Built with CustomTkinter for a sleek, modern interface
 - **Voice Customization**: Adjust speech rate, volume, and pitch
-- **High-Quality Audio**: Support for 48kHz/192kbps and lossless PCM formats
+- **High-Quality Audio**: 48kHz resampling with anti-aliasing and stereo enhancement via processing profiles
 - **Audio Normalization**: Peak and RMS normalization for consistent volume
 - **Professional Audio Processing**: Anti-aliasing resampling and stereo enhancement
 - **Persistent Settings**: Saves your preferences between sessions
-- **Keyboard Shortcuts**: Ctrl+Enter to speak, Escape to stop, Ctrl+T to clear
+- **Configurable Keyboard Shortcuts**: Default Ctrl+Enter to speak, Escape to stop, Ctrl+T to clear — all editable in Settings > Keybinds
 
-## Audio Quality Settings
+## Audio Processing Profiles
 
-CriTTS Recoded now supports professional-grade audio quality with multiple presets and advanced processing options.
+CriTTS Recoded uses processing profiles to optimize audio quality for different use cases. Configure these in **Settings > Advanced**.
 
-### Quality Presets
+### Processing Profiles
 
-Access these in Settings > Audio Quality:
-
-| Preset | Format | Sample Rate | Bitrate | Best For |
-|--------|--------|-------------|---------|----------|
-| **Maximum** | Lossless PCM | 48kHz | Lossless | Short texts, maximum fidelity |
-| **High** | MP3 | 48kHz | 192kbps | General use, recommended |
-| **Medium** | MP3 | 48kHz | 96kbps | Good balance, longer texts |
-| **Low** | MP3 | 24kHz | 48kbps | Slow connections, quick previews |
-
-### Advanced Options
-
-- **Audio Normalization**: Choose between Peak (prevents clipping), RMS (consistent loudness), LUFS (professional loudness standards), or None
-- **Enable Normalization**: Toggle normalization on/off
-- **Stereo Enhancement**: Automatic mono-to-stereo conversion with width enhancement
+| Profile | Sample Rate | Anti-aliasing | Stereo Width | Normalization | Best For |
+|---------|-------------|---------------|--------------|---------------|----------|
+| **Fast Preview** | Original (no resample) | None | None | None | Quick testing |
+| **Balanced** | 48 kHz | Kaiser β=5 | 0.3 | Peak | General use (default) |
+| **High Quality** | 48 kHz | Kaiser β=8 | 0.5 | Peak | Important content |
 
 ### Audio Normalization Options
 
-CriTTS Recoded offers three normalization types to ensure optimal audio quality:
+Configure normalization in **Settings > Audio Output**. Available types:
 
 | Type | Description | Best For | Technical Details |
 |------|-------------|----------|-------------------|
 | **Peak** | Prevents clipping by limiting maximum amplitude to -1dB | General use, speech | Targets 0.891 amplitude (-1dB), safe headroom |
 | **RMS** | Ensures consistent loudness across different voices | Multi-voice projects | Targets 0.15 RMS level, 10x gain limit |
-| **LUFS** | Professional loudness standards (requires pyloudnorm) | Streaming/broadcast | -14 LUFS (streaming) or -23 LUFS (broadcast) |
+| **LUFS** | Professional loudness standards | Streaming/broadcast | -14 LUFS (streaming) or -23 LUFS (broadcast) |
 | **None** | No processing | Custom audio workflows | Bypasses normalization entirely |
 
 **When to Use Each:**
@@ -53,21 +44,14 @@ CriTTS Recoded offers three normalization types to ensure optimal audio quality:
 - **LUFS**: Professional content for YouTube, Spotify, or broadcast
 - **None**: When using external audio processing software
 
-**Note:** LUFS normalization requires the `pyloudnorm` library. If not installed, it falls back to Peak normalization.
-
-### When to Use Each Preset
-
-- **Maximum (Lossless)**: Use for important presentations, audiobooks, or when you need the absolute best quality. Note: Uses more memory, best for shorter texts.
-- **High (192kbps)**: The recommended default for most users. Excellent quality with good performance.
-- **Medium (96kbps)**: Good for longer texts or when you want to save bandwidth.
-- **Low (48kbps)**: Useful for quick testing or when on a slow connection.
+**Note:** LUFS normalization uses the `pyloudnorm` library, which is included in the dependencies.
 
 ### Audio Processing Pipeline
 
 The audio pipeline includes:
-1. **High-Quality Resampling**: Uses scipy's polyphase resampling with anti-aliasing filters
+1. **High-Quality Resampling**: Uses scipy's polyphase resampling with Kaiser-windowed anti-aliasing filters
 2. **Normalization**: Prevents clipping and ensures consistent volume
-3. **Stereo Enhancement**: Converts mono TTS output to natural-sounding stereo
+3. **Stereo Enhancement**: Converts mono TTS output to natural-sounding stereo with configurable width
 
 ## VRChat Integration
 
@@ -79,7 +63,7 @@ CriTTS Recoded includes built-in VRChat integration that automatically speaks in
 
 ### Quick Start
 
-1. Open **Settings** > **VR Mode** tab
+1. Open **Settings** > **VRChat OSC** tab
 2. Check **"Enable VRChat Mode"**
 3. Configure log path (auto-detect usually works)
 4. Set message filters as desired
@@ -99,8 +83,6 @@ Use the built-in diagnostic tools:
 - **Test Connection**: Verifies log file access and shows recent chat messages
 - **View Log File**: Displays last 20 lines with parsing indicators
 - **Debug Mode**: Enable verbose logging to console for troubleshooting
-
-For detailed setup instructions, troubleshooting, and FAQs, see [docs/VRCHAT_INTEGRATION.md](docs/VRCHAT_INTEGRATION.md).
 
 ### VRChat OSC Chatbox and Notification Sound
 
@@ -127,7 +109,7 @@ pip install -r requirements.txt
 Or install manually:
 
 ```bash
-pip install customtkinter edge-tts>=7.2.3 sounddevice soundfile numpy Pillow
+pip install customtkinter edge-tts>=7.2.3 sounddevice soundfile>=0.12.0 numpy>=1.21.0 scipy>=1.9.0 pyloudnorm>=0.1.0 Pillow watchdog>=3.0.0 python-osc>=1.8.0
 ```
 
 ### VB-Cable Setup (for Discord Integration)
@@ -175,10 +157,16 @@ python main.py
 ### Changing Settings
 
 1. Click "Settings" button
-2. **Voice Tab**: Select voice, adjust rate, volume, and pitch
-3. **Audio Output Tab**: Select output device (e.g., VB-Cable)
-4. **Appearance Tab**: Switch between Dark/Light/System mode
-5. Click "Save" to apply changes
+2. Navigate through the tabs:
+   - **Voice Tab**: Select voice, adjust rate, volume, and pitch; manage favorites; preview voices
+   - **Audio Output Tab**: Select output device, configure normalization type and toggle
+   - **Appearance Tab**: Switch between Dark/Light/System mode
+   - **Abbreviations Tab**: Define text expansion shortcuts
+   - **Keybinds Tab**: Customize all keyboard shortcuts
+   - **Behavior Tab**: Configure speak mode, auto-language detection, and language-voice mappings
+   - **VRChat OSC Tab**: Configure OSC chatbox, viseme/amplitude settings
+   - **Advanced Tab**: Manage audio cache, select processing profile, enable streaming (experimental)
+3. Click "Save" to apply changes
 
 ### Voice Search and Filters
 
@@ -194,26 +182,37 @@ Filters are applied together. Use **Clear** to reset all filters to "All" / "All
 ## Project Structure
 
 ```
-TTS - copia/
-├── image.ico              # Application icon
-├── main.py               # Application entry point
-├── requirements.txt      # Python dependencies
-├── README.md            # This file
+CriTTS/
+├── image.ico
+├── main.py
+├── requirements.txt
+├── README.md
 └── src/
     ├── __init__.py
     ├── config/
     │   ├── __init__.py
-    │   └── settings_manager.py    # JSON settings persistence
+    │   └── settings_manager.py       # JSON settings persistence
     ├── tts/
     │   ├── __init__.py
-    │   └── tts_engine.py          # edge_tts integration
+    │   ├── tts_engine.py             # TTS orchestration
+    │   ├── text_preprocessor.py      # Text cleaning & abbreviation expansion
+    │   ├── audio_cache.py            # Persistent LRU audio cache
+    │   └── providers/
+    │       ├── __init__.py
+    │       └── edge_tts_provider.py  # edge_tts integration
     ├── audio/
     │   ├── __init__.py
-    │   └── audio_router.py        # sounddevice audio routing
-    └── gui/
+    │   └── audio_router.py           # sounddevice audio routing & processing
+    ├── gui/
+    │   ├── __init__.py
+    │   ├── main_window.py            # Main application window
+    │   ├── settings_window.py        # Settings dialog (8 tabs)
+    │   ├── keybind_manager.py        # Dynamic keybind registration
+    │   └── theme_constants.py        # UI theme & layout constants
+    └── vrchat/
         ├── __init__.py
-        ├── main_window.py         # Main application window
-        └── settings_window.py     # Settings dialog
+        ├── osc_client.py             # VRChat OSC chatbox client
+        └── viseme_mapper.py          # Phoneme-to-viseme mapping
 ```
 
 ## Troubleshooting
@@ -246,7 +245,7 @@ TTS - copia/
 ### VRChat Messages Not Detected
 
 1. **Check VRChat is running** - Logs are only written while VRChat is active
-2. **Verify log path** - Use "Test Connection" in Settings > VR Mode
+2. **Verify log path** - Use "Test Connection" in Settings > VRChat OSC
 3. **Check for chat activity** - Someone needs to send a message for detection
 4. **Enable debug mode** - Check "Log all lines" to see what's being read
 5. **View log file** - Use "View Log File" to see recent entries and parsing results
@@ -255,29 +254,28 @@ TTS - copia/
 
 ### Audio Quality Issues
 
-
-1. Open Settings and go to the "Audio Quality" tab
-2. Select a higher quality preset: "High (192kbps)" or "Maximum (Lossless)"
-3. Enable audio normalization for consistent volume
+1. Open Settings and go to the "Advanced" tab
+2. Select a higher quality processing profile: "Balanced" or "High Quality"
+3. Enable audio normalization in Settings > Audio Output for consistent volume
 4. Try different voices - some have better quality than others
 5. Adjust speech rate - very fast/slow rates may affect clarity
 
-**Quality Presets:**
-- **Maximum (Lossless)**: Best quality, uses more memory. Good for short texts.
-- **High (192kbps)**: Recommended for most use cases. Excellent quality with reasonable file size.
-- **Medium (96kbps)**: Good balance between quality and performance.
-- **Low (48kbps)**: Smaller files, lower quality. Useful for slow connections.
+**Processing Profiles:**
+- **Fast Preview**: No processing, fastest generation. Good for quick testing.
+- **Balanced**: 48kHz with anti-aliasing and stereo enhancement. Recommended for most use cases.
+- **High Quality**: 48kHz with stronger anti-aliasing and wider stereo. Best for important content.
 
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
+| Shortcut (default) | Action |
+|--------------------|--------|
 | Ctrl+Enter | Speak text |
 | Escape | Stop playback |
 | Ctrl+T | Clear text |
-| Ctrl+Shift+V | Toggle VR Mode |
 | Ctrl+, | Open Settings |
+
+All shortcuts are configurable in Settings > Keybinds.
 
 ## Performance Optimizations
 
@@ -331,15 +329,15 @@ CriTTS Recoded can animate your VRChat avatar's mouth to match TTS output:
 
 ## Quality Presets
 
-CriTTS Recoded supports quality presets for different use cases:
+CriTTS Recoded supports processing profiles for different use cases:
 
-| Preset | Description | Best For |
-|--------|-------------|----------|
-| **Fast Preview** | Quick generation, lower quality | Testing, quick previews |
-| **Balanced** | Good quality with reasonable speed | General use, recommended |
-| **High Quality** | Maximum quality, slower generation | Important content, recordings |
+| Profile | Description | Best For |
+|---------|-------------|----------|
+| **Fast Preview** | No resampling, no processing | Quick testing |
+| **Balanced** | 48kHz with Kaiser β=5 anti-aliasing, stereo width 0.3 | General use (default) |
+| **High Quality** | 48kHz with Kaiser β=8 anti-aliasing, stereo width 0.5 | Important content |
 
-Configure presets in Settings > Behavior > Quality Preset.
+Configure profiles in Settings > Advanced.
 
 ## Credits
 
