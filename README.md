@@ -19,14 +19,6 @@ A modern, free Text-to-Speech (TTS) application with a beautiful dark mode GUI. 
 
 CriTTS Recoded uses processing profiles to optimize audio quality for different use cases. Configure these in **Settings > Advanced**.
 
-### Processing Profiles
-
-| Profile | Sample Rate | Anti-aliasing | Stereo Width | Normalization | Best For |
-|---------|-------------|---------------|--------------|---------------|----------|
-| **Fast Preview** | Original (no resample) | None | None | None | Quick testing |
-| **Balanced** | 48 kHz | Kaiser β=5 | 0.3 | Peak | General use (default) |
-| **High Quality** | 48 kHz | Kaiser β=8 | 0.5 | Peak | Important content |
-
 ### Audio Normalization Options
 
 Configure normalization in **Settings > Audio Output**. Available types:
@@ -357,3 +349,4 @@ For issues, questions, or contributions, please refer to the project repository 
 ---
 
 **Enjoy CriTTS Recoded!** 🎙️
+
