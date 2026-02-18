@@ -189,8 +189,7 @@ class MainWindow:
         self.text_input.bind("<ButtonRelease>", lambda e: self._highlight_current_line())
         self.text_input.bind("<KeyRelease>", lambda e: self._on_text_changed(), add="+")
         
-        # Bind Enter key to prevent line breaks unless Shift is held
-        self.text_input.bind("<Return>", self._on_enter_key)
+        # Bind Shift+Enter to allow line breaks
         self.text_input.bind("<Shift-Return>", self._on_shift_enter_key)
         
         # Add explicit bindings for text editing shortcuts
@@ -417,8 +416,8 @@ class MainWindow:
         keybinds = self.settings.get("keybinds", {})
         
         # Create action mapping dictionary
-        # Note: "speak" is handled directly by Enter key in text_input, not via keybinds
         actions = {
+            "speak": self._on_speak,
             "stop": self._on_stop,
             "clear": self._on_clear,
             "open_settings": self._on_settings

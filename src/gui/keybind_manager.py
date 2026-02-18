@@ -120,10 +120,9 @@ class KeybindManager:
         try:
             info = self._registered_keybinds[keybind_string]
             tk_format = info['tk_format']
-            bind_id = info['bind_id']
             
-            # Use unbind with the stored Tk sequence to properly remove the handler
-            root.unbind(tk_format, bind_id)
+            # Use unbind_all to properly remove bind_all bindings
+            root.unbind_all(tk_format)
             del self._registered_keybinds[keybind_string]
             
             # Remove from keybind-to-actions mapping
@@ -145,10 +144,9 @@ class KeybindManager:
         for keybind_string, info in list(self._registered_keybinds.items()):
             try:
                 tk_format = info.get('tk_format')
-                bind_id = info.get('bind_id')
-                if tk_format and bind_id:
-                    # Use unbind with the stored Tk sequence to properly remove the handler
-                    root.unbind(tk_format, bind_id)
+                if tk_format:
+                    # Use unbind_all to properly remove bind_all bindings
+                    root.unbind_all(tk_format)
             except Exception:
                 pass
         

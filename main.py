@@ -10,6 +10,7 @@ import os
 import signal
 import atexit
 import logging
+import webbrowser
 
 # Add src to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -87,6 +88,68 @@ class CriTTSApp(ctk.CTk):
             on_open_settings=self._open_settings,
             icon_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "image.ico")
         )
+        
+        # Schedule VBCable check after window is rendered
+        self.after(500, self._check_vbcable)
+    
+    def _check_vbcable(self):
+        """Check if VBCable is installed and prompt user if not."""
+        if not self.audio_router.is_vbcable_installed():
+            self._show_vbcable_dialog()
+    
+    def _show_vbcable_dialog(self):
+        """Show dialog prompting user to download VBCable."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("VBCable Not Found")
+        dialog.geometry("450x180")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (450 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (180 // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Message label
+        message = ctk.CTkLabel(
+            dialog,
+            text="No virtual audio cable (VBCable) was detected.\n\n"
+                 "For best results with VRChat or other applications,\n"
+                 "please install VBCable to route audio output.",
+            font=ctk.CTkFont(size=13),
+            justify="center"
+        )
+        message.pack(padx=20, pady=(20, 15))
+        
+        # Button frame
+        button_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        button_frame.pack(pady=(0, 20))
+        
+        # Visit Download Page button
+        def on_download():
+            webbrowser.open("https://vb-audio.com/Cable/")
+            dialog.destroy()
+        
+        download_button = ctk.CTkButton(
+            button_frame,
+            text="Visit Download Page",
+            command=on_download,
+            width=150
+        )
+        download_button.pack(side="left", padx=10)
+        
+        # Not Now button
+        not_now_button = ctk.CTkButton(
+            button_frame,
+            text="Not Now",
+            command=dialog.destroy,
+            width=100,
+            fg_color="gray",
+            hover_color="darkgray"
+        )
+        not_now_button.pack(side="left", padx=10)
     
     def _open_settings(self):
         """Open the settings window."""

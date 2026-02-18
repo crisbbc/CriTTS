@@ -410,6 +410,24 @@ class AudioRouter:
         """Check if audio is currently playing."""
         return self._current_stream is not None and self._current_stream.active
     
+    def is_vbcable_installed(self) -> bool:
+        """
+        Check if VB-Cable or similar virtual audio cable is installed.
+        
+        Returns:
+            True if a virtual audio cable device is found, False otherwise.
+        """
+        # Keywords that identify VB-Cable and similar virtual audio devices
+        vbcable_keywords = ["cable", "vb-audio", "vbaudio", "vb cable"]
+        
+        devices = self.get_audio_devices()
+        for device in devices:
+            device_name_lower = device['name'].lower()
+            if any(keyword in device_name_lower for keyword in vbcable_keywords):
+                return True
+        
+        return False
+    
     async def play_audio_with_amplitude(
         self, 
         audio_data: bytes, 
