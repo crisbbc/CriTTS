@@ -649,7 +649,7 @@ class SettingsWindow:
         
         self.device_info_label = ctk.CTkLabel(
             self.audio_scroll,
-            text="Select the audio device for TTS output (e.g., VB-Cable for Discord)",
+            text="Only VB-Cable virtual audio devices are shown. TTS audio must pass through VB-Cable to appear as a microphone in VRChat/Discord.",
             font=ctk.CTkFont(size=11),
             text_color="gray"
         )
@@ -668,6 +668,17 @@ class SettingsWindow:
         )
         self.device_dropdown.pack(fill="x", pady=5)
         self.device_dropdown.configure(command=lambda _: self._update_device_info())
+        
+        # VB-Cable warning label (shown when no VB-Cable device is found)
+        self.vbcable_warning_label = ctk.CTkLabel(
+            self.audio_scroll,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="orange",
+            wraplength=550
+        )
+        self.vbcable_warning_label.pack(anchor="w", pady=(5, 0))
+        self._wraplength_labels.append(self.vbcable_warning_label)
         
         # Refresh devices button
         self.refresh_devices_button = ctk.CTkButton(
@@ -1121,7 +1132,6 @@ Examples:
         
         keybinds = self.settings.get("keybinds", {})
         defaults = {
-            "speak": "Ctrl+Enter",
             "stop": "Escape",
             "clear": "Ctrl+T",
             "open_settings": "Ctrl+Comma"
@@ -1132,12 +1142,23 @@ Examples:
         self._capturing_keybind = None  # Track which action is being captured
         
         labels = {
-            "speak": "Speak / Send TTS",
             "stop": "Stop playback",
             "clear": "Clear text",
             "open_settings": "Open Settings"
         }
-        for action in ("speak", "stop", "clear", "open_settings"):
+        
+        # Add info label explaining that Speak is triggered by Enter
+        self.keybinds_speak_info_label = ctk.CTkLabel(
+            self.keybinds_scroll,
+            text="💡 Speak is triggered by pressing Enter in the text box. The keybinds below control other actions.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.keybinds_speak_info_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.keybinds_speak_info_label)
+        
+        for action in ("stop", "clear", "open_settings"):
             row = ctk.CTkFrame(self.keybinds_scroll, fg_color="transparent")
             row.pack(fill="x", pady=4)
             ctk.CTkLabel(row, text=labels[action], font=ctk.CTkFont(size=12), width=160, anchor="w").pack(side="left", padx=(0, 10))
@@ -2211,19 +2232,42 @@ Examples:
         self.device_info_text.configure(state="disabled")
     
     def _load_devices(self):
-        """Load audio output devices."""
-        devices = self.audio_router.get_audio_devices() if self.audio_router else []
-        self._devices = devices
-        names = [d.get("name", "Unknown") for d in devices]
-        self.device_dropdown.configure(values=names if names else ["No devices"])
-        idx = self.settings.get("device_index")
-        for d in devices:
-            if d.get("index") == idx:
-                self.device_var.set(d.get("name", "Unknown"))
-                break
+        """Load audio output devices, filtering for VB-Cable virtual audio devices only."""
+        all_devices = self.audio_router.get_audio_devices() if self.audio_router else []
+        
+        # Filter for VB-Cable/CABLE devices only (case-insensitive)
+        # These are virtual audio devices used to route audio to VRChat/Discord
+        vbcable_keywords = ["cable", "vb-audio", "vbaudio", "vb cable"]
+        self._devices = [
+            d for d in all_devices 
+            if any(kw in d.get("name", "").lower() for kw in vbcable_keywords)
+        ]
+        
+        # Update warning label based on whether VB-Cable devices were found
+        if not self._devices:
+            self.vbcable_warning_label.configure(
+                text="⚠️ No VB-Cable devices found. Please install VB-Cable from vb-audio.com to route TTS audio to VRChat/Discord."
+            )
+            self.device_dropdown.configure(values=["No VB-Cable devices found"])
+            self.device_var.set("No VB-Cable devices found")
         else:
-            if names:
+            self.vbcable_warning_label.configure(text="")
+            names = [d.get("name", "Unknown") for d in self._devices]
+            self.device_dropdown.configure(values=names)
+            
+            # Try to select the previously saved device
+            idx = self.settings.get("device_index")
+            found_saved = False
+            for d in self._devices:
+                if d.get("index") == idx:
+                    self.device_var.set(d.get("name", "Unknown"))
+                    found_saved = True
+                    break
+            
+            # If saved device not found or not set, select first VB-Cable device
+            if not found_saved and names:
                 self.device_var.set(names[0])
+        
         self._update_device_info()
     
     def _on_rate_change(self, value):

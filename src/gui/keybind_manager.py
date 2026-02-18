@@ -3,7 +3,6 @@ Keybind Manager Module
 Handles dynamic keybind registration and management for the application.
 """
 import re
-import threading
 from typing import Dict, Any, Optional, Callable
 
 
@@ -15,38 +14,6 @@ class KeybindManager:
         self._registered_keybinds = {}  # Maps keybind_string to bind_id and callback info
         self._parsed_cache = {}  # Cache for parsed keybind strings
         self._keybind_to_actions = {}  # Maps keybind_string to list of action names (for duplicate detection)
-        self._root = None
-        self._key_listener_active = False
-        self._key_states = {}  # Track modifier states
-        self._listener_thread = None
-
-    def set_root(self, root):
-        """Set the root window for keybind management."""
-        self._root = root
-
-    def start_key_listener(self):
-        """Start the global key listener."""
-        if self._key_listener_active or not self._root:
-            return
-        
-        self._key_listener_active = True
-        self._listener_thread = threading.Thread(target=self._key_listener_loop, daemon=True)
-        self._listener_thread.start()
-        
-        # Bind key press/release events to track modifier states
-        self._root.bind_all("<KeyPress>", self._on_key_press)
-        self._root.bind_all("<KeyRelease>", self._on_key_release)
-
-    def stop_key_listener(self):
-        """Stop the global key listener."""
-        self._key_listener_active = False
-        if self._listener_thread:
-            self._listener_thread.join(timeout=0.1)
-        
-        # Unbind key events
-        if self._root:
-            self._root.unbind_all("<KeyPress>")
-            self._root.unbind_all("<KeyRelease>")
 
     
     def register_keybind(self, root, keybind_string: str, callback, action_name: str = None) -> bool:
@@ -91,11 +58,6 @@ class KeybindManager:
                 self._keybind_to_actions[keybind_string] = []
             if action_name and action_name not in self._keybind_to_actions[keybind_string]:
                 self._keybind_to_actions[keybind_string].append(action_name)
-            
-            # Start key listener if this is the first keybind
-            if len(self._registered_keybinds) == 1:
-                self.set_root(root)
-                self.start_key_listener()
             
             return True
         except Exception:
@@ -168,10 +130,6 @@ class KeybindManager:
             if keybind_string in self._keybind_to_actions:
                 del self._keybind_to_actions[keybind_string]
             
-            # Stop key listener if no keybinds remain
-            if len(self._registered_keybinds) == 0:
-                self.stop_key_listener()
-            
             return True
         except Exception:
             return False
@@ -197,28 +155,6 @@ class KeybindManager:
         self._registered_keybinds.clear()
         self._keybind_to_actions.clear()
         self._parsed_cache.clear()
-        
-        # Stop key listener
-        self.stop_key_listener()
-    
-    def _key_listener_loop(self):
-        """Main key listener loop."""
-        while self._key_listener_active:
-            # This is a placeholder for future enhancements
-            # Currently using Tkinter's built-in binding system
-            import time
-            time.sleep(0.01)
-
-    def _on_key_press(self, event):
-        """Track modifier key presses."""
-        if hasattr(event, 'keysym'):
-            self._key_states[event.keysym] = True
-
-    def _on_key_release(self, event):
-        """Track modifier key releases."""
-        if hasattr(event, 'keysym'):
-            self._key_states.pop(event.keysym, None)
-
     
     def parse_keybind(self, keybind_string: str) -> str:
         """

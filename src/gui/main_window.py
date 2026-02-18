@@ -417,8 +417,8 @@ class MainWindow:
         keybinds = self.settings.get("keybinds", {})
         
         # Create action mapping dictionary
+        # Note: "speak" is handled directly by Enter key in text_input, not via keybinds
         actions = {
-            "speak": self._on_speak,
             "stop": self._on_stop,
             "clear": self._on_clear,
             "open_settings": self._on_settings
