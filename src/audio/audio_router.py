@@ -3,14 +3,18 @@ Audio Router Module
 Handles audio device enumeration and routing audio to specific output devices.
 """
 import threading
+import queue
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
 import io
 import asyncio
+import logging
 from typing import List, Dict, Optional, Tuple
 from scipy import signal
 from math import gcd
+
+logger = logging.getLogger(__name__)
 try:
     import pyloudnorm as pyln
 except ImportError:
@@ -27,6 +31,12 @@ class AudioRouter:
         self._stop_requested = threading.Event()
         self._amplitude_callback = None
         self._current_amplitude = 0.0
+        
+        # Microphone passthrough state
+        self._passthrough_input_stream: Optional[sd.InputStream] = None
+        self._passthrough_output_stream: Optional[sd.OutputStream] = None
+        self._passthrough_queue: queue.Queue = queue.Queue()
+        self._passthrough_active: bool = False
     
     def get_audio_devices(self) -> List[Dict]:
         """
@@ -819,3 +829,148 @@ class AudioRouter:
                 except Exception:
                     pass
                 self._current_stream = None
+    
+    def start_mic_passthrough(
+        self,
+        input_device_index: Optional[int],
+        output_device_index: Optional[int],
+        volume: float = 1.0,
+        sample_rate: int = 48000
+    ) -> bool:
+        """
+        Start continuous microphone passthrough to an output device.
+        
+        Creates an input stream from the microphone and an output stream to the
+        target device, with audio flowing through a queue in real-time.
+        
+        Args:
+            input_device_index: Input device index (None for system default)
+            output_device_index: Output device index (None for system default)
+            volume: Volume multiplier (0.0 to 2.0, where 1.0 is normal)
+            sample_rate: Sample rate for both streams
+            
+        Returns:
+            True if passthrough started successfully, False otherwise.
+        """
+        try:
+            # Stop any existing passthrough first
+            self.stop_mic_passthrough()
+            
+            # Create bounded queue to prevent unbounded growth
+            self._passthrough_queue = queue.Queue(maxsize=50)
+            
+            # Input callback: puts audio data into the queue
+            def input_callback(indata, frames, time, status):
+                try:
+                    # Apply volume and copy data
+                    audio_chunk = indata.copy() * volume
+                    # Put into queue, drop oldest if full
+                    if self._passthrough_queue.full():
+                        try:
+                            self._passthrough_queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                    self._passthrough_queue.put(audio_chunk)
+                except Exception as e:
+                    logger.warning("Passthrough input callback error: %s", e)
+            
+            # Output callback: gets audio data from the queue
+            def output_callback(outdata, frames, time, status):
+                try:
+                    audio_chunk = self._passthrough_queue.get_nowait()
+                    # Handle mono to mono output
+                    if len(audio_chunk.shape) == 1:
+                        outdata[:len(audio_chunk)] = audio_chunk.reshape(-1, 1)
+                        if len(audio_chunk) < frames:
+                            outdata[len(audio_chunk):] = 0
+                    else:
+                        if len(audio_chunk) >= frames:
+                            outdata[:] = audio_chunk[:frames]
+                        else:
+                            outdata[:len(audio_chunk)] = audio_chunk
+                            outdata[len(audio_chunk):] = 0
+                except queue.Empty:
+                    # No data available, output silence
+                    outdata[:] = 0
+                except Exception as e:
+                    logger.warning("Passthrough output callback error: %s", e)
+                    outdata[:] = 0
+            
+            # Open input stream (mono)
+            self._passthrough_input_stream = sd.InputStream(
+                device=input_device_index,
+                samplerate=sample_rate,
+                channels=1,
+                dtype='float32',
+                callback=input_callback
+            )
+            
+            # Open output stream (mono)
+            self._passthrough_output_stream = sd.OutputStream(
+                device=output_device_index,
+                samplerate=sample_rate,
+                channels=1,
+                dtype='float32',
+                callback=output_callback
+            )
+            
+            # Start both streams
+            self._passthrough_input_stream.start()
+            self._passthrough_output_stream.start()
+            self._passthrough_active = True
+            
+            logger.info("Microphone passthrough started (input=%s, output=%s, volume=%.2f)",
+                       input_device_index, output_device_index, volume)
+            return True
+            
+        except sd.PortAudioError as e:
+            logger.error("PortAudio error starting mic passthrough: %s", e)
+            self.stop_mic_passthrough()
+            return False
+        except Exception as e:
+            logger.error("Error starting mic passthrough: %s", e)
+            self.stop_mic_passthrough()
+            return False
+    
+    def stop_mic_passthrough(self):
+        """Stop microphone passthrough and clean up resources."""
+        self._passthrough_active = False
+        
+        # Stop and close input stream
+        if self._passthrough_input_stream is not None:
+            try:
+                self._passthrough_input_stream.stop()
+                self._passthrough_input_stream.close()
+            except Exception as e:
+                logger.warning("Error closing passthrough input stream: %s", e)
+            finally:
+                self._passthrough_input_stream = None
+        
+        # Stop and close output stream
+        if self._passthrough_output_stream is not None:
+            try:
+                self._passthrough_output_stream.stop()
+                self._passthrough_output_stream.close()
+            except Exception as e:
+                logger.warning("Error closing passthrough output stream: %s", e)
+            finally:
+                self._passthrough_output_stream = None
+        
+        # Clear the queue by draining it
+        if self._passthrough_queue is not None:
+            try:
+                while not self._passthrough_queue.empty():
+                    self._passthrough_queue.get_nowait()
+            except queue.Empty:
+                pass
+        
+        logger.info("Microphone passthrough stopped")
+    
+    def is_mic_passthrough_active(self) -> bool:
+        """
+        Check if microphone passthrough is currently active.
+        
+        Returns:
+            True if passthrough is active, False otherwise.
+        """
+        return self._passthrough_active

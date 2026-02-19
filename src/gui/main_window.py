@@ -316,7 +316,7 @@ class MainWindow:
             hover_color=COLOR_PRIMARY_HOVER,
             corner_radius=RADIUS_MD
         )
-        self.settings_button.pack(side="right", padx=(SPACING_SM, 0), pady=SPACING_SM)
+        self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
         
         # Status frame with modern styling
         self.status_frame = ctk.CTkFrame(
@@ -369,6 +369,9 @@ class MainWindow:
         # Apply theme based on saved settings
         appearance_mode = self.settings.get("appearance_mode", "Dark")
         self.apply_theme(appearance_mode)
+        
+        # Apply button visibility from saved settings
+        self.apply_button_visibility()
 
     
     def _highlight_current_line(self):
@@ -1308,12 +1311,12 @@ class MainWindow:
         """Create a pulse effect for button animation."""
         button.configure(fg_color=target_color)
         # Add a subtle scale effect by changing size slightly
-        original_width = button.cget("width")
-        button.configure(width=original_width + 2)
+        # Use the constant to prevent width accumulation on rapid repeated calls
+        button.configure(width=BUTTON_WIDTH_DEFAULT + 2)
         
         def reset_size():
             try:
-                button.configure(width=original_width)
+                button.configure(width=BUTTON_WIDTH_DEFAULT)
             except Exception:
                 pass  # Button may have been destroyed or reconfigured
         
@@ -1452,6 +1455,38 @@ class MainWindow:
         self._update_status()
         self._setup_viseme_mapper()
         self._set_status("Settings updated", "✅")
+    
+    def apply_button_visibility(self):
+        """
+        Apply button visibility based on saved settings.
+        
+        Reads the 'visible_buttons' setting and shows/hides toggleable buttons.
+        Settings button is always visible. Re-packs in fixed order for consistency.
+        """
+        # Get visible buttons from settings (default: all five toggleable buttons visible)
+        visible_buttons = self.settings.get("visible_buttons", ["speak", "stop", "clear", "voice", "overlay"])
+        
+        # All toggleable buttons in fixed order
+        toggleable_buttons = [
+            ("speak", self.speak_button),
+            ("stop", self.stop_button),
+            ("clear", self.clear_button),
+            ("voice", self.voice_button),
+            ("overlay", self.overlay_button),
+        ]
+        
+        # Unpack all toggleable buttons AND settings button
+        for _, button in toggleable_buttons:
+            button.pack_forget()
+        self.settings_button.pack_forget()
+        
+        # Re-pack only visible toggleable buttons in fixed order
+        for name, button in toggleable_buttons:
+            if name in visible_buttons:
+                button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        
+        # Always re-pack settings button last
+        self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
     
     def set_text(self, text: str):
         """Set text in the input area."""

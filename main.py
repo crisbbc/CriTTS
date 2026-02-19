@@ -96,6 +96,16 @@ class CriTTSApp(ctk.CTk):
         
         # Schedule VBCable check after window is rendered
         self.after(500, self._check_vbcable)
+        
+        # Start microphone passthrough if enabled
+        self.after(600, self._init_passthrough)
+    
+    def _init_passthrough(self):
+        """Initialize microphone passthrough if enabled in settings."""
+        if self.settings_manager.get("mic_passthrough_enabled", False):
+            device_index = self.settings_manager.get("mic_passthrough_device_index")
+            volume = self.settings_manager.get("mic_passthrough_volume", 100)
+            self.audio_router.start_passthrough(device_index=device_index, volume=volume)
     
     def _check_vbcable(self):
         """Check if VBCable is installed and prompt user if not."""
@@ -177,6 +187,9 @@ class CriTTSApp(ctk.CTk):
         if hasattr(self, 'tts_engine'):
             self.tts_engine.reload_cache_settings()
         
+        # Update microphone passthrough based on settings
+        self._update_passthrough()
+        
         # Refresh main window status
         if hasattr(self, 'main_window'):
             # Apply theme to main window's hardcoded colors
@@ -184,6 +197,19 @@ class CriTTSApp(ctk.CTk):
             self.main_window.refresh_status()
             # Refresh keybinds after settings change
             self.main_window._rebind_shortcuts()
+            # Apply button visibility from saved settings
+            self.main_window.apply_button_visibility()
+    
+    def _update_passthrough(self):
+        """Update microphone passthrough based on current settings."""
+        enabled = self.settings_manager.get("mic_passthrough_enabled", False)
+        
+        if enabled:
+            device_index = self.settings_manager.get("mic_passthrough_device_index")
+            volume = self.settings_manager.get("mic_passthrough_volume", 100)
+            self.audio_router.start_passthrough(device_index=device_index, volume=volume)
+        else:
+            self.audio_router.stop_passthrough()
 
     
     def _setup_shutdown(self):
@@ -210,6 +236,10 @@ class CriTTSApp(ctk.CTk):
         # Shutdown STT engine
         if hasattr(self, 'stt_engine'):
             self.stt_engine.shutdown()
+        
+        # Stop microphone passthrough
+        if hasattr(self, 'audio_router'):
+            self.audio_router.stop_passthrough()
         
         # Shutdown TTS engine (persist cache index and phrase stats)
         if hasattr(self, 'tts_engine'):

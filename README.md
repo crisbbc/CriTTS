@@ -15,6 +15,7 @@ A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS uses Mi
 
 ### Audio Processing
 - **Audio Routing**: Route TTS output to any audio device (including VB-Cable for Discord)
+- **Microphone Passthrough**: Route your real microphone to VB-Cable alongside TTS for voice mixing
 - **Processing Profiles**: Choose between Fast Preview, Balanced, or High Quality
 - **Audio Normalization**: Peak, RMS, or LUFS normalization for consistent volume
 - **High-Quality Resampling**: 48kHz with Kaiser-windowed anti-aliasing filters
@@ -32,6 +33,7 @@ A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS uses Mi
 - **Voice Search & Filters**: Search by name, filter by language/region/gender
 - **Voice Favorites**: Save favorite voices for quick access
 - **Configurable Keybinds**: All keyboard shortcuts are customizable
+- **Recording Overlay**: Compact always-on-top overlay showing recording state with pulsing indicator (draggable, toggleable)
 
 ### Voice Input (STT)
 - **Speech-to-Text**: Record microphone audio and transcribe using Google Web Speech API
@@ -126,9 +128,14 @@ Access settings by clicking the "Settings" button or pressing `Ctrl+,`
 - Select output device
 - Enable/disable normalization
 - Choose normalization type (Peak, RMS, LUFS)
+- **Microphone Passthrough**: Route your real microphone to VB-Cable alongside TTS
+  - Enable/disable passthrough
+  - Select microphone device
+  - Adjust passthrough volume (0-200%)
 
 #### Appearance Tab
 - Switch between Dark, Light, or System theme
+- **Button Visibility**: Choose which buttons appear in the main window (Speak, Stop, Clear, Voice, Overlay). Settings button is always visible.
 
 #### Abbreviations Tab
 - Define text expansion shortcuts (e.g., "idk" → "I don't know")
@@ -158,6 +165,7 @@ To route TTS audio to Discord or other applications:
 1. **Install VB-Cable**
    - Download from [VB-Audio Software](https://vb-audio.com/Cable/)
    - Install the virtual audio cable
+   - CriTTS will automatically detect if VB-Cable is missing and prompt you to install it
 
 2. **Configure CriTTS**
    - Open Settings > Audio Output
@@ -171,6 +179,37 @@ To route TTS audio to Discord or other applications:
 4. **Use**
    - Type text in CriTTS and click Speak
    - Audio will be routed to Discord
+
+## Microphone Passthrough
+
+The Microphone Passthrough feature allows you to route your real microphone audio to VB-Cable alongside TTS output. This is useful for mixing your voice with TTS in VRChat or Discord.
+
+### Setup
+
+1. **Enable Passthrough**
+   - Open Settings > Audio Output
+   - Scroll to "Microphone Passthrough" section
+   - Check "Enable microphone passthrough to VBCable"
+
+2. **Select Microphone**
+   - Choose your microphone device from the dropdown
+   - Use "Default (System)" to use your system's default microphone
+
+3. **Adjust Volume**
+   - Set passthrough volume (0-200%)
+   - 100% = normal volume
+   - 200% = doubled volume (for quiet microphones)
+   - 0% = muted
+
+### Use Cases
+
+- **VRChat**: Speak normally while TTS plays, both audio sources go to VB-Cable
+- **Discord**: Mix your voice with TTS for roleplay or accessibility
+- **Streaming**: Combine voice and TTS into a single audio source
+
+### How It Works
+
+When enabled, CriTTS creates a real-time audio stream from your selected microphone to VB-Cable. This runs continuously in the background, allowing you to speak naturally while TTS plays. The volume control lets you boost quiet microphones or balance levels between your voice and TTS.
 
 ## Audio Processing Profiles
 
@@ -229,11 +268,14 @@ CriTTS/
     │       └── edge_tts_provider.py   # edge-tts integration
     ├── audio/
     │   └── audio_router.py        # Audio device routing & processing
+    ├── stt/
+    │   └── stt_engine.py          # Speech-to-text engine
     ├── gui/
     │   ├── main_window.py         # Main application window
     │   ├── settings_window.py     # Settings dialog
     │   ├── keybind_manager.py     # Dynamic keybind registration
-    │   └── theme_constants.py     # UI theme & layout constants
+    │   ├── theme_constants.py     # UI theme & layout constants
+    │   └── recording_overlay.py   # Recording state overlay
     └── vrchat/
         ├── osc_client.py          # VRChat OSC client
         └── viseme_mapper.py       # Phoneme-to-viseme mapping

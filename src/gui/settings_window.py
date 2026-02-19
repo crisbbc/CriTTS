@@ -770,6 +770,109 @@ class SettingsWindow:
             font=ctk.CTkFont(size=12)
         )
         self.enable_norm_check.pack(anchor="w", pady=5)
+        
+        # Separator
+        ctk.CTkFrame(self.audio_scroll, height=2, fg_color="gray").pack(fill="x", pady=15)
+        
+        # ========== Microphone Passthrough Section ==========
+        self.passthrough_label = ctk.CTkLabel(
+            self.audio_scroll,
+            text="🎙 Microphone Passthrough",
+            font=ctk.CTkFont(size=14, weight="bold")
+        )
+        self.passthrough_label.pack(anchor="w", pady=(10, 5))
+        
+        self.passthrough_info_label = ctk.CTkLabel(
+            self.audio_scroll,
+            text="Route your real microphone to VBCable at the same time as TTS. Useful for mixing your voice with TTS in VRChat/Discord.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.passthrough_info_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.passthrough_info_label)
+        
+        # Enable passthrough checkbox
+        self.mic_passthrough_enabled_var = ctk.BooleanVar(value=self.settings.get("mic_passthrough_enabled", False))
+        self.mic_passthrough_enabled_check = ctk.CTkCheckBox(
+            self.audio_scroll,
+            text="Enable microphone passthrough to VBCable",
+            variable=self.mic_passthrough_enabled_var,
+            font=ctk.CTkFont(size=12)
+        )
+        self.mic_passthrough_enabled_check.pack(anchor="w", pady=5)
+        
+        # Passthrough mic device selection
+        self.passthrough_mic_label = ctk.CTkLabel(
+            self.audio_scroll,
+            text="Passthrough Mic Device:",
+            font=ctk.CTkFont(size=12)
+        )
+        self.passthrough_mic_label.pack(anchor="w", pady=(10, 5))
+        
+        passthrough_mic_frame = ctk.CTkFrame(self.audio_scroll, fg_color="transparent")
+        passthrough_mic_frame.pack(fill="x", pady=5)
+        
+        self.passthrough_mic_var = ctk.StringVar()
+        self.passthrough_mic_dropdown = ctk.CTkComboBox(
+            passthrough_mic_frame,
+            variable=self.passthrough_mic_var,
+            values=["Loading..."],
+            font=ctk.CTkFont(size=12),
+            dropdown_font=ctk.CTkFont(size=11),
+            width=400,
+            state="readonly"
+        )
+        self.passthrough_mic_dropdown.pack(side="left", padx=5)
+        
+        self.refresh_passthrough_mic_button = ctk.CTkButton(
+            passthrough_mic_frame,
+            text="Refresh",
+            font=ctk.CTkFont(size=12),
+            command=self._load_input_devices,
+            height=32,
+            width=80
+        )
+        self.refresh_passthrough_mic_button.pack(side="left", padx=5)
+        
+        # Passthrough volume slider
+        self.passthrough_volume_label = ctk.CTkLabel(
+            self.audio_scroll,
+            text="Passthrough Volume:",
+            font=ctk.CTkFont(size=12)
+        )
+        self.passthrough_volume_label.pack(anchor="w", pady=(10, 5))
+        
+        passthrough_volume_frame = ctk.CTkFrame(self.audio_scroll, fg_color="transparent")
+        passthrough_volume_frame.pack(fill="x", pady=5)
+        
+        self.passthrough_volume_var = ctk.IntVar(value=self.settings.get("mic_passthrough_volume", 100))
+        self.passthrough_volume_slider = ctk.CTkSlider(
+            passthrough_volume_frame,
+            from_=0,
+            to=200,
+            number_of_steps=200,
+            variable=self.passthrough_volume_var,
+            command=self._on_passthrough_volume_change,
+            width=400
+        )
+        self.passthrough_volume_slider.pack(side="left", fill="x", expand=True, padx=5)
+        
+        self.passthrough_volume_value_label = ctk.CTkLabel(
+            passthrough_volume_frame,
+            text=f"{self.passthrough_volume_var.get()}%",
+            font=ctk.CTkFont(size=12),
+            width=50
+        )
+        self.passthrough_volume_value_label.pack(side="right", padx=5)
+        
+        self.passthrough_volume_hint_label = ctk.CTkLabel(
+            self.audio_scroll,
+            text="Volume multiplier: 100% is normal, 200% doubles volume, 0% mutes.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        )
+        self.passthrough_volume_hint_label.pack(anchor="w", pady=(0, 10))
     
     def _create_appearance_tab(self):
         """Create appearance settings tab content."""
@@ -804,6 +907,49 @@ class SettingsWindow:
             text_color="gray"
         )
         self.preview_label.pack(anchor="w", pady=5)
+        
+        # Separator
+        ctk.CTkFrame(self.appearance_scroll, height=2, fg_color="gray").pack(fill="x", pady=15)
+        
+        # Visible Buttons Section
+        self.visible_buttons_label = ctk.CTkLabel(
+            self.appearance_scroll,
+            text="Visible Buttons:",
+            font=ctk.CTkFont(size=14, weight="bold")
+        )
+        self.visible_buttons_label.pack(anchor="w", pady=(10, 5))
+        
+        self.visible_buttons_hint = ctk.CTkLabel(
+            self.appearance_scroll,
+            text="Choose which buttons appear in the main window. Settings is always visible.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        )
+        self.visible_buttons_hint.pack(anchor="w", pady=(0, 10))
+        
+        # Get current visible buttons from settings
+        current_visible = self.settings.get("visible_buttons", ["speak", "stop", "clear", "voice", "overlay"])
+        
+        # Create checkboxes for each toggleable button
+        self.visible_buttons_vars = {}
+        button_options = [
+            ("speak", "Speak"),
+            ("stop", "Stop"),
+            ("clear", "Clear"),
+            ("voice", "Voice"),
+            ("overlay", "Overlay")
+        ]
+        
+        for button_key, button_label in button_options:
+            var = ctk.BooleanVar(value=button_key in current_visible)
+            self.visible_buttons_vars[button_key] = var
+            checkbox = ctk.CTkCheckBox(
+                self.appearance_scroll,
+                text=button_label,
+                variable=var,
+                font=ctk.CTkFont(size=12)
+            )
+            checkbox.pack(anchor="w", pady=2)
 
     def _create_abbreviations_tab(self):
         """Create abbreviations tab content."""
@@ -2049,10 +2195,12 @@ Examples:
         self._on_refresh_cache_stats()
     
     def _load_input_devices(self):
-        """Load audio input devices (microphones) for the STT mic selector."""
+        """Load audio input devices (microphones) for the STT mic selector and passthrough mic selector."""
         if not self.audio_router:
             self.stt_mic_device_dropdown.configure(values=["No audio router"])
             self.stt_mic_device_var.set("No audio router")
+            self.passthrough_mic_dropdown.configure(values=["No audio router"])
+            self.passthrough_mic_var.set("No audio router")
             return
         
         # Get input devices from audio router
@@ -2064,18 +2212,31 @@ Examples:
         # Populate dropdown with device names
         device_names = [d.get("name", "Unknown") for d in self._input_devices]
         self.stt_mic_device_dropdown.configure(values=device_names)
+        self.passthrough_mic_dropdown.configure(values=device_names)
         
-        # Restore previously saved device selection
+        # Restore previously saved STT device selection
         saved_index = self.settings.get("stt_mic_device_index")
         if saved_index is not None:
             # Find the device with the saved index
             for d in self._input_devices:
                 if d.get("index") == saved_index:
                     self.stt_mic_device_var.set(d.get("name", "Default (System)"))
-                    return
+                    break
+        else:
+            # Fall back to "Default (System)" if saved device not found or not set
+            self.stt_mic_device_var.set("Default (System)")
         
-        # Fall back to "Default (System)" if saved device not found or not set
-        self.stt_mic_device_var.set("Default (System)")
+        # Restore previously saved passthrough device selection
+        saved_passthrough_index = self.settings.get("mic_passthrough_device_index")
+        if saved_passthrough_index is not None:
+            # Find the device with the saved index
+            for d in self._input_devices:
+                if d.get("index") == saved_passthrough_index:
+                    self.passthrough_mic_var.set(d.get("name", "Default (System)"))
+                    break
+        else:
+            # Fall back to "Default (System)" if saved device not found or not set
+            self.passthrough_mic_var.set("Default (System)")
     
     def _load_voices(self):
         """Load available voices and populate dropdown; store friendly name -> short_name mapping."""
@@ -2580,6 +2741,10 @@ Examples:
         """Update viseme smoothing label when slider changes."""
         self.viseme_smoothing_value_label.configure(text=f"{int(value)}%")
     
+    def _on_passthrough_volume_change(self, value):
+        """Update passthrough volume label when slider changes."""
+        self.passthrough_volume_value_label.configure(text=f"{int(value)}%")
+    
     def _validate_keybind_entry(self, action_name: str):
         """Validate a keybind entry in real-time and update the visual indicator."""
         if not hasattr(self, 'keybind_vars') or action_name not in self.keybind_vars:
@@ -2648,6 +2813,15 @@ Examples:
         self.settings.set("normalization_type", self.norm_var.get())
         self.settings.set("enable_normalization", self.enable_norm_var.get())
         
+        # Save microphone passthrough settings
+        self.settings.set("mic_passthrough_enabled", self.mic_passthrough_enabled_var.get())
+        self.settings.set("mic_passthrough_volume", self.passthrough_volume_var.get())
+        selected_passthrough_mic_name = self.passthrough_mic_var.get()
+        for d in self._input_devices:
+            if d.get("name") == selected_passthrough_mic_name:
+                self.settings.set("mic_passthrough_device_index", d.get("index"))
+                break
+        
         # Save VRChat OSC settings
         self.settings.set("vrchat_osc_enabled", self.osc_enabled_var.get())
         self.settings.set("vrchat_osc_ip", self.osc_ip_var.get().strip() or "127.0.0.1")
@@ -2705,6 +2879,10 @@ Examples:
         # Save typing indicator settings
         self.settings.set("vrchat_osc_typing_animation", self.typing_animation_var.get())
         self.settings.set("vrchat_osc_typing_timeout", self.typing_timeout_var.get())
+        
+        # Save visible buttons setting
+        visible_buttons = [key for key, var in self.visible_buttons_vars.items() if var.get()]
+        self.settings.set("visible_buttons", visible_buttons)
         
         # Save abbreviations
         abbrev_raw = self.abbrev_text.get("1.0", "end-1c")

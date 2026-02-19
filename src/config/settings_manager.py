@@ -90,7 +90,15 @@ class SettingsManager:
         # STT (Speech-to-Text) Settings
         "stt_language": "en-US",
         "stt_mic_device_index": None,
-        "stt_auto_speak": False  # Automatically speak transcribed text
+        "stt_auto_speak": False,  # Automatically speak transcribed text
+        
+        # Microphone Passthrough Settings
+        "mic_passthrough_enabled": False,  # Master toggle for mic passthrough
+        "mic_passthrough_device_index": None,  # Mic to capture (None = system default)
+        "mic_passthrough_volume": 100,  # Volume multiplier 0–200 (%)
+        
+        # Button Visibility Settings
+        "visible_buttons": ["speak", "stop", "clear", "voice", "overlay"]  # Toggleable buttons to show (settings is always visible)
     }
 
 
