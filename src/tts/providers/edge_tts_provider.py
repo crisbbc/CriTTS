@@ -10,11 +10,12 @@ logger = logging.getLogger(__name__)
 class EdgeTTSProvider(TTSProvider):
     """Edge TTS provider implementation"""
     
-    def __init__(self):
+    def __init__(self, settings_manager=None):
         self._voice_cache = None
         self._cache_time = 0
         self._cache_duration = 300  # 5 minutes
         self._text_preprocessor = TextPreprocessor()
+        self._settings_manager = settings_manager
     
     def _format_prosody_parameters(self, rate: int, volume: int, pitch: int) -> tuple:
         """
@@ -116,8 +117,9 @@ class EdgeTTSProvider(TTSProvider):
         MAX_RETRIES = 3
         RETRY_DELAY = 1.0  # seconds
         
-        # Preprocess text
-        processed_text = self._text_preprocessor.preprocess_text(text)
+        # Preprocess text with abbreviations from settings
+        abbreviations = self._settings_manager.get("abbreviations", {}) if self._settings_manager else {}
+        processed_text = self._text_preprocessor.preprocess_text(text, abbreviations)
         
         # Format prosody parameters for edge-tts
         rate_str, volume_str, pitch_str = self._format_prosody_parameters(rate, volume, pitch)
@@ -177,8 +179,9 @@ class EdgeTTSProvider(TTSProvider):
         Yields:
             Audio bytes chunks in MP3 format
         """
-        # Preprocess text
-        processed_text = self._text_preprocessor.preprocess_text(text)
+        # Preprocess text with abbreviations from settings
+        abbreviations = self._settings_manager.get("abbreviations", {}) if self._settings_manager else {}
+        processed_text = self._text_preprocessor.preprocess_text(text, abbreviations)
         
         # Format prosody parameters for edge-tts
         rate_str, volume_str, pitch_str = self._format_prosody_parameters(rate, volume, pitch)

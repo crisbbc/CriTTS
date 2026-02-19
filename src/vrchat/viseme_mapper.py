@@ -59,7 +59,7 @@ class VisemeMapper:
         's': Viseme.SS, 'z': Viseme.SS, 'c': Viseme.SS,
         'n': Viseme.NN, 'l': Viseme.NN,
         'r': Viseme.RR,
-        'w': Viseme.U, 'y': Viseme.I,
+        'w': Viseme.U,
         'h': Viseme.AA,  # h is often silent or transitional
         
         # Vowels

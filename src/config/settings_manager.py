@@ -36,8 +36,10 @@ class SettingsManager:
             "speak": "Ctrl+Enter",
             "stop": "Escape",
             "clear": "Ctrl+T",
-            "open_settings": "Ctrl+Comma"
+            "open_settings": "Ctrl+Comma",
+            "voice_input": "Ctrl+Shift+V"
         },
+        "global_hotkeys_enabled": False,  # Enable system-wide hotkeys (requires keyboard library)
         "favorite_voices": [],
         "recent_voices": [],
         "voice_filter_language": "All",
@@ -84,7 +86,12 @@ class SettingsManager:
         # VRChat Viseme Settings
         "vrchat_viseme_enabled": False,
         "vrchat_viseme_smoothing": 0.1,
-        "vrchat_voice_amplitude_enabled": False
+        "vrchat_voice_amplitude_enabled": False,
+        
+        # STT (Speech-to-Text) Settings
+        "stt_language": "en-US",
+        "stt_mic_device_index": None,
+        "stt_auto_speak": False  # Automatically speak transcribed text
     }
 
 
@@ -107,7 +114,7 @@ class SettingsManager:
         
         self._settings = {}
         self._voices_mapping: dict = {}  # friendly_name -> short_name
-        self._lock = threading.Lock()  # Thread safety for settings access
+        self._lock = threading.RLock()  # Thread safety for settings access (reentrant for update() -> set())
         self.load_settings()
     
     def set_voices_mapping(self, voices_mapping: dict):

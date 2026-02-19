@@ -31,6 +31,11 @@ A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS uses Mi
 - **Voice Favorites**: Save favorite voices for quick access
 - **Configurable Keybinds**: All keyboard shortcuts are customizable
 
+### Voice Input (STT)
+- **Speech-to-Text**: Record microphone audio and transcribe using Google Web Speech API
+- **Auto-Speak**: Optionally speak transcribed text automatically
+- **Language Support**: Configure recognition language in Settings → Behavior
+
 ### VRChat Integration
 - **OSC Chatbox**: Send TTS text to VRChat's in-game chatbox
 - **Viseme Animation**: Automatic lip-sync for your avatar
@@ -49,7 +54,23 @@ A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS uses Mi
 # Clone the repository
 git clone https://github.com/k1rk11/CriTTS.git
 cd CriTTS
+```
 
+**Using launcher scripts (recommended):**
+
+```bash
+# Windows
+run.bat
+
+# Linux / macOS
+./run.sh
+```
+
+The launcher scripts automatically check for Python, install dependencies, and launch the app.
+
+**Manual installation:**
+
+```bash
 # Install dependencies
 pip install -r requirements.txt
 
@@ -67,9 +88,9 @@ soundfile>=0.12.0
 numpy>=1.21.0
 scipy>=1.9.0
 pyloudnorm>=0.1.0
-Pillow
-watchdog>=3.0.0
 python-osc>=1.8.0
+SpeechRecognition
+keyboard>=0.13.5
 ```
 
 ## Usage
@@ -80,6 +101,14 @@ python-osc>=1.8.0
 2. **Speak**: Click "Speak" or press `Enter`
 3. **Stop**: Click "Stop" or press `Escape`
 4. **Clear**: Click "Clear" or press `Ctrl+T`
+
+### Voice Input
+
+Click the **🎙 Voice** button (or press `Ctrl+Shift+V`) to start recording. Click again (or press the keybind again) to stop and transcribe.
+
+- Uses Google Web Speech API (free, requires internet)
+- Configure language and microphone in **Settings → Behavior**
+- Enable **Auto-Speak** to automatically speak transcribed text
 
 ### Settings
 
@@ -212,12 +241,14 @@ CriTTS/
 
 | Default Shortcut | Action |
 |------------------|--------|
-| `Ctrl+Enter` | Speak text |
 | `Escape` | Stop playback |
 | `Ctrl+T` | Clear text |
 | `Ctrl+,` | Open Settings |
+| `Ctrl+Shift+V` | Voice input (toggle recording) |
 
 All shortcuts are customizable in Settings > Keybinds.
+
+**Global Hotkeys**: Enable the "Global Hotkeys" toggle in Settings > Keybinds to allow shortcuts to work even when the app is not focused. This requires the `keyboard` library (included in dependencies).
 
 ## Troubleshooting
 

@@ -50,7 +50,8 @@ class MainWindow:
         tts_engine,
         audio_router,
         on_open_settings: Callable,
-        icon_path: Optional[str] = None
+        icon_path: Optional[str] = None,
+        stt_engine=None
     ):
         """
         Initialize the main window.
@@ -62,6 +63,7 @@ class MainWindow:
             audio_router: AudioRouter instance
             on_open_settings: Callback to open settings window
             icon_path: Path to application icon
+            stt_engine: STTEngine instance (optional)
         """
         self.root = root
         self.settings = settings_manager
@@ -69,11 +71,15 @@ class MainWindow:
         self.audio_router = audio_router
         self.on_open_settings = on_open_settings
         self.icon_path = icon_path
+        self.stt_engine = stt_engine
         
         self._speaking = False
         self._speaking_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
+        
+        # STT (Voice Input) state
+        self._stt_recording = False
         
         # Abbreviation expansion cache: (input_text) -> expanded_text
         self._abbreviation_cache = {}
@@ -262,6 +268,20 @@ class MainWindow:
         )
         self.clear_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
         
+        # Voice input button - accent styling (for STT)
+        self.voice_button = ctk.CTkButton(
+            self.controls_frame,
+            text="🎙  Voice",
+            font=ctk.CTkFont(size=FONT_MD),
+            command=self._on_voice_input,
+            height=BUTTON_HEIGHT_LG,
+            width=BUTTON_WIDTH_DEFAULT,
+            fg_color=COLOR_ACCENT,
+            hover_color=COLOR_ACCENT_HOVER,
+            corner_radius=RADIUS_MD
+        )
+        self.voice_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        
         # Settings button - accent styling
         self.settings_button = ctk.CTkButton(
             self.controls_frame,
@@ -434,7 +454,8 @@ class MainWindow:
             "speak": self._on_speak,
             "stop": self._on_stop,
             "clear": self._on_clear,
-            "open_settings": self._on_settings
+            "open_settings": self._on_settings,
+            "voice_input": self._on_voice_input_toggle
         }
         
         # Register each keybind with error handling
@@ -472,6 +493,60 @@ class MainWindow:
                     self._text_widget_bound_sequences.append(tk_format)
             except Exception as e:
                 logger.warning(f"Error binding widget-level keybind for '{action_name}': {e}")
+        
+        # Setup global hotkeys if enabled
+        self._setup_global_hotkeys()
+    
+    def _setup_global_hotkeys(self):
+        """Setup system-wide global hotkeys if enabled in settings."""
+        logger = logging.getLogger(__name__)
+        
+        # Check if global hotkeys are enabled in settings
+        global_hotkeys_enabled = self.settings.get("global_hotkeys_enabled", False)
+        
+        # Enable/disable global hotkeys in the keybind manager
+        if not self.keybind_manager.enable_global_hotkeys(global_hotkeys_enabled):
+            if global_hotkeys_enabled:
+                logger.warning("Global hotkeys requested but keyboard library not available")
+            return
+        
+        if not global_hotkeys_enabled:
+            logger.debug("Global hotkeys disabled in settings")
+            return
+        
+        # Get keybinds from settings
+        keybinds = self.settings.get("keybinds", {})
+        
+        # Create action mapping dictionary for global hotkeys
+        # Note: "speak" is excluded because it requires text input focus
+        global_actions = {
+            "stop": self._on_stop,
+            "clear": self._on_clear,
+            "open_settings": self._on_settings,
+            "voice_input": self._on_voice_input_toggle
+        }
+        
+        # Register global hotkeys
+        registered_count = 0
+        for action_name, callback in global_actions.items():
+            keybind_string = keybinds.get(action_name)
+            
+            if not keybind_string:
+                continue
+            
+            try:
+                success = self.keybind_manager.register_global_hotkey(
+                    keybind_string, callback, action_name
+                )
+                if success:
+                    registered_count += 1
+                    logger.debug(f"Registered global hotkey for '{action_name}': '{keybind_string}'")
+                else:
+                    logger.warning(f"Failed to register global hotkey for '{action_name}': '{keybind_string}'")
+            except Exception as e:
+                logger.warning(f"Error registering global hotkey for '{action_name}': {e}")
+        
+        logger.info(f"Registered {registered_count} global hotkeys")
     
     def _handle_widget_keybind(self, event, callback):
         """Handle widget-level keybind event."""
@@ -991,6 +1066,113 @@ class MainWindow:
         """Handle settings button click."""
         self.on_open_settings()
     
+    def _on_voice_input(self):
+        """Handle voice input button click - toggle recording."""
+        if not self.stt_engine:
+            self._set_status("Voice input not available", "⚠️")
+            return
+        
+        if not self._stt_recording:
+            # Start recording
+            success = self.stt_engine.start_listening()
+            if success:
+                self._stt_recording = True
+                self.voice_button.configure(
+                    text="⏹  Stop Voice",
+                    fg_color=COLOR_DANGER,
+                    hover_color=COLOR_DANGER_HOVER
+                )
+                self._set_status("🎙 Listening… click again to stop", "🎙")
+            else:
+                self._set_status("Failed to start voice recording", "⚠️")
+        else:
+            # Stop recording and transcribe
+            self.voice_button.configure(state="disabled")
+            self._stt_recording = False
+            self._set_status("⏳ Transcribing…", "⏳")
+            self.stt_engine.stop_and_transcribe(
+                on_result=self._on_stt_result,
+                on_error=self._on_stt_error
+            )
+    
+    def _on_voice_input_toggle(self):
+        """Handle voice input toggle keybind - toggle recording based on current state."""
+        if not self.stt_engine:
+            self._set_status("Voice input not available", "⚠️")
+            return
+        
+        if not self._stt_recording:
+            # Start recording
+            success = self.stt_engine.start_listening()
+            if success:
+                self._stt_recording = True
+                self.voice_button.configure(
+                    text="⏹  Stop Voice",
+                    fg_color=COLOR_DANGER,
+                    hover_color=COLOR_DANGER_HOVER
+                )
+                self._set_status("🎙 Listening… press keybind again to stop", "🎙")
+            else:
+                self._set_status("Failed to start voice recording", "⚠️")
+        else:
+            # Stop recording and transcribe
+            self.voice_button.configure(state="disabled")
+            self._stt_recording = False
+            self._set_status("⏳ Transcribing…", "⏳")
+            self.stt_engine.stop_and_transcribe(
+                on_result=self._on_stt_result,
+                on_error=self._on_stt_error
+            )
+    
+    def _on_stt_result(self, text: str):
+        """Handle successful STT transcription (called from background thread)."""
+        # Use root.after to safely update UI from background thread
+        self.root.after(0, lambda: self._insert_stt_text(text))
+    
+    def _insert_stt_text(self, text: str):
+        """Insert transcribed text into the text input (called on main thread)."""
+        # Insert text at current cursor position
+        self.text_input.insert("insert", text)
+        
+        # Restore voice button to idle state
+        self._restore_voice_button()
+        
+        # Update status
+        self._set_status("✅ Voice input added", "✅")
+        
+        # Check if auto-speak is enabled and automatically speak the text
+        if self.settings.get("stt_auto_speak", False) and text.strip():
+            # Automatically trigger speak after a short delay to let UI update
+            self.root.after(100, self._on_speak)
+    
+    def _on_stt_error(self, exception: Exception):
+        """Handle STT error (called from background thread)."""
+        # Use root.after to safely update UI from background thread
+        self.root.after(0, lambda: self._handle_stt_error(exception))
+    
+    def _handle_stt_error(self, exception: Exception):
+        """Handle STT error on main thread."""
+        # Restore voice button to idle state
+        self._restore_voice_button()
+        
+        # Show appropriate error message
+        import speech_recognition as sr
+        if isinstance(exception, sr.UnknownValueError):
+            self._set_status("⚠ Could not understand audio", "⚠️")
+        elif isinstance(exception, sr.RequestError):
+            self._set_status("⚠ Network error - check connection", "⚠️")
+        else:
+            self._set_status(f"⚠ Voice input error: {str(exception)}", "⚠️")
+    
+    def _restore_voice_button(self):
+        """Restore voice button to idle state."""
+        self.voice_button.configure(
+            text="🎙  Voice",
+            fg_color=COLOR_ACCENT,
+            hover_color=COLOR_ACCENT_HOVER,
+            state="normal"
+        )
+    
     def _update_ui_speaking(self, speaking: bool):
         """Update UI state based on speaking status with smooth animations."""
         if speaking:
@@ -1279,6 +1461,10 @@ class MainWindow:
             except Exception:
                 pass
             self.osc_client = None
+        
+        # Shutdown STT engine if available
+        if self.stt_engine:
+            self.stt_engine.shutdown()
         
         # Wait for worker threads to complete (with timeout)
         if self._worker_thread and self._worker_thread.is_alive():

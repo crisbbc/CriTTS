@@ -40,8 +40,8 @@ class TTSEngine:
         self._text_cache = {}  # Cache for text processing
         self._text_processing_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         
-        # Initialize providers
-        self._edge_tts_provider = EdgeTTSProvider()
+        # Initialize providers - pass settings_manager to avoid per-call SettingsManager instantiation
+        self._edge_tts_provider = EdgeTTSProvider(settings_manager=self._settings_manager)
         
         # Initialize audio cache and phrase tracker
         self._audio_cache: Optional[AudioCache] = None
@@ -74,10 +74,10 @@ class TTSEngine:
             
             # Update audio cache settings if cache exists
             if self._audio_cache:
-                self._audio_cache._enabled = cache_enabled
-                self._audio_cache._max_size_mb = max_size_mb
+                self._audio_cache.enabled = cache_enabled
+                self._audio_cache.max_size_mb = max_size_mb
                 # If cache path changed, we'd need to reinitialize - log a warning
-                current_cache_dir = str(self._audio_cache._cache_dir) if self._audio_cache._cache_dir else None
+                current_cache_dir = str(self._audio_cache.cache_dir) if self._audio_cache.cache_dir else None
                 new_cache_path = str(Path(cache_path)) if cache_path else None
                 if current_cache_dir != new_cache_path:
                     logger.warning("Cache path change requires restart to take effect")
@@ -282,41 +282,8 @@ class TTSEngine:
         if not self._voices_cache:
             return None
         
-        # Simple language detection based on common characters
-        text_lower = text.lower()
-        
-        # Language detection patterns
-        language_patterns = {
-            'en': r'[a-zA-Z\s]+',
-            'es': r'[a-zA-Zñáéíóúü\s]+',
-            'fr': r'[a-zA-Zàâäéèêëîïôöùûüÿçæœ\s]+',
-            'de': r'[a-zA-Zäöüß\s]+',
-            'it': r'[a-zA-Zàèéìíîòóù\s]+',
-            'pt': r'[a-zA-Zãõáéíóúàèìòù\s]+',
-            'ru': r'[а-яА-Я\s]+',
-            'ja': r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF\s]+',
-            'zh': r'[\u4E00-\u9FAF\s]+',
-            'ko': r'[\uAC00-\uD7AF\u1100-\u11FF\s]+',
-        }
-        
-        detected_lang = 'en'  # Default to English
-        
-        for lang, pattern in language_patterns.items():
-            if re.search(pattern, text):
-                detected_lang = lang
-                break
-        
-        # Find best matching voice
-        matching_voices = [
-            voice for voice in self._voices_cache
-            if voice['locale'].lower().startswith(detected_lang)
-        ]
-        
-        if matching_voices:
-            # Return the first matching voice (could be enhanced with user preferences)
-            return matching_voices[0]['short_name']
-        
-        return None
+        # Use the robust weighted-scoring language detection method
+        return self._detect_language_voice(text)
     
     async def validate_voice(self, voice_short_name: str) -> bool:
         """
@@ -538,6 +505,11 @@ class TTSEngine:
         """Convert numbers 1000-999999 to words."""
         thousands = num // 1000
         remainder = num % 1000
+        
+        # Guard: if thousands > 9, the lookup tables won't have an entry
+        # Fall back to returning the number as string (same as numbers > 999999)
+        if thousands > 9:
+            return str(num)
         
         # Thousands words for different languages
         thousands_words = {
@@ -1269,18 +1241,10 @@ class TTSEngine:
                 self._voice_cache[voice_short_name] = is_valid
                 return is_valid
             
-            # If no cache available, try to validate by attempting to get voices
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                voices = loop.run_until_complete(self.get_available_voices())
-                short_names = {v.get("short_name") for v in voices if v.get("short_name")}
-                is_valid = voice_short_name in short_names
-                self._voice_cache[voice_short_name] = is_valid
-                return is_valid
-            finally:
-                loop.close()
+            # If no cache available, return True optimistically
+            # The voices cache is populated before any generation call in normal flow,
+            # and the provider will fail gracefully if the voice is invalid
+            return True
                 
         except Exception:
             return False

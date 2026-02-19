@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.config import SettingsManager
 from src.tts import TTSEngine
 from src.audio import AudioRouter
+from src.stt import STTEngine
 from src.gui import MainWindow, SettingsWindow
 from src.gui.theme_constants import (
     WINDOW_MAIN_WIDTH, WINDOW_MAIN_HEIGHT,
@@ -55,6 +56,9 @@ class CriTTSApp(ctk.CTk):
         # Audio router
         self.audio_router = AudioRouter()
         
+        # STT engine - for voice input
+        self.stt_engine = STTEngine(settings_manager=self.settings_manager)
+        
         # Settings window reference
         self.settings_window = None
     
@@ -86,7 +90,8 @@ class CriTTSApp(ctk.CTk):
             tts_engine=self.tts_engine,
             audio_router=self.audio_router,
             on_open_settings=self._open_settings,
-            icon_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "image.ico")
+            icon_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "image.ico"),
+            stt_engine=self.stt_engine
         )
         
         # Schedule VBCable check after window is rendered
@@ -201,6 +206,10 @@ class CriTTSApp(ctk.CTk):
         # Shutdown main window and wait for worker threads
         if hasattr(self, 'main_window'):
             self.main_window.shutdown()
+        
+        # Shutdown STT engine
+        if hasattr(self, 'stt_engine'):
+            self.stt_engine.shutdown()
         
         # Shutdown TTS engine (persist cache index and phrase stats)
         if hasattr(self, 'tts_engine'):

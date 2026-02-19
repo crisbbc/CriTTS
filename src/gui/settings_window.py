@@ -74,6 +74,9 @@ class SettingsWindow:
         # Keybind manager for validation
         self._keybind_manager = KeybindManager()
         
+        # Alt key tracking for keybind capture (Windows fix)
+        self._capture_alt_held = False
+        
         self._create_window()
         self._load_data()
 
@@ -973,6 +976,132 @@ Examples:
         
         # Note: Language mapping controls will be created after voices are loaded
         self.language_mapping_controls_created = False
+        
+        # Separator
+        ctk.CTkFrame(self.behavior_scroll, height=2, fg_color="gray").pack(fill="x", pady=15)
+        
+        # Text Transcription Section Header
+        ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Text Transcription",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", pady=(10, 5))
+        
+        self.transcription_desc_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Settings for voice input and automatic speech-to-text behaviour.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.transcription_desc_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.transcription_desc_label)
+        
+        # Auto-speak after transcription checkbox
+        self.stt_auto_speak_var = ctk.BooleanVar(value=self.settings.get("stt_auto_speak", False))
+        self.stt_auto_speak_check = ctk.CTkCheckBox(
+            self.behavior_scroll,
+            text="Automatically speak transcribed text",
+            variable=self.stt_auto_speak_var,
+            font=ctk.CTkFont(size=12)
+        )
+        self.stt_auto_speak_check.pack(anchor="w", pady=5)
+        self.stt_auto_speak_desc_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="When enabled, text from voice input will be automatically spoken after transcription completes.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.stt_auto_speak_desc_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.stt_auto_speak_desc_label)
+        
+        # Voice Input (STT) Language Section
+        ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Voice Input Language:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(anchor="w", pady=(10, 5))
+        
+        self.stt_language_info_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Language for speech recognition when using the Voice Input button.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.stt_language_info_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.stt_language_info_label)
+        
+        # STT Language dropdown
+        stt_language_frame = ctk.CTkFrame(self.behavior_scroll, fg_color="transparent")
+        stt_language_frame.pack(fill="x", pady=5)
+        
+        self.stt_language_var = ctk.StringVar(value=self.settings.get("stt_language", "en-US"))
+        self.stt_language_dropdown = ctk.CTkOptionMenu(
+            stt_language_frame,
+            variable=self.stt_language_var,
+            values=[
+                "en-US", "en-GB", "es-ES", "fr-FR", "de-DE", 
+                "it-IT", "pt-BR", "ru-RU", "zh-CN", "ja-JP", 
+                "ko-KR", "ar-SA", "hi-IN", "nl-NL", "pl-PL"
+            ],
+            font=ctk.CTkFont(size=12),
+            width=200
+        )
+        self.stt_language_dropdown.pack(side="left", padx=5)
+        
+        self.stt_language_hint_label = ctk.CTkLabel(
+            stt_language_frame,
+            text="Select the language you will speak in.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        )
+        self.stt_language_hint_label.pack(side="left", padx=10)
+        
+        # Voice Input Device Section
+        ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Voice Input Device:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(anchor="w", pady=(10, 5))
+        
+        self.mic_device_info_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Microphone used for voice input. Leave as 'Default' to use the system default.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.mic_device_info_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.mic_device_info_label)
+        
+        # Mic device dropdown frame
+        mic_device_frame = ctk.CTkFrame(self.behavior_scroll, fg_color="transparent")
+        mic_device_frame.pack(fill="x", pady=5)
+        
+        self._input_devices = []
+        self.stt_mic_device_var = ctk.StringVar()
+        self.stt_mic_device_dropdown = ctk.CTkComboBox(
+            mic_device_frame,
+            variable=self.stt_mic_device_var,
+            values=["Loading..."],
+            font=ctk.CTkFont(size=12),
+            dropdown_font=ctk.CTkFont(size=11),
+            width=400,
+            state="readonly"
+        )
+        self.stt_mic_device_dropdown.pack(side="left", padx=5)
+        
+        self.refresh_mic_button = ctk.CTkButton(
+            mic_device_frame,
+            text="Refresh",
+            font=ctk.CTkFont(size=12),
+            command=self._load_input_devices,
+            height=32,
+            width=80
+        )
+        self.refresh_mic_button.pack(side="left", padx=5)
     
     def _create_language_mapping_controls(self):
         """Create language-specific voice mapping controls."""
@@ -1134,7 +1263,8 @@ Examples:
         defaults = {
             "stop": "Escape",
             "clear": "Ctrl+T",
-            "open_settings": "Ctrl+Comma"
+            "open_settings": "Ctrl+Comma",
+            "voice_input": "Ctrl+Shift+V"
         }
         self.keybind_vars = {}
         self.keybind_validation_labels = {}  # Store validation labels for updates
@@ -1144,7 +1274,8 @@ Examples:
         labels = {
             "stop": "Stop playback",
             "clear": "Clear text",
-            "open_settings": "Open Settings"
+            "open_settings": "Open Settings",
+            "voice_input": "Toggle voice input"
         }
         
         # Add info label explaining that Speak is triggered by Enter
@@ -1158,7 +1289,46 @@ Examples:
         self.keybinds_speak_info_label.pack(anchor="w", pady=(0, 10))
         self._wraplength_labels.append(self.keybinds_speak_info_label)
         
-        for action in ("stop", "clear", "open_settings"):
+        # Global Hotkeys Section
+        ctk.CTkFrame(self.keybinds_scroll, height=1, fg_color="gray50").pack(fill="x", pady=10)
+        
+        ctk.CTkLabel(
+            self.keybinds_scroll,
+            text="System-Wide Hotkeys:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(anchor="w", pady=(5, 5))
+        
+        # Global hotkeys enable checkbox
+        self.global_hotkeys_var = ctk.BooleanVar(value=self.settings.get("global_hotkeys_enabled", False))
+        self.global_hotkeys_check = ctk.CTkCheckBox(
+            self.keybinds_scroll,
+            text="Enable system-wide hotkeys (work even when app is not focused)",
+            variable=self.global_hotkeys_var,
+            font=ctk.CTkFont(size=12)
+        )
+        self.global_hotkeys_check.pack(anchor="w", pady=5)
+        
+        self.global_hotkeys_info_label = ctk.CTkLabel(
+            self.keybinds_scroll,
+            text="When enabled, keybinds for Stop, Clear, Settings, and Voice Input will work system-wide. Requires the 'keyboard' library and administrator privileges on some systems.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.global_hotkeys_info_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.global_hotkeys_info_label)
+        
+        # Separator for voice input keybinds section
+        ctk.CTkFrame(self.keybinds_scroll, height=1, fg_color="gray50").pack(fill="x", pady=10)
+        
+        # Voice Input section header
+        ctk.CTkLabel(
+            self.keybinds_scroll,
+            text="Application Keybinds:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(anchor="w", pady=(5, 10))
+        
+        for action in ("stop", "clear", "open_settings", "voice_input"):
             row = ctk.CTkFrame(self.keybinds_scroll, fg_color="transparent")
             row.pack(fill="x", pady=4)
             ctk.CTkLabel(row, text=labels[action], font=ctk.CTkFont(size=12), width=160, anchor="w").pack(side="left", padx=(0, 10))
@@ -1874,8 +2044,38 @@ Examples:
         """Load voices and devices asynchronously."""
         self._load_voices()
         self._load_devices()
+        self._load_input_devices()
         # Initialize cache statistics display
         self._on_refresh_cache_stats()
+    
+    def _load_input_devices(self):
+        """Load audio input devices (microphones) for the STT mic selector."""
+        if not self.audio_router:
+            self.stt_mic_device_dropdown.configure(values=["No audio router"])
+            self.stt_mic_device_var.set("No audio router")
+            return
+        
+        # Get input devices from audio router
+        input_devices = self.audio_router.get_input_devices()
+        
+        # Prepend "Default (System)" option
+        self._input_devices = [{"index": None, "name": "Default (System)"}] + input_devices
+        
+        # Populate dropdown with device names
+        device_names = [d.get("name", "Unknown") for d in self._input_devices]
+        self.stt_mic_device_dropdown.configure(values=device_names)
+        
+        # Restore previously saved device selection
+        saved_index = self.settings.get("stt_mic_device_index")
+        if saved_index is not None:
+            # Find the device with the saved index
+            for d in self._input_devices:
+                if d.get("index") == saved_index:
+                    self.stt_mic_device_var.set(d.get("name", "Default (System)"))
+                    return
+        
+        # Fall back to "Default (System)" if saved device not found or not set
+        self.stt_mic_device_var.set("Default (System)")
     
     def _load_voices(self):
         """Load available voices and populate dropdown; store friendly name -> short_name mapping."""
@@ -2461,6 +2661,19 @@ Examples:
         # Save auto language detection setting
         self.settings.set("auto_language_detection", self.auto_language_var.get())
         
+        # Save STT language setting
+        self.settings.set("stt_language", self.stt_language_var.get())
+        
+        # Save STT microphone device setting
+        selected_mic_name = self.stt_mic_device_var.get()
+        for d in self._input_devices:
+            if d.get("name") == selected_mic_name:
+                self.settings.set("stt_mic_device_index", d.get("index"))
+                break
+        
+        # Save STT auto-speak setting
+        self.settings.set("stt_auto_speak", self.stt_auto_speak_var.get())
+        
         # Save language voice mappings
         self._save_language_mappings()
         
@@ -2655,6 +2868,10 @@ Examples:
             logger.info(f"Keybinds disabled (empty): {', '.join(empty_keybinds)}")
         
         self.settings.set("keybinds", keybinds_saved)
+        
+        # Save global hotkeys setting
+        self.settings.set("global_hotkeys_enabled", self.global_hotkeys_var.get())
+        
         speak_mode = "current_line" if (getattr(self, "speak_mode_current_line_var", None) and self.speak_mode_current_line_var.get()) else "all_text"
         self.settings.set("speak_mode", speak_mode)
         
@@ -2773,15 +2990,32 @@ Examples:
         # Store which action is being captured
         self._capturing_keybind = action_name
         
+        # Reset Alt tracking state
+        self._capture_alt_held = False
+        
         # Set up key listener
         self.window.bind("<KeyPress>", self._on_key_capture_press)
         self.window.bind("<KeyRelease>", self._on_key_capture_release)
+        
+        # Bind Alt key events to track Alt state (Windows fix: event.state & 0x8 is Num Lock, not Alt)
+        self.window.bind("<Alt_L>", self._on_alt_press)
+        self.window.bind("<Alt_R>", self._on_alt_press)
+        self.window.bind("<KeyRelease-Alt_L>", self._on_alt_release)
+        self.window.bind("<KeyRelease-Alt_R>", self._on_alt_release)
         
         # Show capture instructions
         self.keybind_validation_labels[action_name].configure(text="Capturing...", text_color="blue")
         
         # Set focus to window to ensure key events are captured
         self.window.focus_force()
+    
+    def _on_alt_press(self, event):
+        """Handle Alt key press during keybind capture."""
+        self._capture_alt_held = True
+    
+    def _on_alt_release(self, event):
+        """Handle Alt key release during keybind capture."""
+        self._capture_alt_held = False
     
     def _on_key_capture_press(self, event):
         """Handle key press during keybind capture."""
@@ -2798,7 +3032,8 @@ Examples:
             modifiers.append('Ctrl')
         if event.state & 0x1:  # Shift key
             modifiers.append('Shift')
-        if event.state & 0x8:  # Alt key
+        # Use tracked Alt state instead of event.state & 0x8 (which is Num Lock on Windows)
+        if self._capture_alt_held:
             modifiers.append('Alt')
         
         # Get the key
@@ -2853,6 +3088,15 @@ Examples:
         # Unbind key events
         self.window.unbind("<KeyPress>")
         self.window.unbind("<KeyRelease>")
+        
+        # Unbind Alt key tracking events
+        self.window.unbind("<Alt_L>")
+        self.window.unbind("<Alt_R>")
+        self.window.unbind("<KeyRelease-Alt_L>")
+        self.window.unbind("<KeyRelease-Alt_R>")
+        
+        # Reset Alt tracking state
+        self._capture_alt_held = False
         
         # Reset button states
         for action, btn in self.keybind_capture_buttons.items():

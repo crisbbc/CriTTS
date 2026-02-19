@@ -49,6 +49,27 @@ class AudioRouter:
         
         return devices
     
+    def get_input_devices(self) -> List[Dict]:
+        """
+        Enumerate all available audio input devices (microphones).
+        
+        Returns:
+            List of dictionaries with 'index', 'name', 'channels', and 'sample_rate' for each device.
+        """
+        devices = []
+        device_list = sd.query_devices()
+        
+        for i, device in enumerate(device_list):
+            if device['max_input_channels'] > 0:
+                devices.append({
+                    'index': i,
+                    'name': device['name'],
+                    'channels': device['max_input_channels'],
+                    'sample_rate': device['default_samplerate']
+                })
+        
+        return devices
+    
     def get_default_device(self) -> Optional[Dict]:
         """Get the system default output device."""
         try:
@@ -300,8 +321,7 @@ class AudioRouter:
                     raise sd.CallbackStop()
             
             # Create output stream
-            # Derive actual playback sample rate and channels from processed data
-            effective_sr = target_sr if target_sr is not None else sr
+            # Use the effective_sr already computed during resampling
             channels = data.shape[1] if len(data.shape) > 1 else 1
 
             self._current_stream = sd.OutputStream(
@@ -342,7 +362,7 @@ class AudioRouter:
         if self._amplitude_callback:
             try:
                 self._amplitude_callback(0.0)
-            except:
+            except Exception:
                 pass
     
     def set_amplitude_callback(self, callback):
@@ -435,7 +455,8 @@ class AudioRouter:
         device_index: Optional[int] = None,
         enable_normalization: bool = True,
         normalization_type: str = "Peak",
-        amplitude_callback=None
+        amplitude_callback=None,
+        processing_profile: str = "balanced"
     ) -> bool:
         """
         Play audio data with real-time amplitude analysis.
@@ -447,6 +468,7 @@ class AudioRouter:
             enable_normalization: Whether to apply normalization
             normalization_type: Type of normalization
             amplitude_callback: Callback function for amplitude updates
+            processing_profile: Processing profile ("fast_preview", "balanced", "high_quality")
             
         Returns:
             True if playback succeeded, False otherwise.
@@ -455,21 +477,36 @@ class AudioRouter:
             self._stop_requested.clear()
             self._amplitude_callback = amplitude_callback
             
+            # Derive processing settings from profile
+            profile_settings = self._get_profile_settings(processing_profile)
+            target_sr = profile_settings["sample_rate"]
+            kaiser_beta = profile_settings["kaiser_beta"]
+            stereo_width = profile_settings["stereo_width"]
+            
+            # Determine normalization type: respect enable_normalization flag
+            if enable_normalization:
+                norm_type = normalization_type
+            else:
+                norm_type = "None"
+            
             # Load audio data using soundfile
             audio_buffer = io.BytesIO(audio_data)
             data, sr = sf.read(audio_buffer, dtype=np.float32)
             
-            # Apply normalization if enabled
-            if enable_normalization:
-                data = self._normalize_audio(data, normalization_type)
+            # High-quality resampling using scipy (skip for fast_preview)
+            if sr != target_sr and target_sr is not None:
+                data = self._resample_high_quality(data, sr, target_sr, kaiser_beta)
+                effective_sr = target_sr
+            else:
+                effective_sr = sr
             
-            # High-quality resampling using scipy
-            if sr != sample_rate:
-                data = self._resample_high_quality(data, sr, sample_rate)
+            # Apply normalization after resampling
+            if norm_type != "None":
+                data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
             
-            # Convert mono to stereo with enhancement
-            if len(data.shape) == 1:
-                data = self._stereo_enhancement(data, width=0.3)
+            # Convert mono to stereo with enhancement (skip for fast_preview)
+            if len(data.shape) == 1 and stereo_width > 0:
+                data = self._stereo_enhancement(data, width=stereo_width)
             
             # Store original data for amplitude calculation
             original_data = data.copy()
@@ -510,12 +547,12 @@ class AudioRouter:
                             pass
                     raise sd.CallbackStop()
             
-            # Create output stream
-            channels = 2  # Stereo output
+            # Create output stream - use effective_sr from processing
+            channels = data.shape[1] if len(data.shape) > 1 else 1
 
             self._current_stream = sd.OutputStream(
                 device=device_index,
-                samplerate=sample_rate,
+                samplerate=effective_sr,
                 channels=channels,
                 callback=callback,
                 finished_callback=self._stream_finished

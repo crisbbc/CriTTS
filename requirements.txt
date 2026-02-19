@@ -5,6 +5,6 @@ soundfile>=0.12.0
 numpy>=1.21.0
 scipy>=1.9.0
 pyloudnorm>=0.1.0
-Pillow
-watchdog>=3.0.0
 python-osc>=1.8.0
+SpeechRecognition
+keyboard>=0.13.5

@@ -11,12 +11,13 @@ logger = logging.getLogger(__name__)
 class TextPreprocessor:
     """Preprocesses text for TTS generation with abbreviation expansion."""
     
-    def preprocess_text(self, text: str) -> str:
+    def preprocess_text(self, text: str, abbreviations: dict = None) -> str:
         """
         Preprocess text for TTS generation with abbreviation expansion.
         
         Args:
             text: Input text to process
+            abbreviations: Dictionary of abbreviations to expand. If None, no expansion is performed.
             
         Returns:
             Preprocessed text with abbreviations expanded
@@ -24,14 +25,9 @@ class TextPreprocessor:
         # Log input for debugging
         logger.debug("Preprocessing input: '%s'", text)
         
-        # Get abbreviations from settings
-        abbreviations = {}
-        try:
-            from ..config.settings_manager import SettingsManager
-            settings_manager = SettingsManager()
-            abbreviations = settings_manager.get("abbreviations", {})
-        except Exception as e:
-            logger.debug("Could not load abbreviations: %s", e)
+        # Use provided abbreviations or empty dict (no-op)
+        if abbreviations is None:
+            abbreviations = {}
         
         result = self.expand_abbreviations(text, abbreviations)
         

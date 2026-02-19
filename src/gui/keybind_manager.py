@@ -1,9 +1,21 @@
 """
 Keybind Manager Module
 Handles dynamic keybind registration and management for the application.
+Supports both Tkinter application-wide keybinds and system-wide global hotkeys.
 """
 import re
-from typing import Dict, Any, Optional, Callable
+import logging
+from typing import Dict, Any, Optional, Callable, List
+
+logger = logging.getLogger(__name__)
+
+# Try to import keyboard library for global hotkeys
+_keyboard_available = False
+try:
+    import keyboard
+    _keyboard_available = True
+except ImportError:
+    logger.debug("keyboard library not available - global hotkeys disabled")
 
 
 class KeybindManager:
@@ -14,6 +26,8 @@ class KeybindManager:
         self._registered_keybinds = {}  # Maps keybind_string to bind_id and callback info
         self._parsed_cache = {}  # Cache for parsed keybind strings
         self._keybind_to_actions = {}  # Maps keybind_string to list of action names (for duplicate detection)
+        self._global_hotkeys_enabled = False  # Track if global hotkeys are enabled
+        self._global_hotkeys = {}  # Maps keybind_string to keyboard hook
 
     
     def register_keybind(self, root, keybind_string: str, callback, action_name: str = None) -> bool:
@@ -368,3 +382,229 @@ class KeybindManager:
             True if conflict exists, False otherwise
         """
         return keybind_string in self._registered_keybinds
+    
+    def is_keyboard_available(self) -> bool:
+        """
+        Check if the keyboard library is available for global hotkeys.
+        
+        Returns:
+            True if keyboard library is available, False otherwise
+        """
+        return _keyboard_available
+    
+    def enable_global_hotkeys(self, enabled: bool = True) -> bool:
+        """
+        Enable or disable system-wide global hotkeys.
+        
+        Args:
+            enabled: Whether to enable global hotkeys
+            
+        Returns:
+            True if successful, False if keyboard library not available
+        """
+        if not _keyboard_available:
+            if enabled:
+                logger.warning("Cannot enable global hotkeys: keyboard library not available")
+            return False
+        
+        self._global_hotkeys_enabled = enabled
+        
+        if not enabled:
+            # Unregister all global hotkeys
+            self._unregister_all_global_hotkeys()
+        
+        return True
+    
+    def register_global_hotkey(self, keybind_string: str, callback, action_name: str = None) -> bool:
+        """
+        Register a system-wide global hotkey that works even when the app is not focused.
+        
+        Args:
+            keybind_string: User-friendly keybind format (e.g., "Ctrl+Enter")
+            callback: Function to call when hotkey is pressed
+            action_name: Optional action name for tracking
+            
+        Returns:
+            True if registration successful, False otherwise
+        """
+        if not _keyboard_available or not self._global_hotkeys_enabled:
+            return False
+        
+        if not keybind_string or not callback:
+            return False
+        
+        # Convert to keyboard library format
+        kb_format = self._parse_to_keyboard_format(keybind_string)
+        if not kb_format:
+            logger.warning("Failed to parse keybind for global hotkey: %s", keybind_string)
+            return False
+        
+        # Unregister existing if present
+        if keybind_string in self._global_hotkeys:
+            self.unregister_global_hotkey(keybind_string)
+        
+        try:
+            # Register with keyboard library
+            hook = keyboard.add_hotkey(kb_format, callback, suppress=False)
+            self._global_hotkeys[keybind_string] = {
+                'kb_format': kb_format,
+                'callback': callback,
+                'hook': hook,
+                'action_name': action_name or keybind_string
+            }
+            logger.debug("Registered global hotkey: %s -> %s", keybind_string, kb_format)
+            return True
+        except Exception as e:
+            logger.error("Failed to register global hotkey '%s': %s", keybind_string, e)
+            return False
+    
+    def unregister_global_hotkey(self, keybind_string: str) -> bool:
+        """
+        Unregister a specific global hotkey.
+        
+        Args:
+            keybind_string: Hotkey to unregister
+            
+        Returns:
+            True if unregistration successful, False otherwise
+        """
+        if keybind_string not in self._global_hotkeys:
+            return False
+        
+        try:
+            info = self._global_hotkeys[keybind_string]
+            keyboard.remove_hotkey(info['hook'])
+            del self._global_hotkeys[keybind_string]
+            logger.debug("Unregistered global hotkey: %s", keybind_string)
+            return True
+        except Exception as e:
+            logger.error("Failed to unregister global hotkey '%s': %s", keybind_string, e)
+            return False
+    
+    def _unregister_all_global_hotkeys(self):
+        """Unregister all global hotkeys."""
+        for keybind_string in list(self._global_hotkeys.keys()):
+            try:
+                info = self._global_hotkeys[keybind_string]
+                keyboard.remove_hotkey(info['hook'])
+            except Exception:
+                pass
+        
+        self._global_hotkeys.clear()
+    
+    def _parse_to_keyboard_format(self, keybind_string: str) -> str:
+        """
+        Convert user-friendly keybind format to keyboard library format.
+        
+        Args:
+            keybind_string: User-friendly format (e.g., "Ctrl+Enter", "Ctrl+Shift+A")
+            
+        Returns:
+            Keyboard library format string (e.g., "ctrl+enter", "ctrl+shift+a")
+        """
+        if not keybind_string:
+            return ""
+        
+        parts = keybind_string.split('+')
+        result_parts = []
+        
+        for part in parts:
+            part = part.strip().lower()
+            
+            # Map modifiers
+            if part in ['ctrl', 'control']:
+                result_parts.append('ctrl')
+            elif part == 'shift':
+                result_parts.append('shift')
+            elif part == 'alt':
+                result_parts.append('alt')
+            elif part in ['win', 'super', 'windows']:
+                result_parts.append('windows')
+            else:
+                # Map special keys - use keyboard library's expected names
+                key_mapping = {
+                    'enter': 'enter',
+                    'return': 'enter',
+                    'space': 'space',
+                    'escape': 'esc',
+                    'esc': 'esc',
+                    'tab': 'tab',
+                    'backspace': 'backspace',
+                    'delete': 'delete',
+                    'del': 'delete',
+                    'insert': 'insert',
+                    'home': 'home',
+                    'end': 'end',
+                    'pageup': 'page up',
+                    'pagedown': 'page down',
+                    'up': 'up',
+                    'down': 'down',
+                    'left': 'left',
+                    'right': 'right',
+                    # Use keyboard library's key names for symbols
+                    'comma': 'comma',
+                    'period': 'dot',
+                    'slash': 'slash',
+                    'semicolon': 'semicolon',
+                    'quote': 'quote',
+                    'backslash': 'backslash',
+                    'bracketleft': 'left bracket',
+                    'bracketright': 'right bracket',
+                    'minus': 'minus',
+                    'equal': 'equal',
+                    'grave': 'grave',
+                    # Function keys
+                    'f1': 'f1', 'f2': 'f2', 'f3': 'f3', 'f4': 'f4',
+                    'f5': 'f5', 'f6': 'f6', 'f7': 'f7', 'f8': 'f8',
+                    'f9': 'f9', 'f10': 'f10', 'f11': 'f11', 'f12': 'f12',
+                    'f13': 'f13', 'f14': 'f14', 'f15': 'f15', 'f16': 'f16',
+                    'f17': 'f17', 'f18': 'f18', 'f19': 'f19', 'f20': 'f20',
+                }
+                
+                if part in key_mapping:
+                    result_parts.append(key_mapping[part])
+                elif len(part) == 1 and part.isalnum():
+                    # Single alphanumeric key
+                    result_parts.append(part)
+                elif part in [',', '.', '/', ';', "'", '\\', '[', ']', '-', '=', '`']:
+                    # Already a symbol
+                    result_parts.append(part)
+                else:
+                    # Unknown key - pass through as-is (keyboard library may still recognize it)
+                    result_parts.append(part)
+        
+        return '+'.join(result_parts)
+    
+    def register_all_global_hotkeys(self, keybinds: Dict[str, Callable]) -> int:
+        """
+        Register multiple global hotkeys at once.
+        
+        Args:
+            keybinds: Dictionary mapping keybind strings to callbacks
+            
+        Returns:
+            Number of successfully registered hotkeys
+        """
+        if not _keyboard_available or not self._global_hotkeys_enabled:
+            return 0
+        
+        success_count = 0
+        for keybind_string, callback in keybinds.items():
+            if self.register_global_hotkey(keybind_string, callback, action_name=keybind_string):
+                success_count += 1
+        
+        return success_count
+    
+    def get_global_hotkeys_status(self) -> Dict[str, Any]:
+        """
+        Get status information about global hotkeys.
+        
+        Returns:
+            Dictionary with status information
+        """
+        return {
+            'available': _keyboard_available,
+            'enabled': self._global_hotkeys_enabled,
+            'registered_count': len(self._global_hotkeys),
+            'registered_hotkeys': list(self._global_hotkeys.keys())
+        }
