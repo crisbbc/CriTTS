@@ -95,6 +95,7 @@ class SettingsManager:
         # Microphone Passthrough Settings
         "mic_passthrough_enabled": False,  # Master toggle for mic passthrough
         "mic_passthrough_device_index": None,  # Mic to capture (None = system default)
+        "mic_passthrough_output_device_index": None,  # Output device for passthrough (None = same as TTS output)
         "mic_passthrough_volume": 100,  # Volume multiplier 0–200 (%)
         
         # Button Visibility Settings

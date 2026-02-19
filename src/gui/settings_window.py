@@ -873,6 +873,47 @@ class SettingsWindow:
             text_color="gray"
         )
         self.passthrough_volume_hint_label.pack(anchor="w", pady=(0, 10))
+        
+        # Passthrough output device selection
+        self.passthrough_output_label = ctk.CTkLabel(
+            self.audio_scroll,
+            text="Passthrough Output Device:",
+            font=ctk.CTkFont(size=12)
+        )
+        self.passthrough_output_label.pack(anchor="w", pady=(10, 5))
+        
+        passthrough_output_frame = ctk.CTkFrame(self.audio_scroll, fg_color="transparent")
+        passthrough_output_frame.pack(fill="x", pady=5)
+        
+        self.passthrough_output_var = ctk.StringVar()
+        self.passthrough_output_dropdown = ctk.CTkComboBox(
+            passthrough_output_frame,
+            variable=self.passthrough_output_var,
+            values=["Loading..."],
+            font=ctk.CTkFont(size=12),
+            dropdown_font=ctk.CTkFont(size=11),
+            width=400,
+            state="readonly"
+        )
+        self.passthrough_output_dropdown.pack(side="left", padx=5)
+        
+        self.refresh_passthrough_output_button = ctk.CTkButton(
+            passthrough_output_frame,
+            text="Refresh",
+            font=ctk.CTkFont(size=12),
+            command=self._load_devices,
+            height=32,
+            width=80
+        )
+        self.refresh_passthrough_output_button.pack(side="left", padx=5)
+        
+        self.passthrough_output_hint_label = ctk.CTkLabel(
+            self.audio_scroll,
+            text="Select the VBCable Input device so your mic audio is mixed with TTS.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        )
+        self.passthrough_output_hint_label.pack(anchor="w", pady=(0, 10))
     
     def _create_appearance_tab(self):
         """Create appearance settings tab content."""
@@ -2708,6 +2749,9 @@ Examples:
             )
             self.device_dropdown.configure(values=["No VB-Cable devices found"])
             self.device_var.set("No VB-Cable devices found")
+            # Also update passthrough output dropdown
+            self.passthrough_output_dropdown.configure(values=["No VB-Cable devices found"])
+            self.passthrough_output_var.set("No VB-Cable devices found")
         else:
             self.vbcable_warning_label.configure(text="")
             names = [d.get("name", "Unknown") for d in self._devices]
@@ -2725,6 +2769,37 @@ Examples:
             # If saved device not found or not set, select first VB-Cable device
             if not found_saved and names:
                 self.device_var.set(names[0])
+            
+            # Populate passthrough output dropdown with the same device list
+            self.passthrough_output_dropdown.configure(values=names)
+            
+            # Restore saved passthrough output device selection
+            saved_pt_out = self.settings.get("mic_passthrough_output_device_index")
+            if saved_pt_out is not None:
+                found_pt_out = False
+                for d in self._devices:
+                    if d.get("index") == saved_pt_out:
+                        self.passthrough_output_var.set(d.get("name", "Unknown"))
+                        found_pt_out = True
+                        break
+                if not found_pt_out and names:
+                    # Saved device not found, auto-select CABLE Input if present
+                    cable_device = next(
+                        (d for d in self._devices if "cable" in d.get("name", "").lower()),
+                        None
+                    )
+                    self.passthrough_output_var.set(
+                        cable_device["name"] if cable_device else names[0]
+                    )
+            else:
+                # No saved selection, auto-select CABLE Input if present, otherwise first device
+                cable_device = next(
+                    (d for d in self._devices if "cable" in d.get("name", "").lower()),
+                    None
+                )
+                self.passthrough_output_var.set(
+                    cable_device["name"] if cable_device else (names[0] if names else "")
+                )
         
         self._update_device_info()
     
@@ -2820,6 +2895,13 @@ Examples:
         for d in self._input_devices:
             if d.get("name") == selected_passthrough_mic_name:
                 self.settings.set("mic_passthrough_device_index", d.get("index"))
+                break
+        
+        # Save passthrough output device setting
+        selected_pt_out_name = self.passthrough_output_var.get()
+        for d in self._devices:
+            if d.get("name") == selected_pt_out_name:
+                self.settings.set("mic_passthrough_output_device_index", d.get("index"))
                 break
         
         # Save VRChat OSC settings

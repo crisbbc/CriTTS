@@ -104,16 +104,21 @@ class CriTTSApp(ctk.CTk):
         """Initialize microphone passthrough if enabled in settings."""
         if self.settings_manager.get("mic_passthrough_enabled", False):
             input_device_index = self.settings_manager.get("mic_passthrough_device_index")
-            output_device_index = self.settings_manager.get("device_index")
+            # Use dedicated passthrough output device if set, otherwise fall back to main TTS device
+            output_device_index = self.settings_manager.get("mic_passthrough_output_device_index")
+            if output_device_index is None:
+                output_device_index = self.settings_manager.get("device_index")
             volume_percent = self.settings_manager.get("mic_passthrough_volume", 100)
             # Clamp to 0-200 and convert from percent to multiplier
             volume_percent = max(0, min(200, volume_percent))
             volume = volume_percent / 100.0
-            self.audio_router.start_mic_passthrough(
+            success, error_msg = self.audio_router.start_mic_passthrough(
                 input_device_index=input_device_index,
                 output_device_index=output_device_index,
                 volume=volume
             )
+            if not success and error_msg:
+                self._show_passthrough_error(error_msg)
     
     def _check_vbcable(self):
         """Check if VBCable is installed and prompt user if not."""
@@ -214,62 +219,92 @@ class CriTTSApp(ctk.CTk):
         
         if enabled:
             input_device_index = self.settings_manager.get("mic_passthrough_device_index")
-            output_device_index = self.settings_manager.get("device_index")
+            # Use dedicated passthrough output device if set, otherwise fall back to main TTS device
+            output_device_index = self.settings_manager.get("mic_passthrough_output_device_index")
+            if output_device_index is None:
+                output_device_index = self.settings_manager.get("device_index")
             volume_percent = self.settings_manager.get("mic_passthrough_volume", 100)
             # Clamp to 0-200 and convert from percent to multiplier
             volume_percent = max(0, min(200, volume_percent))
             volume = volume_percent / 100.0
-            self.audio_router.start_mic_passthrough(
+            success, error_msg = self.audio_router.start_mic_passthrough(
                 input_device_index=input_device_index,
                 output_device_index=output_device_index,
                 volume=volume
             )
+            if not success and error_msg:
+                self._show_passthrough_error(error_msg)
         else:
             self.audio_router.stop_mic_passthrough()
-
+    
+    def _show_passthrough_error(self, error_msg: str):
+        """Show an error dialog for microphone passthrough failure."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Microphone Passthrough Error")
+        dialog.geometry("450x200")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (450 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (200 // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Message label
+        message = ctk.CTkLabel(
+            dialog,
+            text="Failed to start microphone passthrough:\n\n"
+                 f"{error_msg}\n\n"
+                 "Check your audio device settings and try again.",
+            font=ctk.CTkFont(size=12),
+            justify="center",
+            wraplength=400
+        )
+        message.pack(padx=20, pady=(20, 15))
+        
+        # OK button
+        ok_button = ctk.CTkButton(
+            dialog,
+            text="OK",
+            command=dialog.destroy,
+            width=100
+        )
+        ok_button.pack(pady=(0, 20))
     
     def _setup_shutdown(self):
         """Setup graceful shutdown handlers."""
-        # Handle window close
-        self.protocol("WM_DELETE_WINDOW", self._on_closing)
-        
-        # Handle SIGINT (Ctrl+C)
-        signal.signal(signal.SIGINT, self._signal_handler)
-        
-        # Register cleanup on exit
+        # Register cleanup for normal exit
         atexit.register(self._cleanup)
+        
+        # Handle SIGTERM (kill command)
+        if hasattr(signal, 'SIGTERM'):
+            signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        # Handle SIGINT (Ctrl+C) - only available on Unix-like systems
+        if hasattr(signal, 'SIGINT'):
+            signal.signal(signal.SIGINT, self._signal_handler)
+        
+        # Handle window close button
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
     
     def _signal_handler(self, signum, frame):
-        """Handle system signals."""
-        self._on_closing()
+        """Handle termination signals."""
+        self._cleanup()
+        sys.exit(0)
     
-    def _on_closing(self):
-        """Handle application closing."""
-        # Shutdown main window and wait for worker threads
-        if hasattr(self, 'main_window'):
-            self.main_window.shutdown()
-        
-        # Shutdown STT engine
-        if hasattr(self, 'stt_engine'):
-            self.stt_engine.shutdown()
-        
+    def _on_close(self):
+        """Handle window close event."""
+        self._cleanup()
+        self.destroy()
+    
+    def _cleanup(self):
+        """Cleanup resources on exit (safety net for abnormal exits)."""
         # Stop microphone passthrough
         if hasattr(self, 'audio_router'):
             self.audio_router.stop_mic_passthrough()
         
-        # Shutdown TTS engine (persist cache index and phrase stats)
-        if hasattr(self, 'tts_engine'):
-            self.tts_engine.shutdown()
-        
-        # Save settings
-        self.settings_manager.save_settings()
-        
-        # Destroy window
-        self.destroy()
-
-    
-    def _cleanup(self):
-        """Cleanup resources on exit (safety net for abnormal exits)."""
         # Shutdown TTS engine if it exists
         if hasattr(self, 'tts_engine'):
             self.tts_engine.shutdown()
