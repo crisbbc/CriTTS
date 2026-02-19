@@ -175,9 +175,9 @@ ANIMATION_VERY_SLOW = 500   # ms - complex animations
 # WINDOW DIMENSIONS
 # Default and minimum window sizes
 # =============================================================================
-WINDOW_MAIN_WIDTH = 820
+WINDOW_MAIN_WIDTH = 1020
 WINDOW_MAIN_HEIGHT = 640
-WINDOW_MAIN_MIN_WIDTH = 680
+WINDOW_MAIN_MIN_WIDTH = 1020
 WINDOW_MAIN_MIN_HEIGHT = 500
 
 WINDOW_SETTINGS_WIDTH = 720

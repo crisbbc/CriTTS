@@ -33,6 +33,7 @@ from .theme_constants import (
     RADIUS_SM, RADIUS_MD, RADIUS_LG, RADIUS_XL,
     ANIMATION_FAST, ANIMATION_NORMAL, ANIMATION_SLOW,
     WINDOW_MAIN_MIN_WIDTH, WINDOW_MAIN_MIN_HEIGHT,
+    WINDOW_MAIN_WIDTH, WINDOW_MAIN_HEIGHT,
     get_theme_colors
 )
 
@@ -129,7 +130,7 @@ class MainWindow:
     def _setup_window(self):
         """Configure the main window."""
         self.root.title("CriTTS Recoded")
-        self.root.geometry("800x600")
+        self.root.geometry(f"{WINDOW_MAIN_WIDTH}x{WINDOW_MAIN_HEIGHT}")
         self.root.minsize(WINDOW_MAIN_MIN_WIDTH, WINDOW_MAIN_MIN_HEIGHT)
         
         # Set icon if available

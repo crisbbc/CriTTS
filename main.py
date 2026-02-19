@@ -209,7 +209,7 @@ class CriTTSApp(ctk.CTk):
             volume = self.settings_manager.get("mic_passthrough_volume", 100)
             self.audio_router.start_passthrough(device_index=device_index, volume=volume)
         else:
-            self.audio_router.stop_passthrough()
+            self.audio_router.stop_mic_passthrough()
 
     
     def _setup_shutdown(self):
@@ -239,7 +239,7 @@ class CriTTSApp(ctk.CTk):
         
         # Stop microphone passthrough
         if hasattr(self, 'audio_router'):
-            self.audio_router.stop_passthrough()
+            self.audio_router.stop_mic_passthrough()
         
         # Shutdown TTS engine (persist cache index and phrase stats)
         if hasattr(self, 'tts_engine'):
