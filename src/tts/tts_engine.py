@@ -307,19 +307,21 @@ class TTSEngine:
         self._voice_cache[voice_short_name] = is_valid
         return is_valid
     
-    async def preprocess_text(self, text: str) -> str:
+    async def preprocess_text(self, text: str, voice: Optional[str] = None) -> str:
         """
         Preprocess text for better TTS quality and speed.
         
         Args:
             text: Input text to preprocess
+            voice: Voice ID to determine language for number formatting.
+                   If None, falls back to settings voice.
             
         Returns:
             Preprocessed text optimized for TTS
         """
         # Use cached preprocessing for repeated text
-        # Use full stripped text as cache key to avoid collisions
-        cache_key = text.strip()
+        # Include voice in cache key so number words are regenerated when voice changes
+        cache_key = (text.strip(), voice or "default")
         if cache_key in self._text_cache:
             return self._text_cache[cache_key]
         
@@ -331,7 +333,7 @@ class TTSEngine:
         
         # Handle common abbreviations and numbers
         processed_text = self._expand_common_abbreviations(processed_text)
-        processed_text = self._format_numbers(processed_text)
+        processed_text = self._format_numbers(processed_text, voice)
         
         # Add slight pauses for better natural flow
         processed_text = self._add_natural_pauses(processed_text)
@@ -373,10 +375,18 @@ class TTSEngine:
         
         return text
     
-    def _format_numbers(self, text: str) -> str:
-        """Format numbers for better TTS pronunciation with language-aware conversion."""
+    def _format_numbers(self, text: str, voice: Optional[str] = None) -> str:
+        """Format numbers for better TTS pronunciation with language-aware conversion.
+        
+        Args:
+            text: Text containing numbers to format
+            voice: Voice ID to determine language. If None, falls back to settings voice.
+            
+        Returns:
+            Text with numbers converted to words in the appropriate language
+        """
         # Get the current voice to determine language
-        current_voice = self._get_current_voice_language()
+        current_voice = self._get_current_voice_language(voice)
         
         # Language-specific number words
         number_words = {
@@ -536,19 +546,28 @@ class TTSEngine:
         
         return result
     
-    def _get_current_voice_language(self) -> str:
-        """Get the language code of the current voice."""
-        try:
-            settings_manager = self._get_settings()
-            current_voice = settings_manager.get("voice", "en-US-AriaNeural")
+    def _get_current_voice_language(self, voice: Optional[str] = None) -> str:
+        """Get the language code from a voice ID.
+        
+        Args:
+            voice: Voice ID to extract language from. If None, falls back to settings voice.
             
-            # Extract language from voice short name
-            if '-' in current_voice:
-                return current_voice.split('-')[0].lower()
-            
-            return 'en'  # Default to English
-        except:
-            return 'en'
+        Returns:
+            Language code (e.g., 'en', 'es', 'fr')
+        """
+        current_voice = voice
+        if current_voice is None:
+            try:
+                settings_manager = self._get_settings()
+                current_voice = settings_manager.get("voice", "en-US-AriaNeural")
+            except:
+                current_voice = "en-US-AriaNeural"
+        
+        # Extract language from voice short name
+        if '-' in current_voice:
+            return current_voice.split('-')[0].lower()
+        
+        return 'en'  # Default to English
     
     def _add_natural_pauses(self, text: str) -> str:
         """
@@ -684,8 +703,8 @@ class TTSEngine:
         if not await self.validate_voice(actual_voice):
             return None, f"Invalid voice: {actual_voice}. Please select a valid voice in settings."
         
-        # Preprocess text for better quality and speed
-        processed_text = await self.preprocess_text(text)
+        # Preprocess text for better quality and speed, passing actual_voice for language-aware number formatting
+        processed_text = await self.preprocess_text(text, actual_voice)
         
         # Check audio cache first
         if use_cache and self._audio_cache:
@@ -838,8 +857,8 @@ class TTSEngine:
             logger.error(f"Invalid voice for streaming: {actual_voice}")
             return
         
-        # Preprocess text
-        processed_text = await self.preprocess_text(text)
+        # Preprocess text, passing actual_voice for language-aware number formatting
+        processed_text = await self.preprocess_text(text, actual_voice)
         
         # Track phrase usage
         if self._phrase_tracker:

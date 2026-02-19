@@ -687,8 +687,9 @@ class AudioRouter:
             kaiser_beta = profile_settings["kaiser_beta"]
             stereo_width = profile_settings["stereo_width"]
             
-            # Queue for decoded audio chunks
-            audio_queue = queue.Queue()
+            # Queue for decoded audio chunks - bounded to provide backpressure
+            # Limits memory growth when decode outruns playback on long streams
+            audio_queue = queue.Queue(maxsize=5)
             playback_started = asyncio.Event()
             playback_finished = th.Event()
             decode_error = [None]
@@ -744,8 +745,21 @@ class AudioRouter:
                                         # Convert to stereo without enhancement for consistent output
                                         data = np.column_stack((data, data))
                                     
-                                    # Queue for playback
-                                    audio_queue.put(data)
+                                    # Queue for playback with backpressure handling
+                                    # Block with timeout to allow checking stop_event
+                                    while True:
+                                        # Check for stop before attempting to queue
+                                        if self._stop_requested.is_set() or (stop_event and stop_event.is_set()):
+                                            return
+                                        
+                                        try:
+                                            # Try to put with a short timeout to allow stop checking
+                                            audio_queue.put(data, block=True, timeout=0.1)
+                                            break  # Successfully queued
+                                        except queue.Full:
+                                            # Queue is full, loop back and check stop_event
+                                            # This provides backpressure - decoder waits for playback to catch up
+                                            continue
                                     
                                     # Signal that playback can start
                                     if not playback_started.is_set():
