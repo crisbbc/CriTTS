@@ -771,6 +771,10 @@ class AudioRouter:
             mp3_buffer = bytearray()
             # Minimum buffer size before attempting decode (MP3 frames need ~100-500 bytes minimum)
             MIN_DECODE_BUFFER = 4096
+            # Guards to prevent unbounded memory growth on repeated decode failures
+            MAX_BUFFER_SIZE = 10 * 1024 * 1024  # 10 MB limit for MP3 buffer
+            MAX_CONSECUTIVE_DECODE_FAILURES = 10  # Max consecutive decode failures before giving up
+            consecutive_decode_failures = [0]  # Use list for closure mutability
             
             async def decode_chunks():
                 """Decode incoming MP3 chunks incrementally and add to playback queue."""
@@ -785,6 +789,14 @@ class AudioRouter:
                         # Add chunk to buffer
                         mp3_buffer.extend(chunk)
                         
+                        # Guard: Check if buffer exceeds maximum size
+                        if len(mp3_buffer) > MAX_BUFFER_SIZE:
+                            logger.error("MP3 buffer exceeded maximum size (%d bytes), aborting decode", MAX_BUFFER_SIZE)
+                            decode_error[0] = RuntimeError(f"MP3 buffer exceeded maximum size ({MAX_BUFFER_SIZE} bytes)")
+                            stream_ended[0] = True
+                            audio_queue.put(None)
+                            return
+                        
                         # Try to decode incrementally when we have enough data
                         while len(mp3_buffer) >= MIN_DECODE_BUFFER:
                             try:
@@ -796,6 +808,9 @@ class AudioRouter:
                                 consumed = audio_buffer.tell()
                                 
                                 if data.size > 0 and consumed > 0:
+                                    # Reset consecutive decode failures on success
+                                    consecutive_decode_failures[0] = 0
+                                    
                                     # Remove consumed bytes from buffer
                                     mp3_buffer = mp3_buffer[consumed:]
                                     
@@ -841,7 +856,18 @@ class AudioRouter:
                                     break
                                     
                             except Exception:
-                                # Decoding failed, might need more data
+                                # Decoding failed, increment failure counter
+                                consecutive_decode_failures[0] += 1
+                                
+                                # Guard: Check if too many consecutive failures
+                                if consecutive_decode_failures[0] >= MAX_CONSECUTIVE_DECODE_FAILURES:
+                                    logger.error("Too many consecutive decode failures (%d), aborting decode", 
+                                               consecutive_decode_failures[0])
+                                    decode_error[0] = RuntimeError(f"Too many consecutive decode failures ({MAX_CONSECUTIVE_DECODE_FAILURES})")
+                                    stream_ended[0] = True
+                                    audio_queue.put(None)
+                                    return
+                                
                                 # Keep the buffer and continue accumulating
                                 break
                     
@@ -1211,31 +1237,122 @@ class AudioRouter:
                             self.stop_mic_passthrough()
                             chosen_sr = output_native_sr
                             
-                            self._passthrough_input_stream = sd.InputStream(
-                                device=input_device_index,
-                                samplerate=chosen_sr,
-                                channels=1,
-                                dtype='float32',
-                                blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                callback=input_callback
-                            )
-                            
-                            self._passthrough_output_stream = sd.OutputStream(
-                                device=output_device_index,
-                                samplerate=chosen_sr,
-                                channels=1,
-                                dtype='float32',
-                                blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                callback=output_callback
-                            )
-                            
-                            self._passthrough_input_stream.start()
-                            
-                            # Pre-fill queue with 2 silence chunks
-                            self._passthrough_queue.put(silence_chunk)
-                            self._passthrough_queue.put(silence_chunk)
-                            
-                            self._passthrough_output_stream.start()
+                            try:
+                                self._passthrough_input_stream = sd.InputStream(
+                                    device=input_device_index,
+                                    samplerate=chosen_sr,
+                                    channels=1,
+                                    dtype='float32',
+                                    blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                                    callback=input_callback
+                                )
+                                
+                                self._passthrough_output_stream = sd.OutputStream(
+                                    device=output_device_index,
+                                    samplerate=chosen_sr,
+                                    channels=1,
+                                    dtype='float32',
+                                    blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                                    callback=output_callback
+                                )
+                                
+                                self._passthrough_input_stream.start()
+                                
+                                # Pre-fill queue with 2 silence chunks
+                                self._passthrough_queue.put(silence_chunk)
+                                self._passthrough_queue.put(silence_chunk)
+                                
+                                self._passthrough_output_stream.start()
+                                
+                            except sd.PortAudioError as e3:
+                                # Attempt 4: Use each device's native rate with resampling
+                                # This handles the case where input and output only support different rates
+                                if (input_native_sr is not None and output_native_sr is not None and 
+                                    input_native_sr != output_native_sr):
+                                    logger.info("Retrying passthrough with native rates (input=%d, output=%d) and resampling",
+                                               input_native_sr, output_native_sr)
+                                    self.stop_mic_passthrough()
+                                    
+                                    # Store sample rates for resampling in callbacks
+                                    input_sr_for_resample = input_native_sr
+                                    output_sr_for_resample = output_native_sr
+                                    
+                                    # Resampling input callback: captures at input native rate
+                                    def resampling_input_callback(indata, frames, time, status):
+                                        try:
+                                            # Apply volume and copy data
+                                            audio_chunk = indata.copy() * volume
+                                            # Resample from input rate to output rate
+                                            resampled = self._resample_high_quality(
+                                                audio_chunk.flatten(), 
+                                                input_sr_for_resample, 
+                                                output_sr_for_resample,
+                                                kaiser_beta=5.0
+                                            )
+                                            # Reshape to match expected output format
+                                            resampled = resampled.reshape(-1, 1)
+                                            # Put into queue, drop oldest if full
+                                            if self._passthrough_queue.full():
+                                                try:
+                                                    self._passthrough_queue.get_nowait()
+                                                except queue.Empty:
+                                                    pass
+                                            self._passthrough_queue.put(resampled)
+                                        except Exception as e:
+                                            logger.warning("Passthrough resampling input callback error: %s", e)
+                                    
+                                    # Resampling output callback: plays at output native rate
+                                    def resampling_output_callback(outdata, frames, time, status):
+                                        try:
+                                            audio_chunk = self._passthrough_queue.get_nowait()
+                                            # Flatten to 1-D if needed, then reshape to (frames, 1)
+                                            flat = audio_chunk.flatten()
+                                            chunk_len = min(len(flat), frames)
+                                            outdata[:chunk_len, 0] = flat[:chunk_len]
+                                            if chunk_len < frames:
+                                                outdata[chunk_len:] = 0
+                                        except queue.Empty:
+                                            # No data available, output silence
+                                            outdata[:] = 0
+                                        except Exception as e:
+                                            logger.warning("Passthrough resampling output callback error: %s", e)
+                                            outdata[:] = 0
+                                    
+                                    # Calculate appropriate blocksize for output based on resampling ratio
+                                    ratio = output_sr_for_resample / input_sr_for_resample
+                                    output_blocksize = int(self._PASSTHROUGH_BLOCKSIZE * ratio)
+                                    
+                                    self._passthrough_input_stream = sd.InputStream(
+                                        device=input_device_index,
+                                        samplerate=input_native_sr,
+                                        channels=1,
+                                        dtype='float32',
+                                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                                        callback=resampling_input_callback
+                                    )
+                                    
+                                    self._passthrough_output_stream = sd.OutputStream(
+                                        device=output_device_index,
+                                        samplerate=output_native_sr,
+                                        channels=1,
+                                        dtype='float32',
+                                        blocksize=output_blocksize,
+                                        callback=resampling_output_callback
+                                    )
+                                    
+                                    self._passthrough_input_stream.start()
+                                    
+                                    # Pre-fill queue with silence chunks (at output rate)
+                                    output_silence_chunk = np.zeros((output_blocksize, 1), dtype='float32')
+                                    self._passthrough_queue.put(output_silence_chunk)
+                                    self._passthrough_queue.put(output_silence_chunk)
+                                    
+                                    self._passthrough_output_stream.start()
+                                    
+                                    # Update chosen_sr for logging
+                                    chosen_sr = f"{input_native_sr}->{output_native_sr}"
+                                else:
+                                    raise e3
                         else:
                             raise e2
                 else:
