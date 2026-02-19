@@ -103,9 +103,17 @@ class CriTTSApp(ctk.CTk):
     def _init_passthrough(self):
         """Initialize microphone passthrough if enabled in settings."""
         if self.settings_manager.get("mic_passthrough_enabled", False):
-            device_index = self.settings_manager.get("mic_passthrough_device_index")
-            volume = self.settings_manager.get("mic_passthrough_volume", 100)
-            self.audio_router.start_passthrough(device_index=device_index, volume=volume)
+            input_device_index = self.settings_manager.get("mic_passthrough_device_index")
+            output_device_index = self.settings_manager.get("device_index")
+            volume_percent = self.settings_manager.get("mic_passthrough_volume", 100)
+            # Clamp to 0-200 and convert from percent to multiplier
+            volume_percent = max(0, min(200, volume_percent))
+            volume = volume_percent / 100.0
+            self.audio_router.start_mic_passthrough(
+                input_device_index=input_device_index,
+                output_device_index=output_device_index,
+                volume=volume
+            )
     
     def _check_vbcable(self):
         """Check if VBCable is installed and prompt user if not."""
@@ -205,9 +213,17 @@ class CriTTSApp(ctk.CTk):
         enabled = self.settings_manager.get("mic_passthrough_enabled", False)
         
         if enabled:
-            device_index = self.settings_manager.get("mic_passthrough_device_index")
-            volume = self.settings_manager.get("mic_passthrough_volume", 100)
-            self.audio_router.start_passthrough(device_index=device_index, volume=volume)
+            input_device_index = self.settings_manager.get("mic_passthrough_device_index")
+            output_device_index = self.settings_manager.get("device_index")
+            volume_percent = self.settings_manager.get("mic_passthrough_volume", 100)
+            # Clamp to 0-200 and convert from percent to multiplier
+            volume_percent = max(0, min(200, volume_percent))
+            volume = volume_percent / 100.0
+            self.audio_router.start_mic_passthrough(
+                input_device_index=input_device_index,
+                output_device_index=output_device_index,
+                volume=volume
+            )
         else:
             self.audio_router.stop_mic_passthrough()
 
