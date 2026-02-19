@@ -33,7 +33,6 @@ class SettingsManager:
             "tbh": "to be honest"
         },
         "keybinds": {
-            "speak": "Ctrl+Enter",
             "stop": "Escape",
             "clear": "Ctrl+T",
             "open_settings": "Ctrl+Comma",

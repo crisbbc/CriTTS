@@ -15,6 +15,7 @@ from ..tts.text_preprocessor import TextPreprocessor
 from ..gui.keybind_manager import KeybindManager
 from ..vrchat import VRChatOSCClient
 from ..vrchat.viseme_mapper import VisemeMapper, AmplitudeAnalyzer
+from .recording_overlay import RecordingOverlay
 from .theme_constants import (
     SPACING_XS, SPACING_SM, SPACING_MD, SPACING_LG, SPACING_XL, SPACING_2XL,
     COLOR_SUCCESS, COLOR_SUCCESS_HOVER, COLOR_SUCCESS_LIGHT,
@@ -111,11 +112,16 @@ class MainWindow:
         # Text preprocessor (reused across speak calls)
         self._text_preprocessor = TextPreprocessor()
         
+        # Recording overlay state
+        self._overlay_visible: bool = self.settings.get("overlay_visible", False)
+        self._recording_overlay: Optional[RecordingOverlay] = None
+        
         self._setup_window()
         self._create_widgets()
         self._bind_shortcuts()
         self._update_status()
         self._setup_osc_client()
+        self._setup_recording_overlay()
 
 
 
@@ -281,6 +287,22 @@ class MainWindow:
             corner_radius=RADIUS_MD
         )
         self.voice_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        
+        # Overlay toggle button - secondary styling
+        overlay_color = COLOR_PRIMARY if self._overlay_visible else COLOR_NEUTRAL_MEDIUM
+        overlay_hover = COLOR_PRIMARY_HOVER if self._overlay_visible else COLOR_NEUTRAL
+        self.overlay_button = ctk.CTkButton(
+            self.controls_frame,
+            text="👁  Overlay",
+            font=ctk.CTkFont(size=FONT_MD),
+            command=self._on_toggle_overlay,
+            height=BUTTON_HEIGHT_LG,
+            width=BUTTON_WIDTH_DEFAULT,
+            fg_color=overlay_color,
+            hover_color=overlay_hover,
+            corner_radius=RADIUS_MD
+        )
+        self.overlay_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
         
         # Settings button - accent styling
         self.settings_button = ctk.CTkButton(
@@ -451,7 +473,6 @@ class MainWindow:
         
         # Create action mapping dictionary
         actions = {
-            "speak": self._on_speak,
             "stop": self._on_stop,
             "clear": self._on_clear,
             "open_settings": self._on_settings,
@@ -940,10 +961,13 @@ class MainWindow:
                 if audio_data:
                     self.root.after(0, lambda: self._set_status("Playing audio...", "▶️"))
                     
+                    # Check if voice amplitude feature is enabled for VRChat
+                    voice_amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
+                    
                     # Start viseme animation if enabled
                     if self._viseme_mapper is not None and self.osc_client is not None:
                         amplitude_callback = None
-                        if self.settings.get("vrchat_voice_amplitude_enabled", False) and self._amplitude_analyzer is not None:
+                        if voice_amplitude_enabled and self._amplitude_analyzer is not None:
                             amplitude_callback = self._amplitude_analyzer.get_amplitude
                         # Get audio duration to synchronize viseme animation with playback
                         audio_duration = self.audio_router.get_audio_duration(audio_data)
@@ -955,17 +979,40 @@ class MainWindow:
                             amplitude_callback=amplitude_callback
                         )
                     
-                    # Play audio
-                    success = loop.run_until_complete(
-                        self.audio_router.play_audio_to_device(
-                            audio_data, 
-                            48000, 
-                            device_idx,
-                            enable_normalization,
-                            normalization_type,
-                            processing_profile
+                    # Play audio - use amplitude playback if VRChat voice amplitude is enabled
+                    if voice_amplitude_enabled and self._amplitude_analyzer is not None and self.osc_client is not None:
+                        # Create amplitude callback that updates analyzer and forwards to VRChat
+                        def amplitude_callback_with_osc(amplitude: float):
+                            """Update amplitude analyzer and forward to VRChat OSC."""
+                            # Update the local amplitude analyzer (for viseme intensity)
+                            self._amplitude_analyzer.update_amplitude(amplitude)
+                            # Forward amplitude to VRChat
+                            if self.osc_client:
+                                self.osc_client.send_voice_amplitude(amplitude)
+                        
+                        success = loop.run_until_complete(
+                            self.audio_router.play_audio_with_amplitude(
+                                audio_data, 
+                                48000, 
+                                device_idx,
+                                enable_normalization,
+                                normalization_type,
+                                amplitude_callback=amplitude_callback_with_osc,
+                                processing_profile=processing_profile
+                            )
                         )
-                    )
+                    else:
+                        # Use standard playback without amplitude callback
+                        success = loop.run_until_complete(
+                            self.audio_router.play_audio_to_device(
+                                audio_data, 
+                                48000, 
+                                device_idx,
+                                enable_normalization,
+                                normalization_type,
+                                processing_profile
+                            )
+                        )
 
             # Do not show Finished or success UI when user stopped or playback was interrupted
             if self._stop_event.is_set():
@@ -1066,6 +1113,32 @@ class MainWindow:
         """Handle settings button click."""
         self.on_open_settings()
     
+    def _on_toggle_overlay(self):
+        """Handle overlay toggle button click."""
+        # Flip visibility state
+        self._overlay_visible = not self._overlay_visible
+        
+        # Persist to settings
+        self.settings.set("overlay_visible", self._overlay_visible)
+        
+        # Update overlay visibility
+        if self._overlay_visible:
+            self._recording_overlay.show_overlay()
+            # Sync current recording state
+            self._recording_overlay.set_recording(self._stt_recording)
+            # Update button appearance to active
+            self.overlay_button.configure(
+                fg_color=COLOR_PRIMARY,
+                hover_color=COLOR_PRIMARY_HOVER
+            )
+        else:
+            self._recording_overlay.hide_overlay()
+            # Update button appearance to inactive
+            self.overlay_button.configure(
+                fg_color=COLOR_NEUTRAL_MEDIUM,
+                hover_color=COLOR_NEUTRAL
+            )
+    
     def _on_voice_input(self):
         """Handle voice input button click - toggle recording."""
         if not self.stt_engine:
@@ -1083,6 +1156,9 @@ class MainWindow:
                     hover_color=COLOR_DANGER_HOVER
                 )
                 self._set_status("🎙 Listening… click again to stop", "🎙")
+                # Sync overlay state
+                if self._overlay_visible and self._recording_overlay:
+                    self._recording_overlay.set_recording(True)
             else:
                 self._set_status("Failed to start voice recording", "⚠️")
         else:
@@ -1090,6 +1166,9 @@ class MainWindow:
             self.voice_button.configure(state="disabled")
             self._stt_recording = False
             self._set_status("⏳ Transcribing…", "⏳")
+            # Sync overlay state
+            if self._overlay_visible and self._recording_overlay:
+                self._recording_overlay.set_recording(False)
             self.stt_engine.stop_and_transcribe(
                 on_result=self._on_stt_result,
                 on_error=self._on_stt_error
@@ -1112,6 +1191,9 @@ class MainWindow:
                     hover_color=COLOR_DANGER_HOVER
                 )
                 self._set_status("🎙 Listening… press keybind again to stop", "🎙")
+                # Sync overlay state
+                if self._overlay_visible and self._recording_overlay:
+                    self._recording_overlay.set_recording(True)
             else:
                 self._set_status("Failed to start voice recording", "⚠️")
         else:
@@ -1119,6 +1201,9 @@ class MainWindow:
             self.voice_button.configure(state="disabled")
             self._stt_recording = False
             self._set_status("⏳ Transcribing…", "⏳")
+            # Sync overlay state
+            if self._overlay_visible and self._recording_overlay:
+                self._recording_overlay.set_recording(False)
             self.stt_engine.stop_and_transcribe(
                 on_result=self._on_stt_result,
                 on_error=self._on_stt_error
@@ -1172,6 +1257,9 @@ class MainWindow:
             hover_color=COLOR_ACCENT_HOVER,
             state="normal"
         )
+        # Sync overlay state
+        if self._overlay_visible and self._recording_overlay:
+            self._recording_overlay.set_recording(False)
     
     def _update_ui_speaking(self, speaking: bool):
         """Update UI state based on speaking status with smooth animations."""
@@ -1438,6 +1526,17 @@ class MainWindow:
         if amplitude_enabled:
             self._amplitude_analyzer = AmplitudeAnalyzer()
     
+    def _setup_recording_overlay(self):
+        """Setup the recording overlay window."""
+        # Create the overlay
+        self._recording_overlay = RecordingOverlay(self.root)
+        
+        # Show or hide based on saved preference
+        if self._overlay_visible:
+            self._recording_overlay.show_overlay()
+        else:
+            self._recording_overlay.hide_overlay()
+    
     def shutdown(self):
         """Gracefully shutdown the main window and wait for worker threads."""
         # Stop typing animation if active
@@ -1465,6 +1564,14 @@ class MainWindow:
         # Shutdown STT engine if available
         if self.stt_engine:
             self.stt_engine.shutdown()
+        
+        # Destroy recording overlay if it exists
+        if self._recording_overlay:
+            try:
+                self._recording_overlay.destroy()
+            except Exception:
+                pass
+            self._recording_overlay = None
         
         # Wait for worker threads to complete (with timeout)
         if self._worker_thread and self._worker_thread.is_alive():

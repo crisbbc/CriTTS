@@ -101,7 +101,7 @@ class EdgeTTSProvider(TTSProvider):
             logger.error(f"Error fetching Edge TTS voices: {e}")
             return []
     
-    async def generate_speech(self, text: str, voice: str, rate: int = 0, volume: int = 100, pitch: int = 0) -> bytes:
+    async def generate_speech(self, text: str, voice: str, rate: int = 0, volume: int = 100, pitch: int = 0, stop_event=None) -> bytes:
         """Generate speech from text using Edge TTS.
         
         Args:
@@ -110,6 +110,7 @@ class EdgeTTSProvider(TTSProvider):
             rate: Speech rate adjustment (-100 to 100, 0 is normal)
             volume: Volume level (0 to 100, 100 is normal)
             pitch: Pitch adjustment (-100 to 100, 0 is normal)
+            stop_event: Optional threading.Event to signal stop
             
         Returns:
             Audio bytes in MP3 format
@@ -139,6 +140,11 @@ class EdgeTTSProvider(TTSProvider):
                 audio_data = b""
                 
                 async for chunk in communicate.stream():
+                    # Check if stop was requested
+                    if stop_event and stop_event.is_set():
+                        logger.debug("Edge TTS generation stopped by request")
+                        return None  # Return None to indicate cancellation
+                    
                     if chunk["type"] == "audio":
                         audio_data += chunk["data"]
                 

@@ -628,8 +628,13 @@ class TTSEngine:
         Returns:
             Tuple of (audio_data, error_message). 
             audio_data is None if error occurred.
+            If cancelled via stop_event, returns (None, "Cancelled").
         """
         start_time = time.time()
+        
+        # Check if stop was already requested before starting
+        if stop_event and stop_event.is_set():
+            return None, "Cancelled"
         
         if not text or not text.strip():
             return None, "Text is empty"
@@ -693,8 +698,59 @@ class TTSEngine:
         logger.debug(f"Generating speech with params: rate={rate}, volume={volume}, pitch={pitch}, voice={actual_voice}")
         
         try:
-            # Generate speech using the provider with all parameters
-            audio_data = await provider.generate_speech(processed_text, actual_voice, rate, volume, pitch)
+            # Create an async wrapper to check stop_event during generation
+            async def generate_with_stop_check():
+                """Generate speech, checking stop_event periodically."""
+                return await provider.generate_speech(
+                    processed_text, actual_voice, rate, volume, pitch, stop_event
+                )
+            
+            # If no stop_event, just await directly
+            if stop_event is None:
+                audio_data = await generate_with_stop_check()
+            else:
+                # Run generation in a task and wait on either completion or stop_event
+                generate_task = asyncio.create_task(generate_with_stop_check())
+                
+                # Create an async waiter for the stop_event
+                async def stop_event_waiter():
+                    """Wait for stop_event to be set."""
+                    while not stop_event.is_set():
+                        await asyncio.sleep(0.05)  # Check every 50ms
+                    return "stopped"
+                
+                waiter_task = asyncio.create_task(stop_event_waiter())
+                
+                try:
+                    # Wait for either generation to complete or stop_event to fire
+                    done, pending = await asyncio.wait(
+                        {generate_task, waiter_task},
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+                    
+                    # Cancel any pending tasks
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                    
+                    # Check if stop_event fired
+                    if stop_event.is_set():
+                        logger.debug("TTS generation cancelled by stop_event")
+                        return None, "Cancelled"
+                    
+                    # Get the result from the completed generation task
+                    audio_data = generate_task.result()
+                    
+                except asyncio.CancelledError:
+                    logger.debug("TTS generation cancelled")
+                    return None, "Cancelled"
+            
+            # Check if generation returned None (cancelled in provider)
+            if audio_data is None:
+                return None, "Cancelled"
             
             # Calculate generation time
             duration = time.time() - start_time

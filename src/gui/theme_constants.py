@@ -84,6 +84,11 @@ COLOR_STATUS_WARNING = "#f59e0b"    # Amber 500
 COLOR_STATUS_SUCCESS = "#10b981"    # Emerald 500
 COLOR_STATUS_IDLE = "#64748b"       # Slate 500
 
+# Recording overlay colors
+COLOR_RECORDING = "#ef4444"         # Red 500 — active recording
+COLOR_RECORDING_PULSE = "#fca5a5"   # Red 300 — pulse highlight
+COLOR_OVERLAY_BG = "#1e293b"        # Matches COLOR_BG_SECONDARY
+
 # =============================================================================
 # TYPOGRAPHY SCALE
 # Modern font sizing with better readability

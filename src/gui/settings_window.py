@@ -2780,7 +2780,7 @@ Examples:
             error_msg = "Invalid keybinds detected:\n"
             for action, value in invalid_keybinds:
                 error_msg += f"  - {action}: '{value}'\n"
-            error_msg += "\nValid format examples: Ctrl+Enter, Alt+Shift+A, Escape, F1"
+            error_msg += "\nValid format examples: Ctrl+Shift+V, Alt+Shift+A, Escape, F1"
             
             # Show error dialog
             error_dialog = ctk.CTkToplevel(self.window)

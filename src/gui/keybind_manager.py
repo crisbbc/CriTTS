@@ -88,11 +88,10 @@ class KeybindManager:
         # Check if this is a text widget and the keybind would interfere with text editing
         if hasattr(widget, 'tag_add'):  # This is likely a text widget
             # For text widgets, only trigger keybinds that are not standard text editing keys
-            # Allow Ctrl+Enter (speak), Ctrl+T (clear), etc. but not Ctrl+A, Ctrl+C, etc.
+            # Allow Ctrl+T (clear), etc. but not Ctrl+A, Ctrl+C, etc.
             keysym = getattr(event, 'keysym', '').lower()
             state = getattr(event, 'state', 0)
             is_ctrl = (state & 0x4) != 0  # Control key is pressed
-            is_shift = (state & 0x1) != 0  # Shift key is pressed
             
             # Standard text editing shortcuts that should not trigger keybinds
             text_editing_keys = {
@@ -102,10 +101,6 @@ class KeybindManager:
             # If Ctrl is pressed and the key is a text editing key, don't trigger keybind
             if is_ctrl and keysym in text_editing_keys:
                 return "continue"  # Let the text widget handle it
-            
-            # If Shift+Enter is pressed in a text widget, don't trigger keybind (allow line break)
-            if is_ctrl and is_shift and keysym == 'return':
-                return "continue"
         
         # Execute the callback
         try:
