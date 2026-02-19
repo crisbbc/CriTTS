@@ -1220,6 +1220,18 @@ class MainWindow:
     
     def _insert_stt_text(self, text: str):
         """Insert transcribed text into the text input (called on main thread)."""
+        # Apply abbreviation expansion if enabled
+        apply_abbreviations = self.settings.get("stt_apply_abbreviations", False)
+        if apply_abbreviations:
+            abbreviations = self.settings.get("abbreviations", {})
+            if abbreviations:
+                text = self._text_preprocessor.expand_abbreviations(text, abbreviations)
+        
+        # Apply word corrections if configured
+        corrections = self.settings.get("stt_corrections", {})
+        if corrections:
+            text = self._text_preprocessor.expand_abbreviations(text, corrections)
+        
         # Insert text at current cursor position
         self.text_input.insert("insert", text)
         

@@ -49,7 +49,6 @@ class AudioRouter:
         Returns:
             List of dictionaries with 'index', 'name', and 'channels' for each device.
         """
-        devices = []
         device_list = sd.query_devices()
         
         # Collect all output devices first
@@ -63,32 +62,62 @@ class AudioRouter:
                     'sample_rate': device['default_samplerate']
                 })
         
-        # Deduplicate: prefer longer names (full names over truncated ones)
-        # Group by name prefix to catch truncated vs full names from different host APIs
-        seen_prefixes = {}  # prefix -> device dict
+        # Multi-pass deduplication (same logic as get_input_devices)
+        import re
         
+        # Pass 1: Exact name deduplication (case-insensitive)
+        seen_names_lower = {}
         for device in all_output:
+            name_lower = device['name'].lower().strip()
+            if name_lower not in seen_names_lower:
+                seen_names_lower[name_lower] = device
+        
+        # Pass 2: Remove host API suffixes and check for duplicates
+        host_api_pattern = re.compile(r'\s*\[(?:MME|DirectSound|WASAPI|WDM-KS|ASIO)\]\s*$', re.IGNORECASE)
+        
+        base_name_to_device = {}
+        for device in seen_names_lower.values():
             name = device['name']
-            # Check if this name is a prefix of an existing entry or vice versa
-            found_key = None
-            for prefix in list(seen_prefixes.keys()):
-                if name.startswith(prefix) or prefix.startswith(name):
-                    found_key = prefix
+            base_name = host_api_pattern.sub('', name).strip()
+            base_lower = base_name.lower()
+            
+            if base_lower not in base_name_to_device:
+                base_name_to_device[base_lower] = device
+            else:
+                existing = base_name_to_device[base_lower]
+                existing_has_suffix = bool(host_api_pattern.search(existing['name']))
+                current_has_suffix = bool(host_api_pattern.search(name))
+                
+                if current_has_suffix and not existing_has_suffix:
+                    pass
+                elif not current_has_suffix and existing_has_suffix:
+                    base_name_to_device[base_lower] = device
+                elif len(name) < len(existing['name']):
+                    base_name_to_device[base_lower] = device
+        
+        # Pass 3: Prefix-based deduplication for truncated names
+        devices_sorted = sorted(base_name_to_device.values(), key=lambda d: len(d['name']), reverse=True)
+        
+        final_devices = []
+        for device in devices_sorted:
+            name = device['name']
+            is_duplicate = False
+            
+            for existing in final_devices:
+                existing_name = existing['name']
+                name_lower = name.lower()
+                existing_lower = existing_name.lower()
+                
+                if name_lower.startswith(existing_lower) or existing_lower.startswith(name_lower):
+                    is_duplicate = True
                     break
             
-            if found_key is None:
-                # New device
-                seen_prefixes[name] = device
-            else:
-                # Similar device exists - keep the one with longer name
-                existing = seen_prefixes[found_key]
-                if len(name) > len(existing['name']):
-                    # New name is longer (less truncated), replace
-                    del seen_prefixes[found_key]
-                    seen_prefixes[name] = device
-                # else: keep existing (it has longer name)
+            if not is_duplicate:
+                final_devices.append(device)
         
-        return list(seen_prefixes.values())
+        final_devices.sort(key=lambda d: d['name'].lower())
+        
+        return final_devices
     
     def get_input_devices(self) -> List[Dict]:
         """
@@ -110,32 +139,75 @@ class AudioRouter:
                     'sample_rate': device['default_samplerate']
                 })
         
-        # Deduplicate: prefer longer names (full names over truncated ones)
-        # Group by name prefix to catch truncated vs full names from different host APIs
-        seen_prefixes = {}  # prefix -> device dict
+        # Multi-pass deduplication to handle various duplicate scenarios:
+        # 1. Exact name matches (case-insensitive) - same device from different host APIs
+        # 2. Prefix matches - truncated vs full names
+        # 3. Host API suffix patterns like "Device Name [MME]", "Device Name [DirectSound]"
         
+        # Pass 1: Exact name deduplication (case-insensitive)
+        seen_names_lower = {}  # lowercase name -> device dict
         for device in all_input:
+            name_lower = device['name'].lower().strip()
+            if name_lower not in seen_names_lower:
+                seen_names_lower[name_lower] = device
+        
+        # Pass 2: Remove host API suffixes and check for duplicates
+        # Patterns: "Device Name [MME]", "Device Name [DirectSound]", "Device Name [WASAPI]"
+        import re
+        host_api_pattern = re.compile(r'\s*\[(?:MME|DirectSound|WASAPI|WDM-KS|ASIO)\]\s*$', re.IGNORECASE)
+        
+        # Map base names (without host API suffix) to devices
+        base_name_to_device = {}
+        for device in seen_names_lower.values():
             name = device['name']
-            # Check if this name is a prefix of an existing entry or vice versa
-            found_key = None
-            for prefix in list(seen_prefixes.keys()):
-                if name.startswith(prefix) or prefix.startswith(name):
-                    found_key = prefix
+            # Remove host API suffix if present
+            base_name = host_api_pattern.sub('', name).strip()
+            base_lower = base_name.lower()
+            
+            if base_lower not in base_name_to_device:
+                base_name_to_device[base_lower] = device
+            else:
+                # Keep the one without suffix (shorter, cleaner name)
+                existing = base_name_to_device[base_lower]
+                existing_has_suffix = bool(host_api_pattern.search(existing['name']))
+                current_has_suffix = bool(host_api_pattern.search(name))
+                
+                # Prefer device without host API suffix
+                if current_has_suffix and not existing_has_suffix:
+                    pass  # Keep existing
+                elif not current_has_suffix and existing_has_suffix:
+                    base_name_to_device[base_lower] = device  # Replace with cleaner name
+                elif len(name) < len(existing['name']):
+                    # Both have or don't have suffix, prefer shorter name
+                    base_name_to_device[base_lower] = device
+        
+        # Pass 3: Prefix-based deduplication for truncated names
+        # Sort by name length (longest first) to prefer full names over truncated
+        devices_sorted = sorted(base_name_to_device.values(), key=lambda d: len(d['name']), reverse=True)
+        
+        final_devices = []
+        for device in devices_sorted:
+            name = device['name']
+            is_duplicate = False
+            
+            # Check if this device's name is a prefix of or is prefixed by any existing device
+            for existing in final_devices:
+                existing_name = existing['name']
+                # Check prefix relationship (case-insensitive)
+                name_lower = name.lower()
+                existing_lower = existing_name.lower()
+                
+                if name_lower.startswith(existing_lower) or existing_lower.startswith(name_lower):
+                    is_duplicate = True
                     break
             
-            if found_key is None:
-                # New device
-                seen_prefixes[name] = device
-            else:
-                # Similar device exists - keep the one with longer name
-                existing = seen_prefixes[found_key]
-                if len(name) > len(existing['name']):
-                    # New name is longer (less truncated), replace
-                    del seen_prefixes[found_key]
-                    seen_prefixes[name] = device
-                # else: keep existing (it has longer name)
+            if not is_duplicate:
+                final_devices.append(device)
         
-        return list(seen_prefixes.values())
+        # Sort by name for consistent display
+        final_devices.sort(key=lambda d: d['name'].lower())
+        
+        return final_devices
     
     def get_default_device(self) -> Optional[Dict]:
         """Get the system default output device."""

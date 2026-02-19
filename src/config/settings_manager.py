@@ -92,6 +92,18 @@ class SettingsManager:
         "stt_mic_device_index": None,
         "stt_auto_speak": False,  # Automatically speak transcribed text
         
+        # STT Audio Pre-processing Settings
+        "stt_min_duration_ms": 300,  # Minimum recording length before transcribing
+        "stt_silence_threshold": 200,  # int16 RMS threshold for silence trimming
+        "stt_highpass_filter": True,  # Apply 80 Hz high-pass filter
+        
+        # STT Text Post-processing Settings
+        "stt_capitalize": True,  # Capitalize first letter of result
+        "stt_add_punctuation": False,  # Append period if no trailing punctuation
+        "stt_apply_abbreviations": False,  # Expand abbreviations in STT output
+        "stt_corrections": {},  # Word-level correction map for misrecognitions
+        "stt_confidence_threshold": 0.0,  # Minimum confidence to accept a result (0.0 = disabled)
+        
         # Microphone Passthrough Settings
         "mic_passthrough_enabled": False,  # Master toggle for mic passthrough
         "mic_passthrough_device_index": None,  # Mic to capture (None = system default)

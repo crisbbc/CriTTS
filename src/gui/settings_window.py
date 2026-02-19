@@ -1289,6 +1289,284 @@ Examples:
             width=80
         )
         self.refresh_mic_button.pack(side="left", padx=5)
+        
+        # Separator
+        ctk.CTkFrame(self.behavior_scroll, height=2, fg_color="gray").pack(fill="x", pady=15)
+        
+        # ========== Transcription Refinement Section ==========
+        ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Transcription Refinement",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", pady=(10, 5))
+        
+        self.refinement_desc_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Post-processing options for voice input transcription.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.refinement_desc_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.refinement_desc_label)
+        
+        # Capitalize first letter checkbox
+        self.stt_capitalize_var = ctk.BooleanVar(value=self.settings.get("stt_capitalize", True))
+        self.stt_capitalize_check = ctk.CTkCheckBox(
+            self.behavior_scroll,
+            text="Capitalize first letter of transcription",
+            variable=self.stt_capitalize_var,
+            font=ctk.CTkFont(size=12)
+        )
+        self.stt_capitalize_check.pack(anchor="w", pady=5)
+        
+        # Add punctuation checkbox
+        self.stt_add_punctuation_var = ctk.BooleanVar(value=self.settings.get("stt_add_punctuation", False))
+        self.stt_add_punctuation_check = ctk.CTkCheckBox(
+            self.behavior_scroll,
+            text="Add period if no trailing punctuation",
+            variable=self.stt_add_punctuation_var,
+            font=ctk.CTkFont(size=12)
+        )
+        self.stt_add_punctuation_check.pack(anchor="w", pady=5)
+        
+        # Apply abbreviations checkbox
+        self.stt_apply_abbreviations_var = ctk.BooleanVar(value=self.settings.get("stt_apply_abbreviations", False))
+        self.stt_apply_abbreviations_check = ctk.CTkCheckBox(
+            self.behavior_scroll,
+            text="Apply abbreviation expansions to voice input",
+            variable=self.stt_apply_abbreviations_var,
+            font=ctk.CTkFont(size=12)
+        )
+        self.stt_apply_abbreviations_check.pack(anchor="w", pady=5)
+        
+        self.stt_abbreviations_hint_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Uses the abbreviations defined in the Abbreviations tab.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.stt_abbreviations_hint_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.stt_abbreviations_hint_label)
+        
+        # Separator
+        ctk.CTkFrame(self.behavior_scroll, height=2, fg_color="gray").pack(fill="x", pady=15)
+        
+        # ========== Audio Pre-processing Section ==========
+        ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Audio Pre-processing",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", pady=(10, 5))
+        
+        self.preprocessing_desc_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Audio processing applied before transcription to improve accuracy.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.preprocessing_desc_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.preprocessing_desc_label)
+        
+        # High-pass filter checkbox
+        self.stt_highpass_filter_var = ctk.BooleanVar(value=self.settings.get("stt_highpass_filter", True))
+        self.stt_highpass_filter_check = ctk.CTkCheckBox(
+            self.behavior_scroll,
+            text="Apply noise filter (high-pass 80Hz)",
+            variable=self.stt_highpass_filter_var,
+            font=ctk.CTkFont(size=12)
+        )
+        self.stt_highpass_filter_check.pack(anchor="w", pady=5)
+        
+        self.highpass_hint_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Reduces low-frequency rumble and background noise.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.highpass_hint_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.highpass_hint_label)
+        
+        # Minimum duration slider
+        ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Minimum Recording Duration:",
+            font=ctk.CTkFont(size=12)
+        ).pack(anchor="w", pady=(10, 5))
+        
+        min_duration_frame = ctk.CTkFrame(self.behavior_scroll, fg_color="transparent")
+        min_duration_frame.pack(fill="x", pady=5)
+        
+        self.stt_min_duration_var = ctk.IntVar(value=self.settings.get("stt_min_duration_ms", 300))
+        self.stt_min_duration_slider = ctk.CTkSlider(
+            min_duration_frame,
+            from_=100,
+            to=1000,
+            number_of_steps=90,
+            variable=self.stt_min_duration_var,
+            command=self._on_stt_min_duration_change,
+            width=400
+        )
+        self.stt_min_duration_slider.pack(side="left", fill="x", expand=True, padx=5)
+        
+        self.stt_min_duration_value_label = ctk.CTkLabel(
+            min_duration_frame,
+            text=f"{self.stt_min_duration_var.get()}ms",
+            font=ctk.CTkFont(size=12),
+            width=60
+        )
+        self.stt_min_duration_value_label.pack(side="right", padx=5)
+        
+        self.min_duration_hint_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Recordings shorter than this are rejected as accidental clicks.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.min_duration_hint_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.min_duration_hint_label)
+        
+        # Silence threshold slider
+        ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Silence Threshold:",
+            font=ctk.CTkFont(size=12)
+        ).pack(anchor="w", pady=(10, 5))
+        
+        silence_threshold_frame = ctk.CTkFrame(self.behavior_scroll, fg_color="transparent")
+        silence_threshold_frame.pack(fill="x", pady=5)
+        
+        self.stt_silence_threshold_var = ctk.IntVar(value=self.settings.get("stt_silence_threshold", 200))
+        self.stt_silence_threshold_slider = ctk.CTkSlider(
+            silence_threshold_frame,
+            from_=50,
+            to=1000,
+            number_of_steps=190,
+            variable=self.stt_silence_threshold_var,
+            command=self._on_stt_silence_threshold_change,
+            width=400
+        )
+        self.stt_silence_threshold_slider.pack(side="left", fill="x", expand=True, padx=5)
+        
+        self.stt_silence_threshold_value_label = ctk.CTkLabel(
+            silence_threshold_frame,
+            text=str(self.stt_silence_threshold_var.get()),
+            font=ctk.CTkFont(size=12),
+            width=60
+        )
+        self.stt_silence_threshold_value_label.pack(side="right", padx=5)
+        
+        self.silence_threshold_hint_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="RMS threshold for silence detection. Higher values require louder audio.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.silence_threshold_hint_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.silence_threshold_hint_label)
+        
+        # Confidence threshold slider
+        ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Minimum Confidence Threshold:",
+            font=ctk.CTkFont(size=12)
+        ).pack(anchor="w", pady=(10, 5))
+        
+        confidence_frame = ctk.CTkFrame(self.behavior_scroll, fg_color="transparent")
+        confidence_frame.pack(fill="x", pady=5)
+        
+        # Convert 0.0-1.0 to 0-100 for slider
+        current_confidence = int(self.settings.get("stt_confidence_threshold", 0.0) * 100)
+        self.stt_confidence_threshold_var = ctk.IntVar(value=current_confidence)
+        self.stt_confidence_threshold_slider = ctk.CTkSlider(
+            confidence_frame,
+            from_=0,
+            to=100,
+            number_of_steps=100,
+            variable=self.stt_confidence_threshold_var,
+            command=self._on_stt_confidence_change,
+            width=400
+        )
+        self.stt_confidence_threshold_slider.pack(side="left", fill="x", expand=True, padx=5)
+        
+        self.stt_confidence_threshold_value_label = ctk.CTkLabel(
+            confidence_frame,
+            text=f"{current_confidence}%",
+            font=ctk.CTkFont(size=12),
+            width=60
+        )
+        self.stt_confidence_threshold_value_label.pack(side="right", padx=5)
+        
+        self.confidence_hint_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Reject transcriptions with confidence below this threshold. 0% = disabled.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.confidence_hint_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.confidence_hint_label)
+        
+        # Separator
+        ctk.CTkFrame(self.behavior_scroll, height=2, fg_color="gray").pack(fill="x", pady=15)
+        
+        # ========== Word Corrections Section ==========
+        ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Word Corrections",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", pady=(10, 5))
+        
+        self.corrections_desc_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Fix recurring misrecognitions. For example, map 'critts' to 'CriTTS'.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.corrections_desc_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.corrections_desc_label)
+        
+        self.corrections_text = ctk.CTkTextbox(
+            self.behavior_scroll,
+            wrap="word",
+            font=ctk.CTkFont(size=12),
+            height=100
+        )
+        self.corrections_text.pack(fill="x", pady=5)
+        
+        # Load existing corrections
+        corrections_dict = self.settings.get("stt_corrections", {})
+        if corrections_dict:
+            formatted_lines = [f"{k}={v}" for k, v in sorted(corrections_dict.items())]
+            self.corrections_text.insert("1.0", "\n".join(formatted_lines))
+        
+        self.corrections_hint_label = ctk.CTkLabel(
+            self.behavior_scroll,
+            text="Format: word=correction (one per line). Case-insensitive matching.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=550
+        )
+        self.corrections_hint_label.pack(anchor="w", pady=(0, 10))
+        self._wraplength_labels.append(self.corrections_hint_label)
+    
+    def _on_stt_min_duration_change(self, value):
+        """Update minimum duration label when slider changes."""
+        self.stt_min_duration_value_label.configure(text=f"{int(value)}ms")
+    
+    def _on_stt_silence_threshold_change(self, value):
+        """Update silence threshold label when slider changes."""
+        self.stt_silence_threshold_value_label.configure(text=str(int(value)))
+    
+    def _on_stt_confidence_change(self, value):
+        """Update confidence threshold label when slider changes."""
+        self.stt_confidence_threshold_value_label.configure(text=f"{int(value)}%")
     
     def _create_language_mapping_controls(self):
         """Create language-specific voice mapping controls."""
@@ -2244,10 +2522,10 @@ Examples:
             self.passthrough_mic_var.set("No audio router")
             return
         
-        # Get input devices from audio router
+        # Get input devices from audio router (already deduplicated by prefix matching)
         input_devices = self.audio_router.get_input_devices()
         
-        # Prepend "Default (System)" option
+        # Prepend "Default (System)" option - audio_router already handles deduplication
         self._input_devices = [{"index": None, "name": "Default (System)"}] + input_devices
         
         # Populate dropdown with device names
@@ -2263,6 +2541,9 @@ Examples:
                 if d.get("index") == saved_index:
                     self.stt_mic_device_var.set(d.get("name", "Default (System)"))
                     break
+            else:
+                # Saved index not found, fall back to Default
+                self.stt_mic_device_var.set("Default (System)")
         else:
             # Fall back to "Default (System)" if saved device not found or not set
             self.stt_mic_device_var.set("Default (System)")
@@ -2275,6 +2556,9 @@ Examples:
                 if d.get("index") == saved_passthrough_index:
                     self.passthrough_mic_var.set(d.get("name", "Default (System)"))
                     break
+            else:
+                # Saved index not found, fall back to Default
+                self.passthrough_mic_var.set("Default (System)")
         else:
             # Fall back to "Default (System)" if saved device not found or not set
             self.passthrough_mic_var.set("Default (System)")
@@ -2929,6 +3213,22 @@ Examples:
         
         # Save STT auto-speak setting
         self.settings.set("stt_auto_speak", self.stt_auto_speak_var.get())
+        
+        # Save STT transcription refinement settings
+        self.settings.set("stt_capitalize", self.stt_capitalize_var.get())
+        self.settings.set("stt_add_punctuation", self.stt_add_punctuation_var.get())
+        self.settings.set("stt_apply_abbreviations", self.stt_apply_abbreviations_var.get())
+        
+        # Save STT audio pre-processing settings
+        self.settings.set("stt_highpass_filter", self.stt_highpass_filter_var.get())
+        self.settings.set("stt_min_duration_ms", self.stt_min_duration_var.get())
+        self.settings.set("stt_silence_threshold", self.stt_silence_threshold_var.get())
+        self.settings.set("stt_confidence_threshold", self.stt_confidence_threshold_var.get() / 100.0)
+        
+        # Save STT word corrections
+        corrections_raw = self.corrections_text.get("1.0", "end-1c")
+        parsed_corrections, corrections_errors = self._parse_abbreviations(corrections_raw)
+        self.settings.set("stt_corrections", parsed_corrections)
         
         # Save language voice mappings
         self._save_language_mappings()
