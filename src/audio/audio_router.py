@@ -48,16 +48,43 @@ class AudioRouter:
         devices = []
         device_list = sd.query_devices()
         
+        # Collect all output devices first
+        all_output = []
         for i, device in enumerate(device_list):
             if device['max_output_channels'] > 0:
-                devices.append({
+                all_output.append({
                     'index': i,
                     'name': device['name'],
                     'channels': device['max_output_channels'],
                     'sample_rate': device['default_samplerate']
                 })
         
-        return devices
+        # Deduplicate: prefer longer names (full names over truncated ones)
+        # Group by name prefix to catch truncated vs full names from different host APIs
+        seen_prefixes = {}  # prefix -> device dict
+        
+        for device in all_output:
+            name = device['name']
+            # Check if this name is a prefix of an existing entry or vice versa
+            found_key = None
+            for prefix in list(seen_prefixes.keys()):
+                if name.startswith(prefix) or prefix.startswith(name):
+                    found_key = prefix
+                    break
+            
+            if found_key is None:
+                # New device
+                seen_prefixes[name] = device
+            else:
+                # Similar device exists - keep the one with longer name
+                existing = seen_prefixes[found_key]
+                if len(name) > len(existing['name']):
+                    # New name is longer (less truncated), replace
+                    del seen_prefixes[found_key]
+                    seen_prefixes[name] = device
+                # else: keep existing (it has longer name)
+        
+        return list(seen_prefixes.values())
     
     def get_input_devices(self) -> List[Dict]:
         """
@@ -66,19 +93,45 @@ class AudioRouter:
         Returns:
             List of dictionaries with 'index', 'name', 'channels', and 'sample_rate' for each device.
         """
-        devices = []
         device_list = sd.query_devices()
         
+        # Collect all input devices first
+        all_input = []
         for i, device in enumerate(device_list):
             if device['max_input_channels'] > 0:
-                devices.append({
+                all_input.append({
                     'index': i,
                     'name': device['name'],
                     'channels': device['max_input_channels'],
                     'sample_rate': device['default_samplerate']
                 })
         
-        return devices
+        # Deduplicate: prefer longer names (full names over truncated ones)
+        # Group by name prefix to catch truncated vs full names from different host APIs
+        seen_prefixes = {}  # prefix -> device dict
+        
+        for device in all_input:
+            name = device['name']
+            # Check if this name is a prefix of an existing entry or vice versa
+            found_key = None
+            for prefix in list(seen_prefixes.keys()):
+                if name.startswith(prefix) or prefix.startswith(name):
+                    found_key = prefix
+                    break
+            
+            if found_key is None:
+                # New device
+                seen_prefixes[name] = device
+            else:
+                # Similar device exists - keep the one with longer name
+                existing = seen_prefixes[found_key]
+                if len(name) > len(existing['name']):
+                    # New name is longer (less truncated), replace
+                    del seen_prefixes[found_key]
+                    seen_prefixes[name] = device
+                # else: keep existing (it has longer name)
+        
+        return list(seen_prefixes.values())
     
     def get_default_device(self) -> Optional[Dict]:
         """Get the system default output device."""
