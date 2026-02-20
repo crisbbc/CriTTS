@@ -169,7 +169,8 @@ class RecordingOverlay(ctk.CTkToplevel):
         
         if state:
             # Start recording state
-            self._text_label.configure(text="● Recording")
+            # The dot label provides the visual indicator, text label shows status
+            self._text_label.configure(text="Recording")
             self._dot_label.configure(text_color=COLOR_RECORDING)
             self._pulse_animation()
         else:

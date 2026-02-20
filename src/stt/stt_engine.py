@@ -12,6 +12,41 @@ from typing import Optional, Callable, List
 logger = logging.getLogger(__name__)
 
 
+# Helper function for STT corrections (imported from text_preprocessor pattern)
+def _apply_word_corrections(text: str, corrections: dict) -> str:
+    """
+    Apply word-level corrections to text.
+    
+    Args:
+        text: Text to correct
+        corrections: Dictionary mapping words to their corrections
+        
+    Returns:
+        Corrected text
+    """
+    if not corrections or not text:
+        return text
+    
+    words = text.split()
+    corrected_words = []
+    
+    for word in words:
+        # Check for exact match (case-insensitive)
+        word_lower = word.lower()
+        if word_lower in corrections:
+            # Preserve original capitalization pattern
+            correction = corrections[word_lower]
+            if word.isupper():
+                correction = correction.upper()
+            elif word[0].isupper():
+                correction = correction.capitalize()
+            corrected_words.append(correction)
+        else:
+            corrected_words.append(word)
+    
+    return ' '.join(corrected_words)
+
+
 class STTEngine:
     """
     Speech-to-Text engine that records microphone audio and transcribes it
@@ -30,7 +65,7 @@ class STTEngine:
         """
         self.settings_manager = settings_manager
         self.recognizer = sr.Recognizer()
-        self._is_listening = False
+        self._is_listening_event = threading.Event()  # Thread-safe flag for cross-thread visibility
         self._audio_buffer: List[np.ndarray] = []
         self._sample_rate = 16000  # Standard sample rate for speech recognition
         self._stream: Optional[sd.InputStream] = None
@@ -48,7 +83,7 @@ class STTEngine:
             True if recording started successfully, False otherwise
         """
         with self._lock:
-            if self._is_listening:
+            if self._is_listening_event.is_set():
                 logger.warning("Already listening, ignoring start_listening call")
                 return False
             
@@ -71,14 +106,14 @@ class STTEngine:
                     callback=self._audio_callback
                 )
                 self._stream.start()
-                self._is_listening = True
+                self._is_listening_event.set()
                 
                 logger.info("Started recording from microphone")
                 return True
                 
             except Exception as e:
-                logger.error(f"Failed to start recording: {e}")
-                self._is_listening = False
+                logger.error("Failed to start recording: %s", e)
+                self._is_listening_event.clear()
                 if self._stream:
                     try:
                         self._stream.close()
@@ -109,9 +144,9 @@ class STTEngine:
                 "Recording may be incomplete.",
                 self._MAX_RECORDING_DURATION_SECONDS
             )
-            # Reset listening flag before stopping the stream
+            # Reset listening flag before stopping the stream (thread-safe)
             # This ensures UI state is correct when the stream stops
-            self._is_listening = False
+            self._is_listening_event.clear()
             # Signal stop by raising an exception in the callback
             # This will stop the stream
             raise sd.CallbackStop()
@@ -134,24 +169,24 @@ class STTEngine:
             on_error: Callback function called with exception on error
         """
         with self._lock:
-            if not self._is_listening:
+            if not self._is_listening_event.is_set():
                 logger.warning("Not currently listening, ignoring stop_and_transcribe call")
                 return
             
             # Stop and close the stream
-            self._is_listening = False
+            self._is_listening_event.clear()
             if self._stream:
                 try:
                     self._stream.stop()
                     self._stream.close()
                 except Exception as e:
-                    logger.error(f"Error closing audio stream: {e}")
+                    logger.error("Error closing audio stream: %s", e)
                 self._stream = None
             
             # Copy the audio buffer for processing
             audio_buffer = list(self._audio_buffer)
         
-        logger.info(f"Stopped recording, {len(audio_buffer)} audio chunks to process")
+        logger.info("Stopped recording, %d audio chunks to process", len(audio_buffer))
         
         # Start transcription in a background thread
         thread = threading.Thread(
@@ -190,7 +225,7 @@ class STTEngine:
         if duration_ms < min_duration_ms:
             raise ValueError(f"Recording too short ({duration_ms:.0f}ms < {min_duration_ms}ms minimum)")
         
-        logger.debug(f"Audio duration: {duration_ms:.0f}ms, samples: {len(audio_data)}")
+        logger.debug("Audio duration: %.0fms, samples: %d", duration_ms, len(audio_data))
         
         # 2. Silence trimming using rolling RMS
         # Use 20ms frames for RMS calculation
@@ -227,7 +262,7 @@ class STTEngine:
         
         audio_data = audio_data[start_sample:end_sample].copy()
         
-        logger.debug(f"Trimmed silence: {start_sample} to {end_sample} samples ({(end_sample - start_sample) / self._sample_rate * 1000:.0f}ms)")
+        logger.debug("Trimmed silence: %d to %d samples (%.0fms)", start_sample, end_sample, (end_sample - start_sample) / self._sample_rate * 1000)
         
         # 3. Amplitude normalization
         # Scale so peak reaches ~80% of int16 max
@@ -236,7 +271,7 @@ class STTEngine:
             target_peak = 32767 * 0.8
             scale_factor = target_peak / max_val
             audio_data = (audio_data.astype(np.float64) * scale_factor).astype(np.int16)
-            logger.debug(f"Normalized audio: peak {max_val} -> {np.max(np.abs(audio_data))}")
+            logger.debug("Normalized audio: peak %d -> %d", max_val, np.max(np.abs(audio_data)))
         
         # 4. High-pass filter (optional)
         if highpass_filter:
@@ -261,7 +296,7 @@ class STTEngine:
             except ImportError:
                 logger.warning("scipy not available, skipping high-pass filter")
             except Exception as e:
-                logger.warning(f"High-pass filter failed: {e}")
+                logger.warning("High-pass filter failed: %s", e)
         
         return audio_data
     
@@ -270,9 +305,10 @@ class STTEngine:
         Postprocess transcribed text.
         
         Applies:
-        1. Capitalize first letter
-        2. Strip trailing whitespace
-        3. Optionally add trailing punctuation
+        1. Word-level corrections (stt_corrections)
+        2. Capitalize first letter
+        3. Strip trailing whitespace
+        4. Optionally add trailing punctuation
         
         Args:
             text: Raw transcribed text
@@ -286,12 +322,17 @@ class STTEngine:
         # Get settings
         capitalize = self.settings_manager.get("stt_capitalize", True) if self.settings_manager else True
         add_punctuation = self.settings_manager.get("stt_add_punctuation", False) if self.settings_manager else False
+        stt_corrections = self.settings_manager.get("stt_corrections", {}) if self.settings_manager else {}
         
         # Strip whitespace
         text = text.strip()
         
         if not text:
             return text
+        
+        # Apply word-level corrections
+        if stt_corrections:
+            text = _apply_word_corrections(text, stt_corrections)
         
         # Capitalize first letter
         if capitalize:
@@ -334,18 +375,18 @@ class STTEngine:
             try:
                 audio_data = self._preprocess_audio(audio_data)
             except ValueError as e:
-                logger.warning(f"Audio preprocessing failed: {e}")
+                logger.warning("Audio preprocessing failed: %s", e)
                 on_error(e)
                 return
             except Exception as e:
-                logger.error(f"Audio preprocessing error: {e}")
+                logger.error("Audio preprocessing error: %s", e)
                 on_error(e)
                 return
             
             # Convert to bytes (int16 = 2 bytes per sample)
             raw_data = audio_data.tobytes()
             
-            logger.debug(f"Audio data: {len(raw_data)} bytes, sample_rate: {self._sample_rate}")
+            logger.debug("Audio data: %d bytes, sample_rate: %d", len(raw_data), self._sample_rate)
             
             # Create AudioData object for speech_recognition
             audio = sr.AudioData(raw_data, self._sample_rate, 2)  # 2 = sample_width (int16)
@@ -355,7 +396,7 @@ class STTEngine:
             if self.settings_manager:
                 language = self.settings_manager.get("stt_language", "en-US")
             
-            logger.debug(f"Transcribing with language: {language}")
+            logger.debug("Transcribing with language: %s", language)
             
             # Get confidence threshold from settings
             confidence_threshold = self.settings_manager.get("stt_confidence_threshold", 0.0) if self.settings_manager else 0.0
@@ -368,8 +409,8 @@ class STTEngine:
                 on_error(sr.UnknownValueError("Could not understand audio"))
                 return
             except sr.RequestError as e:
-                logger.error(f"Speech recognition service error: {e}")
-                on_error(sr.RequestError(f"Network error: {e}"))
+                logger.error("Speech recognition service error: %s", e)
+                on_error(sr.RequestError("Network error: %s", e))
                 return
             
             # Parse response for best alternative
@@ -403,8 +444,8 @@ class STTEngine:
             
             # Check confidence threshold
             if confidence_threshold > 0.0 and confidence < confidence_threshold:
-                logger.warning(f"Confidence {confidence:.2f} below threshold {confidence_threshold}")
-                on_error(sr.UnknownValueError(f"Low confidence result ({confidence:.0%})"))
+                logger.warning("Confidence %.2f below threshold %.2f", confidence, confidence_threshold)
+                on_error(sr.UnknownValueError("Low confidence result (%.0f%%)" % (confidence * 100)))
                 return
             
             if not text:
@@ -415,23 +456,23 @@ class STTEngine:
             # Postprocess text
             text = self._postprocess_transcript(text)
             
-            logger.info(f"Transcription successful: '{text}' (confidence: {confidence:.0%})")
+            logger.info("Transcription successful: '%s' (confidence: %.0f%%)", text, confidence * 100)
             on_result(text)
             
         except sr.UnknownValueError:
             logger.warning("Speech not understood")
             on_error(sr.UnknownValueError("Could not understand audio"))
         except sr.RequestError as e:
-            logger.error(f"Speech recognition service error: {e}")
-            on_error(sr.RequestError(f"Network error: {e}"))
+            logger.error("Speech recognition service error: %s", e)
+            on_error(sr.RequestError("Network error: %s", e))
         except Exception as e:
-            logger.error(f"Transcription error: {e}")
+            logger.error("Transcription error: %s", e)
             on_error(e)
     
     @property
     def is_listening(self) -> bool:
         """Check if currently recording."""
-        return self._is_listening
+        return self._is_listening_event.is_set()
     
     def shutdown(self):
         """
@@ -439,16 +480,16 @@ class STTEngine:
         Called from CriTTSApp._on_closing.
         """
         with self._lock:
-            if self._is_listening:
+            if self._is_listening_event.is_set():
                 logger.info("Shutting down STT engine, stopping active recording")
-                self._is_listening = False
+                self._is_listening_event.clear()
                 
                 if self._stream:
                     try:
                         self._stream.stop()
                         self._stream.close()
                     except Exception as e:
-                        logger.error(f"Error closing audio stream during shutdown: {e}")
+                        logger.error("Error closing audio stream during shutdown: %s", e)
                     self._stream = None
             
             self._audio_buffer = []

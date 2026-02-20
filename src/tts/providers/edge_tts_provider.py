@@ -44,8 +44,6 @@ class EdgeTTSProvider(TTSProvider):
         # edge-tts expects volume as percentage relative to default (100%)
         if volume == 100:
             volume_str = "+0%"
-        elif volume > 100:
-            volume_str = f"+{volume - 100}%"
         else:
             volume_str = f"-{100 - volume}%"
         

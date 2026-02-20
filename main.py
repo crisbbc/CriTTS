@@ -12,6 +12,15 @@ import atexit
 import logging
 import webbrowser
 
+# Configure logging early before any module imports
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
 # Add src to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -28,6 +37,38 @@ from src.gui.theme_constants import (
 
 class CriTTSApp(ctk.CTk):
     """Main application class for CriTTS Recoded."""
+    
+    def _build_passthrough_params(self) -> tuple:
+        """
+        Build passthrough parameters from settings.
+        
+        Returns:
+            Tuple of (input_device_index, output_device_index, volume)
+        """
+        input_device_index = self.settings_manager.get("mic_passthrough_device_index")
+        # Use dedicated passthrough output device if set, otherwise fall back to main TTS device
+        output_device_index = self.settings_manager.get("mic_passthrough_output_device_index")
+        if output_device_index is None:
+            output_device_index = self.settings_manager.get("device_index")
+        volume_percent = self.settings_manager.get("mic_passthrough_volume", 100)
+        # Clamp to 0-200 and convert from percent to multiplier
+        volume_percent = max(0, min(200, volume_percent))
+        volume = volume_percent / 100.0
+        return input_device_index, output_device_index, volume
+    
+    def _center_dialog(self, dialog, width: int, height: int):
+        """
+        Center a dialog on screen.
+        
+        Args:
+            dialog: The dialog window to center
+            width: Dialog width in pixels
+            height: Dialog height in pixels
+        """
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+        y = (dialog.winfo_screenheight() // 2) - (height // 2)
+        dialog.geometry(f"+{x}+{y}")
     
     def __init__(self):
         """Initialize the application."""
@@ -106,15 +147,7 @@ class CriTTSApp(ctk.CTk):
     def _init_passthrough(self):
         """Initialize microphone passthrough if enabled in settings."""
         if self.settings_manager.get("mic_passthrough_enabled", False):
-            input_device_index = self.settings_manager.get("mic_passthrough_device_index")
-            # Use dedicated passthrough output device if set, otherwise fall back to main TTS device
-            output_device_index = self.settings_manager.get("mic_passthrough_output_device_index")
-            if output_device_index is None:
-                output_device_index = self.settings_manager.get("device_index")
-            volume_percent = self.settings_manager.get("mic_passthrough_volume", 100)
-            # Clamp to 0-200 and convert from percent to multiplier
-            volume_percent = max(0, min(200, volume_percent))
-            volume = volume_percent / 100.0
+            input_device_index, output_device_index, volume = self._build_passthrough_params()
             success, error_msg = self.audio_router.start_mic_passthrough(
                 input_device_index=input_device_index,
                 output_device_index=output_device_index,
@@ -138,10 +171,7 @@ class CriTTSApp(ctk.CTk):
         dialog.resizable(False, False)
         
         # Center dialog
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (450 // 2)
-        y = (dialog.winfo_screenheight() // 2) - (180 // 2)
-        dialog.geometry(f"+{x}+{y}")
+        self._center_dialog(dialog, 450, 180)
         
         # Message label
         message = ctk.CTkLabel(
@@ -212,7 +242,7 @@ class CriTTSApp(ctk.CTk):
             self.main_window.apply_theme(appearance_mode)
             self.main_window.refresh_status()
             # Refresh keybinds after settings change
-            self.main_window._rebind_shortcuts()
+            self.main_window.rebind_shortcuts()
             # Apply button visibility from saved settings
             self.main_window.apply_button_visibility()
     
@@ -221,15 +251,7 @@ class CriTTSApp(ctk.CTk):
         enabled = self.settings_manager.get("mic_passthrough_enabled", False)
         
         if enabled:
-            input_device_index = self.settings_manager.get("mic_passthrough_device_index")
-            # Use dedicated passthrough output device if set, otherwise fall back to main TTS device
-            output_device_index = self.settings_manager.get("mic_passthrough_output_device_index")
-            if output_device_index is None:
-                output_device_index = self.settings_manager.get("device_index")
-            volume_percent = self.settings_manager.get("mic_passthrough_volume", 100)
-            # Clamp to 0-200 and convert from percent to multiplier
-            volume_percent = max(0, min(200, volume_percent))
-            volume = volume_percent / 100.0
+            input_device_index, output_device_index, volume = self._build_passthrough_params()
             success, error_msg = self.audio_router.start_mic_passthrough(
                 input_device_index=input_device_index,
                 output_device_index=output_device_index,
@@ -250,10 +272,7 @@ class CriTTSApp(ctk.CTk):
         dialog.resizable(False, False)
         
         # Center dialog
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (450 // 2)
-        y = (dialog.winfo_screenheight() // 2) - (200 // 2)
-        dialog.geometry(f"+{x}+{y}")
+        self._center_dialog(dialog, 450, 200)
         
         # Message label
         message = ctk.CTkLabel(

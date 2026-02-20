@@ -154,10 +154,13 @@ class VRChatOSCClient:
         """
         Clear the VRChat chatbox by sending an empty message.
         
+        Uses priority=True to bypass rate limiting, ensuring the clear
+        operation always succeeds even if called shortly after another message.
+        
         Returns:
             True if cleared successfully, False otherwise
         """
-        return self.send_to_chatbox("", play_notification_sound=False, show_keyboard=False)
+        return self.send_to_chatbox("", play_notification_sound=False, show_keyboard=False, priority=True)
 
     def send_typing_indicator(self, is_typing: bool) -> bool:
         """

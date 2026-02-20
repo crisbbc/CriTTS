@@ -174,6 +174,11 @@ class SettingsManager:
                 # Validate voice_preview_text for corruption
                 self._validate_text_setting("voice_preview_text", self.DEFAULT_SETTINGS["voice_preview_text"])
                 self._migrate_voice_setting()
+                
+                # Validate all settings and log any issues
+                issues = self.validate_settings()
+                if issues:
+                    logger.warning("Settings validation issues: %s", issues)
             else:
                 self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
                 self.save_settings()
@@ -322,22 +327,19 @@ class SettingsManager:
             self.save_settings()
     
     def _validate_keybind_format(self, keybind_string: str) -> bool:
-        """Validate keybind format."""
+        """
+        Validate keybind format by delegating to KeybindManager.
+        
+        This ensures consistent validation between settings and the keybind manager.
+        """
+        # Import here to avoid circular imports
+        from ..gui.keybind_manager import KeybindManager
+        
         if not keybind_string or not isinstance(keybind_string, str):
             return False
         
-        # Basic format check - should contain only valid characters
-        pattern = r'^[A-Za-z0-9+\-_=,\.\/;\'\[\]\\`~!@#$%^&*(){}|:<>? ]+$'
-        if not re.match(pattern, keybind_string):
-            return False
-        
-        # Check for critical system shortcuts
-        normalized = keybind_string.lower().replace(' ', '')
-        critical_shortcuts = ['alt+f4', 'ctrl+alt+delete', 'win+l', 'win+r', 'win+e']
-        if any(cs in normalized for cs in critical_shortcuts):
-            return False
-        
-        return True
+        # Use KeybindManager's comprehensive validation
+        return KeybindManager().validate_keybind(keybind_string)
     
     def validate_settings(self) -> list:
         """Validate all settings and return list of issues."""

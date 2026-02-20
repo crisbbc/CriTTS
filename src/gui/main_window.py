@@ -596,12 +596,20 @@ class MainWindow:
         try:
             self.keybind_manager.unregister_all(self.root)
         except Exception as e:
-            logger.warning(f"Error unregistering keybinds: {e}")
+            logger.warning("Error unregistering keybinds: %s", e)
         
         try:
             self._bind_shortcuts()
         except Exception as e:
-            logger.error(f"Error rebinding shortcuts: {e}")
+            logger.error("Error rebinding shortcuts: %s", e)
+    
+    def rebind_shortcuts(self):
+        """
+        Public method to rebind all keyboard shortcuts.
+        
+        Called from CriTTSApp after settings are saved to refresh keybinds.
+        """
+        self._rebind_shortcuts()
 
 
     

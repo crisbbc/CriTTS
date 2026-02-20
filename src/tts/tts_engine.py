@@ -798,7 +798,8 @@ class TTSEngine:
         rate: int = 0,
         volume: int = 100,
         pitch: int = 0,
-        stop_event: Optional[threading.Event] = None
+        stop_event: Optional[threading.Event] = None,
+        max_retries: int = 2
     ):
         """
         Stream speech from text, yielding audio chunks as they arrive.
@@ -814,6 +815,7 @@ class TTSEngine:
             volume: Volume level (0 to 100)
             pitch: Pitch adjustment (-100 to 100, 0 is normal)
             stop_event: Optional event to signal cancellation
+            max_retries: Maximum number of retry attempts for transient failures (default: 2)
             
         Yields:
             Audio bytes chunks in MP3 format
@@ -846,7 +848,7 @@ class TTSEngine:
         
         # Validate voice before streaming
         if not await self.validate_voice(actual_voice):
-            logger.error(f"Invalid voice for streaming: {actual_voice}")
+            logger.error("Invalid voice for streaming: %s", actual_voice)
             return
         
         # Preprocess text, passing actual_voice for language-aware number formatting
@@ -856,16 +858,33 @@ class TTSEngine:
         if self._phrase_tracker:
             self._phrase_tracker.track_usage(text, actual_voice)
         
-        logger.debug(f"Streaming speech with voice={actual_voice}, rate={rate}, volume={volume}, pitch={pitch}")
+        logger.debug("Streaming speech with voice=%s, rate=%d, volume=%d, pitch=%d", actual_voice, rate, volume, pitch)
         
-        try:
-            # Stream speech using the provider
-            async for chunk in provider.stream_speech(processed_text, actual_voice, rate, volume, pitch, stop_event):
-                yield chunk
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                # Stream speech using the provider
+                async for chunk in provider.stream_speech(processed_text, actual_voice, rate, volume, pitch, stop_event):
+                    yield chunk
+                return  # Success, exit retry loop
                 
-        except Exception as e:
-            logger.error(f"Error streaming speech: {e}")
-            raise
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                
+                # Check if error is retryable (network/timeout issues)
+                is_retryable = any(keyword in error_str for keyword in [
+                    'timeout', 'connection', 'network', 'reset', 'unreachable', 'temporarily'
+                ])
+                
+                if is_retryable and attempt < max_retries and (stop_event is None or not stop_event.is_set()):
+                    logger.warning("Stream attempt %d failed (retryable error: %s), retrying...", attempt + 1, e)
+                    await asyncio.sleep(0.5 * (attempt + 1))  # Exponential backoff: 0.5s, 1s, etc.
+                    continue
+                else:
+                    # Non-retryable error or max retries exceeded
+                    logger.error("Error streaming speech: %s", e)
+                    raise
 
 
 

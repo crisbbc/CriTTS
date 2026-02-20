@@ -26,6 +26,10 @@ class AudioCache:
     DEFAULT_MAX_SIZE_MB = 500
     CACHE_VERSION = 1  # Increment when cache format changes
     
+    # Batching configuration for index persistence
+    FLUSH_INTERVAL_STORES = 10  # Flush index every N store operations
+    FLUSH_INTERVAL_SECONDS = 30  # Flush index every N seconds (timer-based)
+    
     def __init__(
         self,
         cache_dir: Optional[Path] = None,
@@ -44,6 +48,12 @@ class AudioCache:
         self.max_size_mb = max_size_mb
         self.enabled = enabled
         self._lock = threading.Lock()
+        self._dirty = False  # Track if index needs to be persisted
+        
+        # Batching state for index persistence
+        self._store_count = 0  # Counter for batch flushing
+        self._last_flush_time = time.time()  # Timestamp for timer-based flushing
+        self._flush_timer: Optional[threading.Timer] = None  # Background timer for periodic flush
         
         # Statistics
         self._hits = 0
@@ -55,6 +65,47 @@ class AudioCache:
         
         # Initialize cache directory and load index
         self._initialize_cache()
+        
+        # Start periodic flush timer
+        self._start_flush_timer()
+    
+    def _start_flush_timer(self):
+        """Start the background timer for periodic index flushing."""
+        if not self.enabled:
+            return
+        
+        def timer_callback():
+            """Callback for the flush timer."""
+            try:
+                self._flush_if_dirty()
+            finally:
+                # Restart timer if still enabled
+                if self.enabled:
+                    self._start_flush_timer()
+        
+        self._flush_timer = threading.Timer(self.FLUSH_INTERVAL_SECONDS, timer_callback)
+        self._flush_timer.daemon = True
+        self._flush_timer.start()
+    
+    def _stop_flush_timer(self):
+        """Stop the background flush timer."""
+        if self._flush_timer:
+            self._flush_timer.cancel()
+            self._flush_timer = None
+    
+    def _flush_if_dirty(self):
+        """
+        Flush the index to disk if it has been modified.
+        
+        This is called by the batch trigger (store count) and timer.
+        """
+        with self._lock:
+            if self._dirty:
+                self._save_index()
+                self._dirty = False
+                self._store_count = 0
+                self._last_flush_time = time.time()
+                logger.debug("Flushed audio cache index to disk")
     
     def _initialize_cache(self):
         """Create cache directory if needed and load existing index."""
@@ -220,6 +271,7 @@ class AudioCache:
                 self._index[key]["last_access"] = time.time()
                 self._index[key]["access_count"] = self._index[key].get("access_count", 0) + 1
                 self._index.move_to_end(key)
+                self._dirty = True  # Mark index as modified
                 
                 self._hits += 1
                 self._total_saved_time += self._index[key].get("generation_time", 0)
@@ -293,11 +345,20 @@ class AudioCache:
                 # Update index
                 self._index[key] = meta
                 self._index.move_to_end(key)
+                self._dirty = True  # Mark index as modified
                 
-                # Persist index to disk immediately so entries survive app restart
-                self._save_index()
+                # Increment store counter for batch flushing
+                self._store_count += 1
                 
                 logger.debug("Cached audio for key %s...", key[:8])
+                
+                # Flush if batch threshold reached
+                if self._store_count >= self.FLUSH_INTERVAL_STORES:
+                    self._save_index()
+                    self._dirty = False
+                    self._store_count = 0
+                    self._last_flush_time = time.time()
+                    logger.debug("Flushed audio cache index (batch threshold reached)")
                 
                 # Check if cleanup needed
                 self._cleanup_if_needed()
@@ -469,13 +530,19 @@ class AudioCache:
     
     def shutdown(self):
         """
-        Shutdown the cache and persist the index.
+        Shutdown the cache and persist the index if modified.
         
         This provides a clean final flush on graceful exit and also
         persists any LRU last_access updates that lookup() makes.
+        Only writes to disk if the index has been modified.
         """
+        # Stop the periodic flush timer
+        self._stop_flush_timer()
+        
         with self._lock:
-            self._save_index()
+            if self._dirty:
+                self._save_index()
+                self._dirty = False
             logger.debug("Audio cache shutdown complete")
 
 
