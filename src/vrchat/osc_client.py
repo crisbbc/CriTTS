@@ -5,7 +5,7 @@ Handles sending messages to VRChat's chatbox via OSC protocol.
 
 import logging
 import time
-from typing import Optional, Callable
+from typing import Optional, Callable, Tuple
 from pythonosc import udp_client
 
 logger = logging.getLogger(__name__)
@@ -278,7 +278,7 @@ class VRChatOSCClient:
             logger.debug(f"Failed to send avatar parameter: {e}")
             return False
 
-    def test_connection(self) -> tuple[bool, str]:
+    def test_connection(self) -> Tuple[bool, str]:
         """
         Test the OSC configuration. UDP is connectionless so we cannot definitively
         verify that VRChat is running or receiving; we only verify that the client

@@ -1,6 +1,7 @@
 import asyncio
+import time
 import edge_tts
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from . import TTSProvider
 import logging
 
@@ -62,7 +63,7 @@ class EdgeTTSProvider(TTSProvider):
     
     async def get_available_voices(self) -> List[Dict[str, Any]]:
         """Get list of available voices from Edge TTS"""
-        current_time = asyncio.get_event_loop().time()
+        current_time = time.monotonic()
         
         # Check cache
         if self._voice_cache is not None and (current_time - self._cache_time) < self._cache_duration:

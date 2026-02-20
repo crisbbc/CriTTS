@@ -33,6 +33,9 @@ class CriTTSApp(ctk.CTk):
         """Initialize the application."""
         super().__init__()
         
+        # Track cleanup state to prevent double execution
+        self._cleaned_up = False
+        
         # Initialize components
         self._init_components()
         
@@ -289,7 +292,7 @@ class CriTTSApp(ctk.CTk):
         # Handle window close button
         self.protocol("WM_DELETE_WINDOW", self._on_close)
     
-    def _signal_handler(self, signum, frame):
+    def _signal_handler(self, _signum, _frame):
         """Handle termination signals."""
         self._cleanup()
         sys.exit(0)
@@ -301,6 +304,11 @@ class CriTTSApp(ctk.CTk):
     
     def _cleanup(self):
         """Cleanup resources on exit (safety net for abnormal exits)."""
+        # Prevent double cleanup
+        if self._cleaned_up:
+            return
+        self._cleaned_up = True
+        
         # Stop any active audio playback
         if hasattr(self, 'audio_router'):
             self.audio_router.stop_playback()

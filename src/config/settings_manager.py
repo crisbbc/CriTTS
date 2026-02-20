@@ -2,8 +2,8 @@
 Settings Manager Module
 Handles JSON-based configuration persistence for user settings.
 """
+import copy
 import json
-import os
 import re
 import logging
 import threading
@@ -161,25 +161,25 @@ class SettingsManager:
                     loaded = json.load(f)
                 if not isinstance(loaded, dict):
                     logger.warning("Settings file is not a valid dictionary; resetting to defaults.")
-                    self._settings = self.DEFAULT_SETTINGS.copy()
+                    self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
                     self.save_settings()
                     return
                 # Merge with defaults to ensure all keys exist
-                self._settings = {**self.DEFAULT_SETTINGS, **loaded}
+                self._settings = {**copy.deepcopy(self.DEFAULT_SETTINGS), **loaded}
                 # Validate abbreviations is a dictionary
                 abbreviations = self._settings.get("abbreviations")
                 if not isinstance(abbreviations, dict):
                     logger.warning("abbreviations setting corrupted or invalid; resetting to default.")
-                    self._settings["abbreviations"] = self.DEFAULT_SETTINGS["abbreviations"].copy()
+                    self._settings["abbreviations"] = copy.deepcopy(self.DEFAULT_SETTINGS["abbreviations"])
                 # Validate voice_preview_text for corruption
                 self._validate_text_setting("voice_preview_text", self.DEFAULT_SETTINGS["voice_preview_text"])
                 self._migrate_voice_setting()
             else:
-                self._settings = self.DEFAULT_SETTINGS.copy()
+                self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
                 self.save_settings()
         except (json.JSONDecodeError, IOError) as e:
             logger.warning("Error loading settings: %s. Using defaults.", e)
-            self._settings = self.DEFAULT_SETTINGS.copy()
+            self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
     
     def _validate_text_setting(self, key: str, default_value: str) -> bool:
         """
@@ -318,7 +318,7 @@ class SettingsManager:
     def reset_to_defaults(self):
         """Reset all settings to default values."""
         with self._lock:
-            self._settings = self.DEFAULT_SETTINGS.copy()
+            self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
             self.save_settings()
     
     def _validate_keybind_format(self, keybind_string: str) -> bool:

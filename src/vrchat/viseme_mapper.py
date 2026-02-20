@@ -6,7 +6,7 @@ import re
 import time
 import logging
 import threading
-from typing import List, Dict, Tuple, Optional, Callable
+from typing import List, Optional, Callable
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -264,6 +264,8 @@ class VisemeMapper:
             duration: Target duration (if None, calculated from text)
             speech_rate: Speech rate adjustment
             amplitude_callback: Optional callback to get current amplitude (0.0-1.0)
+                Note: Amplitude modulation is not currently implemented; the callback
+                is reserved for future use when the VRChat API supports intensity values.
         """
         self.stop_viseme_animation()
         
@@ -276,30 +278,22 @@ class VisemeMapper:
                 if self._stop_event.is_set():
                     break
                 
-                # Get intensity from amplitude if available
-                intensity = 1.0
-                if amplitude_callback:
-                    intensity = amplitude_callback()
-                
                 # Send viseme value
+                # Note: Amplitude/intensity modulation is not currently applied
+                # as the VRChat viseme parameter only accepts integer values.
+                # Future implementation could use the Voice parameter for amplitude.
                 try:
                     send_callback(int(frame.viseme))
                 except Exception as e:
-                    logger.debug(f"Failed to send viseme: {e}")
+                    logger.debug("Failed to send viseme: %s", e)
                 
                 # Wait for frame duration
-                # Use small sleep intervals for smoother amplitude updates
                 elapsed = 0.0
                 update_interval = 0.02  # 20ms updates
                 while elapsed < frame.duration and not self._stop_event.is_set():
                     sleep_time = min(update_interval, frame.duration - elapsed)
                     time.sleep(sleep_time)
                     elapsed += sleep_time
-                    
-                    # Update intensity during frame
-                    if amplitude_callback and elapsed < frame.duration:
-                        new_intensity = amplitude_callback()
-                        # Could send intensity updates here if needed
             
             # Reset to silence when done
             if not self._stop_event.is_set():

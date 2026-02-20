@@ -87,18 +87,18 @@ class STTEngine:
                     self._stream = None
                 return False
     
-    def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status):
+    def _audio_callback(self, indata: np.ndarray, _frames: int, _time_info, status):
         """
         Callback function for the audio stream.
         
         Args:
             indata: Input audio data
-            frames: Number of frames
-            time_info: Time information
+            _frames: Number of frames (unused, required by callback signature)
+            _time_info: Time information (unused, required by callback signature)
             status: Status flags
         """
         if status:
-            logger.warning(f"Audio stream status: {status}")
+            logger.warning("Audio stream status: %s", status)
         
         # Check if buffer size limit would be exceeded
         chunk_size_bytes = indata.nbytes
@@ -109,6 +109,9 @@ class STTEngine:
                 "Recording may be incomplete.",
                 self._MAX_RECORDING_DURATION_SECONDS
             )
+            # Reset listening flag before stopping the stream
+            # This ensures UI state is correct when the stream stops
+            self._is_listening = False
             # Signal stop by raising an exception in the callback
             # This will stop the stream
             raise sd.CallbackStop()

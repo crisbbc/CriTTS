@@ -100,7 +100,7 @@ class KeybindManager:
             
             # If Ctrl is pressed and the key is a text editing key, don't trigger keybind
             if is_ctrl and keysym in text_editing_keys:
-                return "continue"  # Let the text widget handle it
+                return  # Let the text widget handle it (None allows propagation)
         
         # Execute the callback
         try:
@@ -270,7 +270,6 @@ class KeybindManager:
             return False
         
         # Basic format check - should contain only valid characters
-        import re
         pattern = r'^[A-Za-z0-9+\-_=,\.\/;\'\[\]\\`~!@#$%^&*(){}|:<>? ]+$'
         if not re.match(pattern, keybind_string):
             return False

@@ -2,14 +2,13 @@
 Audio Cache Module
 Persistent disk-based cache for generated TTS audio to avoid regenerating identical text.
 """
-import os
 import json
 import hashlib
 import time
 import threading
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Tuple, Any
+from typing import Optional, Dict, Any
 from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
@@ -64,7 +63,7 @@ class AudioCache:
             self._load_index()
             self._cleanup_if_needed()
         except Exception as e:
-            logger.warning(f"Failed to initialize audio cache: {e}")
+            logger.warning("Failed to initialize audio cache: %s", e)
             self.enabled = False
     
     def _get_index_path(self) -> Path:
@@ -112,10 +111,10 @@ class AudioCache:
                         except OSError:
                             pass
             
-            logger.info(f"Loaded {len(self._index)} cached audio entries")
+            logger.info("Loaded %d cached audio entries", len(self._index))
             
         except Exception as e:
-            logger.warning(f"Failed to load cache index: {e}")
+            logger.warning("Failed to load cache index: %s", e)
             self._index = OrderedDict()
     
     def _save_index(self):
@@ -134,7 +133,7 @@ class AudioCache:
             with open(index_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
-            logger.warning(f"Failed to save cache index: {e}")
+            logger.warning("Failed to save cache index: %s", e)
     
     def _rebuild_index(self):
         """Rebuild cache index from disk files."""
@@ -156,13 +155,13 @@ class AudioCache:
                         meta_file.unlink()
                         
                 except Exception as e:
-                    logger.debug(f"Failed to load meta file {meta_file}: {e}")
+                    logger.debug("Failed to load meta file %s: %s", meta_file, e)
             
             self._save_index()
-            logger.info(f"Rebuilt cache index with {len(self._index)} entries")
+            logger.info("Rebuilt cache index with %d entries", len(self._index))
             
         except Exception as e:
-            logger.warning(f"Failed to rebuild cache index: {e}")
+            logger.warning("Failed to rebuild cache index: %s", e)
     
     def _generate_key(self, text: str, voice: str, rate: int, volume: int, pitch: int) -> str:
         """
@@ -225,11 +224,11 @@ class AudioCache:
                 self._hits += 1
                 self._total_saved_time += self._index[key].get("generation_time", 0)
                 
-                logger.debug(f"Cache hit for key {key[:8]}...")
+                logger.debug("Cache hit for key %s...", key[:8])
                 return audio_data
                 
             except Exception as e:
-                logger.debug(f"Failed to read cached audio: {e}")
+                logger.debug("Failed to read cached audio: %s", e)
                 # Remove stale entry
                 del self._index[key]
                 self._misses += 1
@@ -298,7 +297,7 @@ class AudioCache:
                 # Persist index to disk immediately so entries survive app restart
                 self._save_index()
                 
-                logger.debug(f"Cached audio for key {key[:8]}...")
+                logger.debug("Cached audio for key %s...", key[:8])
                 
                 # Check if cleanup needed
                 self._cleanup_if_needed()
@@ -306,7 +305,7 @@ class AudioCache:
                 return True
                 
             except Exception as e:
-                logger.warning(f"Failed to cache audio: {e}")
+                logger.warning("Failed to cache audio: %s", e)
                 return False
     
     def _get_cache_size(self) -> int:
@@ -350,12 +349,12 @@ class AudioCache:
                 removed_count += 1
                 
             except Exception as e:
-                logger.debug(f"Failed to remove cache entry: {e}")
+                logger.debug("Failed to remove cache entry: %s", e)
             
             current_size = self._get_cache_size()
         
         if removed_count > 0:
-            logger.info(f"Cache cleanup: removed {removed_count} entries, freed {removed_size / (1024*1024):.2f} MB")
+            logger.info("Cache cleanup: removed %d entries, freed %.2f MB", removed_count, removed_size / (1024*1024))
             self._save_index()
     
     def clear(self) -> bool:
@@ -391,7 +390,7 @@ class AudioCache:
                 return True
                 
             except Exception as e:
-                logger.warning(f"Failed to clear cache: {e}")
+                logger.warning("Failed to clear cache: %s", e)
                 return False
     
     def get_statistics(self) -> Dict[str, Any]:
@@ -449,11 +448,11 @@ class AudioCache:
                     removed += 1
                     
                 except Exception as e:
-                    logger.debug(f"Failed to remove old cache entry: {e}")
+                    logger.debug("Failed to remove old cache entry: %s", e)
             
             if removed > 0:
                 self._save_index()
-                logger.info(f"Pruned {removed} cache entries older than {max_age_days} days")
+                logger.info("Pruned %d cache entries older than %d days", removed, max_age_days)
             
             return removed
     
@@ -508,7 +507,7 @@ class PhraseTracker:
             with open(self.stats_path, 'r', encoding='utf-8') as f:
                 self._stats = json.load(f)
         except Exception as e:
-            logger.debug(f"Failed to load phrase stats: {e}")
+            logger.debug("Failed to load phrase stats: %s", e)
             self._stats = {}
     
     def _save_stats(self):
@@ -518,7 +517,7 @@ class PhraseTracker:
             with open(self.stats_path, 'w', encoding='utf-8') as f:
                 json.dump(self._stats, f, indent=2)
         except Exception as e:
-            logger.debug(f"Failed to save phrase stats: {e}")
+            logger.debug("Failed to save phrase stats: %s", e)
     
     def track_usage(self, text: str, voice: str):
         """
