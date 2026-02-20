@@ -1,5 +1,6 @@
 customtkinter
 edge-tts>=7.2.3
+langdetect>=1.0.9
 sounddevice
 soundfile>=0.12.0
 numpy>=1.21.0

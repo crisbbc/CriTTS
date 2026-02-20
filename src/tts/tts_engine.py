@@ -14,6 +14,14 @@ from .providers.edge_tts_provider import EdgeTTSProvider
 from .audio_cache import AudioCache, PhraseTracker
 from ..config.settings_manager import SettingsManager
 
+# langdetect import with graceful degradation
+try:
+    from langdetect import detect as langdetect_detect, LangDetectException
+    _LANGDETECT_AVAILABLE = True
+except ImportError:
+    _LANGDETECT_AVAILABLE = False
+    LangDetectException = Exception  # Fallback for type hints
+
 logger = logging.getLogger(__name__)
 
 
@@ -1074,6 +1082,8 @@ class TTSEngine:
         Uses a weighted scoring system that counts ALL matches across the entire text
         instead of stopping at the first match, making it more reliable for long phrases.
         
+        This is used as a fallback when langdetect is unavailable or unreliable.
+        
         Args:
             text: Input text to analyze
             
@@ -1089,6 +1099,10 @@ class TTSEngine:
             return scores
         
         text_lower = text.lower()
+        
+        # Calculate the length of letters-only text for minimum length guard
+        letters_only = re.sub(r'[^a-zA-ZÀ-ÿ\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u0400-\u04ff\u0600-\u06ff\u0900-\u097f]', '', text)
+        letters_only_length = len(letters_only)
         
         # Script-based detection (high weight - very reliable)
         # Chinese characters (Simplified and Traditional)
@@ -1124,88 +1138,101 @@ class TTSEngine:
                 scores['hi'] += 5
         
         # Character-based indicators for Latin script languages (weight = 3)
-        # Portuguese-specific characters
-        for char in text_lower:
-            if char in 'ãõç':
-                scores['pt'] += 3
-            elif char in 'áéíóúà':
-                # Shared with Portuguese and Spanish, give points to both
-                scores['pt'] += 1.5
-                scores['es'] += 1
-        
-        # Spanish-specific characters
-        for char in text_lower:
-            if char == 'ñ':
-                scores['es'] += 3
-            elif char == 'ü':
-                # ü is more common in Spanish than other languages
-                scores['es'] += 2
-        
-        # French-specific characters
-        for char in text_lower:
-            if char in 'àâäéèêëîïôöùûüÿç':
-                scores['fr'] += 3
-            if char in 'æœ':
-                scores['fr'] += 3
-        
-        # German-specific characters
+        # German-specific characters (ä, ö, ü - ONLY for German, not French)
         for char in text_lower:
             if char in 'äöü':
                 scores['de'] += 3
             elif char == 'ß':
                 scores['de'] += 3
         
-        # Italian-specific characters (less distinctive, shared with other Romance languages)
+        # French-specific characters (excluding ä, ö, ü which are German-specific)
         for char in text_lower:
-            if char in 'ìòù':
-                scores['it'] += 2
+            if char in 'âêîôûëïÿ':  # French-specific diacritics (ü is German-only)
+                scores['fr'] += 3
+            elif char in 'æœ':
+                scores['fr'] += 3
+        
+        # Portuguese-specific characters (ã, õ - unique to Portuguese)
+        for char in text_lower:
+            if char in 'ãõ':
+                scores['pt'] += 3
+        
+        # Spanish-specific character (ñ - unique to Spanish)
+        for char in text_lower:
+            if char == 'ñ':
+                scores['es'] += 3
+        
+        # Shared characters (ç - shared between French and Portuguese, NOT Spanish)
+        for char in text_lower:
+            if char == 'ç':
+                scores['fr'] += 1.5
+                scores['pt'] += 1.5
+        
+        # Shared accented vowels (à, á, é, è, í, ó, ò, ú) - distribute among relevant
+        # These are common across multiple Romance languages
+        for char in text_lower:
+            if char in 'àèìòù':
+                # Italian and French use grave accent more
+                scores['it'] += 1
+                scores['fr'] += 1
+            elif char in 'áéíóú':
+                # Spanish and Portuguese use acute accent more
+                scores['es'] += 1
+                scores['pt'] += 1
         
         # Word-based indicators (weight = 1 per word match)
-        # Common words for each language
-        language_words = {
-            'en': ['the', 'and', 'to', 'of', 'a', 'in', 'is', 'it', 'for', 'as', 'with', 'on', 'be', 'at', 'by', 
-                   'this', 'have', 'from', 'or', 'one', 'had', 'but', 'not', 'what', 'all', 'were', 'when', 'we', 
-                   'there', 'can', 'an', 'your', 'which', 'their', 'said', 'each', 'has', 'will', 'would', 'been', 
-                   'if', 'who', 'how', 'her', 'he', 'she', 'they', 'you', 'me', 'my', 'our', 'us', 'him', 'his'],
-            'es': ['hola', 'señores', 'buenos', 'dias', 'tardes', 'noches', 'como', 'esta', 'estas', 'bien', 
-                   'gracias', 'por', 'favor', 'qué', 'muy', 'tengo', 'quiero', 'hacer', 'tiempo', 'hoy', 'mañana'],
-            'fr': ['bonjour', 'bonsoir', 'merci', 'dans', 'par', 'pour', 'sur', 'avec', 'sans', 'plus', 'moins',
-                   'bien', 'tout', 'tous', 'cette', 'sont', 'être', 'avoir', 'fait', 'faire', 'comme', 'votre'],
-            'de': ['der', 'die', 'das', 'und', 'den', 'von', 'zu', 'mit', 'sich', 'des', 'auf', 'für', 'ist', 
-                   'im', 'dem', 'nicht', 'ein', 'eine', 'hallo', 'guten', 'tag', 'abend', 'ich', 'bin', 'du', 
-                   'wir', 'ihr', 'sie', 'sind', 'haben', 'werden', 'kann', 'muss', 'soll'],
-            'it': ['il', 'la', 'lo', 'le', 'gli', 'ciao', 'buongiorno', 'buonasera', 'grazie', 'prego', 
-                   'come', 'stai', 'bene', 'questo', 'quello', 'sono', 'essere', 'avere', 'fare', 'andare'],
-            'pt': ['não', 'uma', 'para', 'com', 'seu', 'mais', 'dos', 'são', 'como', 'mas', 'foi', 'ele', 
-                   'nas', 'tem', 'à', 'seus', 'pelo', 'ola', 'bom', 'dia', 'tarde', 'noite', 'você', 'isso']
-        }
-        
-        # Count word matches for each language
-        for lang, words in language_words.items():
-            for word in words:
-                # Count all occurrences of the word in the text
-                pattern = r'\b' + re.escape(word) + r'\b'
-                matches = len(re.findall(pattern, text_lower))
-                scores[lang] += matches * 1.0
-        
-        # Normalize scores by text length to handle long vs short phrases fairly
-        text_length = len(text.strip())
-        if text_length > 0:
-            # Apply a normalization factor based on text length
-            # Longer texts will have more matches, so we normalize
-            normalization_factor = min(1.0, 100.0 / text_length)
-            for lang in scores:
-                scores[lang] *= (1.0 + normalization_factor)
+        # Only apply word-based scoring if text has enough letters (minimum length guard)
+        if letters_only_length >= 8:
+            # Pruned English word list - only unambiguously English words
+            # Removed: 'a', 'in', 'is', 'it', 'or', 'an', 'be', 'on', 'as', 'by' (ambiguous short words)
+            language_words = {
+                'en': ['the', 'and', 'this', 'that', 'with', 'have', 'from', 'were', 'been', 
+                       'would', 'their', 'there', 'which', 'what', 'when', 'will', 'your', 
+                       'they', 'you', 'she', 'him', 'his', 'her', 'our', 'how', 'who'],
+                'es': ['hola', 'señores', 'buenos', 'dias', 'tardes', 'noches', 'como', 'esta', 'estas', 'bien', 
+                       'gracias', 'por', 'favor', 'qué', 'muy', 'tengo', 'quiero', 'hacer', 'tiempo', 'hoy', 'mañana'],
+                'fr': ['bonjour', 'bonsoir', 'merci', 'dans', 'par', 'pour', 'sur', 'avec', 'sans', 'plus', 'moins',
+                       'bien', 'tout', 'tous', 'cette', 'sont', 'être', 'avoir', 'fait', 'faire', 'comme', 'votre'],
+                'de': ['der', 'die', 'das', 'und', 'den', 'von', 'zu', 'mit', 'sich', 'des', 'auf', 'für', 'ist', 
+                       'im', 'dem', 'nicht', 'ein', 'eine', 'hallo', 'guten', 'tag', 'abend', 'ich', 'bin', 'du', 
+                       'wir', 'ihr', 'sie', 'sind', 'haben', 'werden', 'kann', 'muss', 'soll'],
+                'it': ['il', 'la', 'lo', 'le', 'gli', 'ciao', 'buongiorno', 'buonasera', 'grazie', 'prego', 
+                       'come', 'stai', 'bene', 'questo', 'quello', 'sono', 'essere', 'avere', 'fare', 'andare'],
+                'pt': ['não', 'uma', 'para', 'com', 'seu', 'mais', 'dos', 'são', 'como', 'mas', 'foi', 'ele', 
+                       'nas', 'tem', 'à', 'seus', 'pelo', 'ola', 'bom', 'dia', 'tarde', 'noite', 'você', 'isso']
+            }
+            
+            # Count word matches for each language
+            for lang, words in language_words.items():
+                for word in words:
+                    # Count all occurrences of the word in the text
+                    pattern = r'\b' + re.escape(word) + r'\b'
+                    matches = len(re.findall(pattern, text_lower))
+                    scores[lang] += matches * 1.0
         
         return scores
     
-    def _detect_language_voice(self, text: str) -> Optional[str]:
-        """Detect language from text and return appropriate voice using weighted scoring."""
+    def _detect_language_voice(self, text: str, min_length: int = 15) -> Optional[str]:
+        """
+        Detect language from text and return appropriate voice.
+        
+        Uses langdetect as primary method with heuristic fallback.
+        Skips detection for very short texts to avoid false positives.
+        
+        Args:
+            text: Input text to analyze
+            min_length: Minimum text length (stripped) for detection. Default 15.
+            
+        Returns:
+            Voice short name (e.g., 'en-US-AriaNeural') or None if text too short
+        """
         if not text or not text.strip():
             return None
         
-        # Calculate language scores
-        scores = self._calculate_language_scores(text)
+        # Minimum text length guard - very short texts are unreliable to detect
+        if len(text.strip()) < min_length:
+            logger.debug(f"Text too short ({len(text.strip())} chars) for reliable language detection, skipping")
+            return None
         
         # Voice mapping for each language
         voice_mapping = {
@@ -1223,27 +1250,14 @@ class TTSEngine:
             'hi': "hi-IN-SwaraNeural"
         }
         
-        # Find the language with the highest score
-        max_score = 0
-        detected_lang = 'en'  # Default to English
+        # Use the refactored _detect_language_from_text
+        detected_lang = self._detect_language_from_text(text)
         
-        for lang, score in scores.items():
-            if score > max_score:
-                max_score = score
-                detected_lang = lang
+        if detected_lang:
+            return voice_mapping.get(detected_lang, "en-US-AriaNeural")
         
-        # Log the detection results
-        logger.debug(f"Language detection scores: {scores}, selected: {detected_lang}")
-        
-        # Minimum threshold to avoid false positives
-        # If no language scores above threshold, default to English
-        if max_score < 5 and detected_lang not in ['zh', 'ja', 'ko', 'ru', 'ar', 'hi']:
-            # Check if there are any Latin characters at all
-            has_latin = any(c.isalpha() and ord(c) < 0x0250 for c in text)
-            if has_latin:
-                detected_lang = 'en'
-        
-        return voice_mapping.get(detected_lang, "en-US-AriaNeural")
+        # Default to English if detection failed
+        return "en-US-AriaNeural"
     
     def _get_custom_language_voice(self, text: str, detected_voice: str) -> Optional[str]:
         """Get custom voice mapping for the detected language."""
@@ -1271,8 +1285,22 @@ class TTSEngine:
         
         return None
     
+    # Supported language codes for langdetect
+    _SUPPORTED_LANGUAGES = {'en', 'es', 'fr', 'de', 'it', 'pt', 'zh', 'ja', 'ko', 'ru', 'ar', 'hi'}
+    
     def _detect_language_from_text(self, text: str) -> Optional[str]:
-        """Detect language code from text using weighted scoring."""
+        """
+        Detect language code from text using langdetect with heuristic fallback.
+        
+        Primary: Uses langdetect library for accurate detection.
+        Fallback: Uses weighted heuristic scoring when langdetect is unavailable or fails.
+        
+        Args:
+            text: Input text to analyze
+            
+        Returns:
+            Language code (e.g., 'en', 'es', 'fr') or None if detection fails
+        """
         if not text or not text.strip():
             return None
         
@@ -1287,23 +1315,50 @@ class TTSEngine:
         if not has_letters or len(text_without_numbers) < len(text_lower) * 0.3:
             return None
         
-        # Calculate language scores using the shared method
+        # Try langdetect first (primary method)
+        if _LANGDETECT_AVAILABLE:
+            try:
+                detected = langdetect_detect(text)
+                # langdetect uses 'zh-cn' for Chinese, map to our 'zh'
+                if detected == 'zh-cn' or detected == 'zh-tw':
+                    detected = 'zh'
+                # Check if detected language is supported
+                if detected in self._SUPPORTED_LANGUAGES:
+                    logger.debug(f"langdetect detected: {detected}")
+                    return detected
+                # If not supported, fall through to heuristic
+                logger.debug(f"langdetect detected unsupported language: {detected}, falling back to heuristic")
+            except LangDetectException as e:
+                logger.debug(f"langdetect failed: {e}, falling back to heuristic")
+            except Exception as e:
+                logger.debug(f"langdetect unexpected error: {e}, falling back to heuristic")
+        
+        # Fallback to heuristic scoring
         scores = self._calculate_language_scores(text)
         
-        # Find the language with the highest score
-        max_score = 0
-        detected_lang = None
+        # Find the language with the highest score and second highest for confidence gap
+        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         
-        for lang, score in scores.items():
-            if score > max_score:
-                max_score = score
-                detected_lang = lang
+        if len(sorted_scores) < 2:
+            return 'en'  # Default to English if no scores
+        
+        max_score = sorted_scores[0][1]
+        second_score = sorted_scores[1][1]
+        detected_lang = sorted_scores[0][0]
         
         # Log the detection results
-        logger.debug(f"Language detection scores: {scores}, selected: {detected_lang}")
+        logger.debug(f"Language detection scores (heuristic): {scores}, selected: {detected_lang}")
         
-        # Minimum threshold to avoid false positives
-        # If no language scores above threshold, return None
+        # Minimum confidence gap check (gap must be >= 2.0)
+        # This prevents false positives when scores are too close
+        if max_score - second_score < 2.0:
+            # Scores are too close, default to English for Latin scripts
+            has_latin = any(c.isalpha() and ord(c) < 0x0250 for c in text)
+            if has_latin:
+                return 'en'
+            return None
+        
+        # Minimum threshold to avoid false positives for non-script-based detection
         if max_score < 5 and detected_lang not in ['zh', 'ja', 'ko', 'ru', 'ar', 'hi']:
             # Check if there are any Latin characters at all
             has_latin = any(c.isalpha() and ord(c) < 0x0250 for c in text)
