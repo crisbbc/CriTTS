@@ -98,12 +98,14 @@ class AudioCache:
         Flush the index to disk if it has been modified.
         
         This is called by the batch trigger (store count) and timer.
+        Note: _store_count is NOT reset here to avoid interfering with batch
+        threshold logic in store(). The counter is only reset in store() after
+        a batch flush.
         """
         with self._lock:
             if self._dirty:
                 self._save_index()
                 self._dirty = False
-                self._store_count = 0
                 self._last_flush_time = time.time()
                 logger.debug("Flushed audio cache index to disk")
     
@@ -536,6 +538,9 @@ class AudioCache:
         persists any LRU last_access updates that lookup() makes.
         Only writes to disk if the index has been modified.
         """
+        # Disable first to prevent timer callback from restarting timer
+        self.enabled = False
+        
         # Stop the periodic flush timer
         self._stop_flush_timer()
         

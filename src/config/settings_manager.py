@@ -257,13 +257,14 @@ class SettingsManager:
     
     def save_settings(self):
         """Save current settings to JSON file."""
-        try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                json.dump(self._settings, f, indent=4)
-            return True
-        except IOError as e:
-            logger.warning("Error saving settings: %s", e)
-            return False
+        with self._lock:
+            try:
+                with open(self.config_path, 'w', encoding='utf-8') as f:
+                    json.dump(self._settings, f, indent=4)
+                return True
+            except IOError as e:
+                logger.warning("Error saving settings: %s", e)
+                return False
     
     def get(self, key, default=None):
         """Get a setting value by key."""
@@ -328,18 +329,14 @@ class SettingsManager:
     
     def _validate_keybind_format(self, keybind_string: str) -> bool:
         """
-        Validate keybind format by delegating to KeybindManager.
+        Validate keybind format using shared validation utility.
         
-        This ensures consistent validation between settings and the keybind manager.
+        This ensures consistent validation between settings and the keybind manager
+        without creating circular imports.
         """
-        # Import here to avoid circular imports
-        from ..gui.keybind_manager import KeybindManager
+        from ..utils.keybind_utils import validate_keybind_format
         
-        if not keybind_string or not isinstance(keybind_string, str):
-            return False
-        
-        # Use KeybindManager's comprehensive validation
-        return KeybindManager().validate_keybind(keybind_string)
+        return validate_keybind_format(keybind_string)
     
     def validate_settings(self) -> list:
         """Validate all settings and return list of issues."""

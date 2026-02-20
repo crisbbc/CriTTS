@@ -5,7 +5,7 @@ Supports both Tkinter application-wide keybinds and system-wide global hotkeys.
 """
 import re
 import logging
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Any, Callable
 
 logger = logging.getLogger(__name__)
 

@@ -1,3 +1,7 @@
+"""
+Edge TTS Provider Module
+Provides text-to-speech synthesis using Microsoft Edge's online TTS service.
+"""
 import asyncio
 import time
 import edge_tts
@@ -95,7 +99,7 @@ class EdgeTTSProvider(TTSProvider):
             return processed_voices
             
         except Exception as e:
-            logger.error(f"Error fetching Edge TTS voices: {e}")
+            logger.error("Error fetching Edge TTS voices: %s", e)
             return []
     
     async def generate_speech(self, text: str, voice: str, rate: int = 0, volume: int = 100, pitch: int = 0, stop_event=None) -> bytes:
@@ -118,7 +122,7 @@ class EdgeTTSProvider(TTSProvider):
         # Format prosody parameters for edge-tts
         rate_str, volume_str, pitch_str = self._format_prosody_parameters(rate, volume, pitch)
         
-        logger.debug(f"Edge TTS parameters: rate={rate_str}, volume={volume_str}, pitch={pitch_str}, voice={voice}")
+        logger.debug("Edge TTS parameters: rate=%s, volume=%s, pitch=%s, voice=%s", rate_str, volume_str, pitch_str, voice)
         
         for attempt in range(MAX_RETRIES):
             try:
@@ -147,12 +151,12 @@ class EdgeTTSProvider(TTSProvider):
                 error_str = str(e)
                 # Check if this is an HTTP 500 error and we have retries left
                 if "500" in error_str and attempt < MAX_RETRIES - 1:
-                    logger.warning(f"Edge TTS returned 500, retrying (attempt {attempt + 1}/{MAX_RETRIES})...")
+                    logger.warning("Edge TTS returned 500, retrying (attempt %d/%d)...", attempt + 1, MAX_RETRIES)
                     await asyncio.sleep(RETRY_DELAY)
                     continue
                 else:
                     # Non-500 error or final attempt - log and raise
-                    logger.error(f"Error generating Edge TTS speech: {e}")
+                    logger.error("Error generating Edge TTS speech: %s", e)
                     raise
     
     async def validate_voice(self, voice: str) -> bool:
@@ -181,7 +185,7 @@ class EdgeTTSProvider(TTSProvider):
         # Format prosody parameters for edge-tts
         rate_str, volume_str, pitch_str = self._format_prosody_parameters(rate, volume, pitch)
         
-        logger.debug(f"Edge TTS streaming parameters: rate={rate_str}, volume={volume_str}, pitch={pitch_str}, voice={voice}")
+        logger.debug("Edge TTS streaming parameters: rate=%s, volume=%s, pitch=%s, voice=%s", rate_str, volume_str, pitch_str, voice)
         
         try:
             # Generate speech with prosody parameters
@@ -203,7 +207,7 @@ class EdgeTTSProvider(TTSProvider):
                     yield chunk["data"]
                     
         except Exception as e:
-            logger.error(f"Error streaming Edge TTS speech: {e}")
+            logger.error("Error streaming Edge TTS speech: %s", e)
             raise
 
     def clear_cache(self) -> None:

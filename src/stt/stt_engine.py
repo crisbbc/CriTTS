@@ -234,14 +234,11 @@ class STTEngine:
         if len(audio_data) < frame_size:
             raise ValueError("Audio too short for silence detection")
         
-        # Calculate RMS for each frame
+        # Calculate RMS for each frame (vectorized for performance)
         num_frames = len(audio_data) // frame_size
-        rms_values = np.zeros(num_frames)
-        
-        for i in range(num_frames):
-            frame = audio_data[i * frame_size:(i + 1) * frame_size]
-            # RMS for int16 data
-            rms_values[i] = np.sqrt(np.mean(frame.astype(np.float64) ** 2))
+        # Reshape audio data into frames and compute RMS in one vectorized operation
+        framed_audio = audio_data[:num_frames * frame_size].reshape(num_frames, frame_size)
+        rms_values = np.sqrt(np.mean(framed_audio.astype(np.float64) ** 2, axis=1))
         
         # Find first and last frame above threshold
         above_threshold = rms_values > silence_threshold
@@ -410,7 +407,7 @@ class STTEngine:
                 return
             except sr.RequestError as e:
                 logger.error("Speech recognition service error: %s", e)
-                on_error(sr.RequestError("Network error: %s", e))
+                on_error(sr.RequestError(f"Network error: {e}"))
                 return
             
             # Parse response for best alternative
@@ -464,7 +461,7 @@ class STTEngine:
             on_error(sr.UnknownValueError("Could not understand audio"))
         except sr.RequestError as e:
             logger.error("Speech recognition service error: %s", e)
-            on_error(sr.RequestError("Network error: %s", e))
+            on_error(sr.RequestError(f"Network error: {e}"))
         except Exception as e:
             logger.error("Transcription error: %s", e)
             on_error(e)

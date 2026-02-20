@@ -23,6 +23,7 @@ class VRChatOSCClient:
     DEFAULT_VRCHAT_PORT = 9000
     CHATBOX_ENDPOINT = "/chatbox/input"
     CHATBOX_MIN_INTERVAL = 1.5  # Minimum seconds between chatbox messages (VRChat rate limit)
+    CHATBOX_MAX_LENGTH = 144  # VRChat's maximum chatbox message length
     
     def __init__(
         self,
@@ -56,7 +57,7 @@ class VRChatOSCClient:
         try:
             self._client = udp_client.SimpleUDPClient(self.ip, self.port)
             self._connected = True
-            logger.info(f"OSC client connected to {self.ip}:{self.port}")
+            logger.info("OSC client connected to %s:%d", self.ip, self.port)
             
             if self.status_callback:
                 self.status_callback("OSC: Connected", False)
@@ -64,7 +65,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to connect OSC client: {e}")
+            logger.error("Failed to connect OSC client: %s", e)
             self._connected = False
             
             if self.status_callback:
@@ -117,10 +118,15 @@ class VRChatOSCClient:
         if not priority:
             elapsed = time.time() - self._last_chatbox_send_time
             if elapsed < self.CHATBOX_MIN_INTERVAL:
-                logger.debug(f"Chatbox rate limit: skipping send ({self.CHATBOX_MIN_INTERVAL - elapsed:.2f}s remaining)")
+                logger.debug("Chatbox rate limit: skipping send (%.2fs remaining)", self.CHATBOX_MIN_INTERVAL - elapsed)
                 return False
         
         try:
+            # Truncate message to VRChat's maximum length to prevent silent drops
+            if len(message) > self.CHATBOX_MAX_LENGTH:
+                message = message[:self.CHATBOX_MAX_LENGTH]
+                logger.debug("Truncated message to %d characters", self.CHATBOX_MAX_LENGTH)
+            
             # VRChat expects the message as a string argument
             # The second argument controls notification sound (integer 0 or 1 for compatibility)
             # The third argument controls keyboard visibility (boolean)
@@ -135,7 +141,7 @@ class VRChatOSCClient:
             
             # Only append "..." if message was truncated
             display_msg = message[:50] + "..." if len(message) > 50 else message
-            logger.info(f"Sent message to chatbox (notification_sound={play_sound_int}): {display_msg}")
+            logger.info("Sent message to chatbox (notification_sound=%d): %s", play_sound_int, display_msg)
             
             if self.status_callback:
                 self.status_callback("OSC: Message sent", False)
@@ -143,7 +149,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to send OSC message: {e}")
+            logger.error("Failed to send OSC message: %s", e)
             
             if self.status_callback:
                 self.status_callback(f"OSC: Send failed - {e}", True)
@@ -184,7 +190,7 @@ class VRChatOSCClient:
             # VRChat expects the typing indicator as a boolean argument to /chatbox/typing
             self._client.send_message("/chatbox/typing", [is_typing])
             
-            logger.info(f"Sent typing indicator: {is_typing}")
+            logger.info("Sent typing indicator: %s", is_typing)
             
             if self.status_callback:
                 self.status_callback(f"OSC: Typing indicator {'on' if is_typing else 'off'}", False)
@@ -192,7 +198,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to send typing indicator: {e}")
+            logger.error("Failed to send typing indicator: %s", e)
             
             if self.status_callback:
                 self.status_callback(f"OSC: Typing indicator failed - {e}", True)
@@ -225,7 +231,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            logger.debug(f"Failed to send viseme: {e}")
+            logger.debug("Failed to send viseme: %s", e)
             return False
     
     def send_voice_amplitude(self, amplitude: float) -> bool:
@@ -251,7 +257,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            logger.debug(f"Failed to send voice amplitude: {e}")
+            logger.debug("Failed to send voice amplitude: %s", e)
             return False
     
     def send_avatar_parameter(self, parameter_name: str, value) -> bool:
@@ -278,7 +284,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            logger.debug(f"Failed to send avatar parameter: {e}")
+            logger.debug("Failed to send avatar parameter: %s", e)
             return False
 
     def test_connection(self) -> Tuple[bool, str]:
@@ -294,8 +300,9 @@ class VRChatOSCClient:
             if not self.connect():
                 return False, "Failed to create OSC client. Check IP and port (e.g. 127.0.0.1:9000)."
         
-        # Send a test message (invisible - empty string with no sound)
-        success = self.send_to_chatbox("", play_notification_sound=False, show_keyboard=False)
+        # Use typing indicator as a no-op probe instead of clearing the chatbox
+        # This avoids the visible side effect of clearing the chatbox during settings tests
+        success = self.send_typing_indicator(False)
         
         if success:
             return True, "OSC configured correctly. Messages will be sent to VRChat if it's running with OSC enabled."

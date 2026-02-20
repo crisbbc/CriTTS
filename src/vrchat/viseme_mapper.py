@@ -375,7 +375,7 @@ class AmplitudeAnalyzer:
             return float(normalized)
             
         except Exception as e:
-            logger.debug(f"Error calculating RMS: {e}")
+            logger.debug("Error calculating RMS: %s", e)
             return 0.0
     
     def update_amplitude(self, amplitude: float) -> float:
