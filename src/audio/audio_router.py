@@ -385,7 +385,7 @@ class AudioRouter:
         stereo = np.column_stack((left, right))
         return stereo
     
-    def _decode_mp3_audio(self, audio_data: bytes, target_sample_rate: int = 48000) -> Tuple[np.ndarray, int]:
+    def _decode_mp3_audio(self, audio_data: bytes, target_sample_rate: Optional[int] = 48000) -> Tuple[np.ndarray, int]:
         """
         Decode MP3 audio data to PCM float32 numpy array using ffmpeg.
         
@@ -394,7 +394,8 @@ class AudioRouter:
         
         Args:
             audio_data: Raw MP3 audio bytes
-            target_sample_rate: Target sample rate for output (default 48000)
+            target_sample_rate: Target sample rate for output (default 48000).
+                               If None, decode at native sample rate without resampling.
             
         Returns:
             Tuple of (audio_data as float32 numpy array, sample_rate)
@@ -407,16 +408,25 @@ class AudioRouter:
             # -i = input, -f f32le = output format (32-bit float little-endian)
             # -acodec pcm_f32le = PCM codec, -ar = sample rate
             # - = output to stdout
+            
+            # Build ffmpeg command - omit -ar if target_sample_rate is None for native rate
+            ffmpeg_cmd = [
+                'ffmpeg',
+                '-i', 'pipe:0',           # Read from stdin
+                '-f', 'f32le',            # Output format: 32-bit float little-endian
+                '-acodec', 'pcm_f32le',   # PCM codec
+            ]
+            
+            if target_sample_rate is not None:
+                ffmpeg_cmd.extend(['-ar', str(target_sample_rate)])
+            
+            ffmpeg_cmd.extend([
+                '-ac', '2',               # Stereo output for consistency
+                '-'                       # Output to stdout
+            ])
+            
             process = subprocess.Popen(
-                [
-                    'ffmpeg',
-                    '-i', 'pipe:0',           # Read from stdin
-                    '-f', 'f32le',            # Output format: 32-bit float little-endian
-                    '-acodec', 'pcm_f32le',   # PCM codec
-                    '-ar', str(target_sample_rate),  # Sample rate
-                    '-ac', '2',               # Stereo output for consistency
-                    '-'                       # Output to stdout
-                ],
+                ffmpeg_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
@@ -439,9 +449,25 @@ class AudioRouter:
             # Reshape to stereo (2 channels)
             audio_array = audio_array.reshape(-1, 2)
             
-            logger.debug("Successfully decoded MP3: %d samples at %d Hz", len(audio_array), target_sample_rate)
+            # Determine the actual sample rate
+            if target_sample_rate is not None:
+                actual_sr = target_sample_rate
+            else:
+                # Extract native sample rate from ffmpeg stderr output
+                # Look for patterns like "Stream #0:0: Audio: mp3, 44100 Hz, stereo"
+                import re
+                stderr_text = stderr.decode('utf-8', errors='replace') if stderr else ''
+                sr_match = re.search(r'(\d+)\s*Hz', stderr_text)
+                if sr_match:
+                    actual_sr = int(sr_match.group(1))
+                else:
+                    # Fallback: assume 44100 Hz (common MP3 sample rate)
+                    actual_sr = 44100
+                    logger.warning("Could not detect native sample rate, assuming %d Hz", actual_sr)
             
-            return audio_array, target_sample_rate
+            logger.debug("Successfully decoded MP3: %d samples at %d Hz", len(audio_array), actual_sr)
+            
+            return audio_array, actual_sr
             
         except subprocess.TimeoutExpired:
             process.kill()
@@ -454,7 +480,7 @@ class AudioRouter:
             logger.error("MP3 decode error: %s", e)
             raise RuntimeError(f"Failed to decode MP3: {str(e)}")
     
-    def _decode_audio_data(self, audio_data: bytes, target_sample_rate: int = 48000) -> Tuple[np.ndarray, int]:
+    def _decode_audio_data(self, audio_data: bytes, target_sample_rate: Optional[int] = 48000) -> Tuple[np.ndarray, int]:
         """
         Decode audio data (MP3 or WAV) to PCM float32 numpy array.
         
@@ -464,7 +490,8 @@ class AudioRouter:
         
         Args:
             audio_data: Raw audio bytes (MP3 or WAV)
-            target_sample_rate: Target sample rate for MP3 decoding
+            target_sample_rate: Target sample rate for MP3 decoding.
+                               If None, decode at native sample rate without resampling.
             
         Returns:
             Tuple of (audio_data as float32 numpy array, sample_rate)
@@ -531,16 +558,16 @@ class AudioRouter:
                 norm_type = "None"
             
             # Decode audio data using ffmpeg (reliable MP3 support) with fallback to soundfile
-            decode_sr = target_sr or 48000
+            # For fast_preview (target_sr is None), decode at native sample rate to avoid resampling
             try:
-                data, sr = self._decode_audio_data(audio_data, decode_sr)
+                data, sr = self._decode_audio_data(audio_data, target_sr)
             except RuntimeError as e:
                 logger.error("Failed to decode audio data: %s", e)
                 return False
             
-            # High-quality resampling using scipy (skip for fast_preview)
+            # High-quality resampling using scipy (skip for fast_preview when target_sr is None)
             # Do resampling BEFORE normalization so LUFS uses correct sample rate
-            if sr != target_sr and target_sr is not None:
+            if target_sr is not None and sr != target_sr:
                 data = self._resample_high_quality(data, sr, target_sr, kaiser_beta)
                 effective_sr = target_sr
             else:
@@ -750,15 +777,15 @@ class AudioRouter:
                 norm_type = "None"
             
             # Decode audio data using ffmpeg (reliable MP3 support) with fallback to soundfile
-            decode_sr = target_sr or 48000
+            # For fast_preview (target_sr is None), decode at native sample rate to avoid resampling
             try:
-                data, sr = self._decode_audio_data(audio_data, decode_sr)
+                data, sr = self._decode_audio_data(audio_data, target_sr)
             except RuntimeError as e:
                 logger.error("Failed to decode audio data: %s", e)
                 return False
             
-            # High-quality resampling using scipy (skip for fast_preview)
-            if sr != target_sr and target_sr is not None:
+            # High-quality resampling using scipy (skip for fast_preview when target_sr is None)
+            if target_sr is not None and sr != target_sr:
                 data = self._resample_high_quality(data, sr, target_sr, kaiser_beta)
                 effective_sr = target_sr
             else:

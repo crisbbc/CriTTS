@@ -10,7 +10,6 @@ import time
 import logging
 import re
 from functools import lru_cache
-import concurrent.futures
 from pathlib import Path
 
 from .providers.edge_tts_provider import EdgeTTSProvider
@@ -38,7 +37,6 @@ class TTSEngine:
         self._cache_duration: float = 300  # Cache voices for 5 minutes
         self._voice_cache = {}  # Cache for voice validation
         self._text_cache = {}  # Cache for text processing
-        self._text_processing_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         
         # Initialize providers - pass settings_manager to avoid per-call SettingsManager instantiation
         self._edge_tts_provider = EdgeTTSProvider(settings_manager=self._settings_manager)
@@ -1331,7 +1329,6 @@ class TTSEngine:
         This provides a clean shutdown by:
         - Persisting the audio cache index
         - Persisting phrase tracker stats
-        - Shutting down the text processing executor
         """
         # Shutdown audio cache
         if self._audio_cache is not None:
@@ -1340,8 +1337,5 @@ class TTSEngine:
         # Shutdown phrase tracker
         if self._phrase_tracker is not None:
             self._phrase_tracker.shutdown()
-        
-        # Shutdown thread pool executor
-        self._text_processing_executor.shutdown(wait=False)
         
         logger.info("TTS engine shutdown complete")
