@@ -111,7 +111,10 @@ class SettingsManager:
         "mic_passthrough_volume": 100,  # Volume multiplier 0–200 (%)
         
         # Button Visibility Settings
-        "visible_buttons": ["speak", "stop", "clear", "voice", "overlay"]  # Toggleable buttons to show (settings is always visible)
+        "visible_buttons": ["speak", "stop", "clear", "voice", "overlay"],  # Toggleable buttons to show (settings is always visible)
+        
+        # Overlay Settings
+        "overlay_visible": True  # Whether the recording overlay is visible
     }
 
 

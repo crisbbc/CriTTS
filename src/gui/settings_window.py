@@ -2254,7 +2254,7 @@ Examples:
         
         ctk.CTkLabel(
             self.advanced_scroll,
-            text="Fast Preview: No resampling, no normalization | Balanced: 48 kHz, Peak normalization | High Quality: 48 kHz, LUFS normalization",
+            text="Fast Preview: No resampling, no stereo enhancement | Balanced: 48 kHz resampling, moderate stereo enhancement | High Quality: 48 kHz resampling, maximum stereo enhancement",
             font=ctk.CTkFont(size=FONT_XS),
             text_color="gray"
         ).pack(anchor="w", pady=(0, 10))

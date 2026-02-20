@@ -941,7 +941,7 @@ class MainWindow:
             if enable_streaming:
                 # Use streaming playback for lower latency
                 success = loop.run_until_complete(
-                    self._speak_streaming_async(text, voice, rate, volume, pitch, device_idx, processing_profile)
+                    self._speak_streaming_async(text, voice, rate, volume, pitch, device_idx, processing_profile, enable_normalization, normalization_type)
                 )
             else:
                 # Use traditional non-streaming playback
@@ -1036,12 +1036,23 @@ class MainWindow:
             self._worker_thread = None
             self.root.after(0, lambda: self._update_ui_speaking(False))
     
-    async def _speak_streaming_async(self, text: str, voice: str, rate: int, volume: int, pitch: int, device_idx, processing_profile: str) -> bool:
+    async def _speak_streaming_async(self, text: str, voice: str, rate: int, volume: int, pitch: int, device_idx, processing_profile: str, enable_normalization: bool = True, normalization_type: str = "Peak") -> bool:
         """
         Stream TTS generation and playback for lower latency.
         
         This method starts playing audio as soon as the first chunks arrive,
         rather than waiting for the entire audio to be generated.
+        
+        Args:
+            text: Text to speak
+            voice: Voice identifier
+            rate: Speech rate
+            volume: Volume level
+            pitch: Pitch adjustment
+            device_idx: Output device index
+            processing_profile: Processing profile name
+            enable_normalization: Whether to apply normalization
+            normalization_type: Type of normalization ("Peak", "RMS", "LUFS", or "None")
         """
         try:
             # Update status
@@ -1074,7 +1085,9 @@ class MainWindow:
                 48000,
                 device_idx,
                 processing_profile,
-                self._stop_event
+                self._stop_event,
+                enable_normalization,
+                normalization_type
             )
             
             return success
@@ -1122,9 +1135,9 @@ class MainWindow:
         # Flip visibility state
         self._overlay_visible = not self._overlay_visible
         
-        # Persist to settings
+        # Persist to settings and save to disk
         self.settings.set("overlay_visible", self._overlay_visible)
-        
+        self.settings.save_settings()
         # Update overlay visibility
         if self._overlay_visible:
             self._recording_overlay.show_overlay()

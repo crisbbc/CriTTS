@@ -301,13 +301,18 @@ class CriTTSApp(ctk.CTk):
     
     def _cleanup(self):
         """Cleanup resources on exit (safety net for abnormal exits)."""
-        # Stop microphone passthrough
+        # Stop any active audio playback
         if hasattr(self, 'audio_router'):
+            self.audio_router.stop_playback()
             self.audio_router.stop_mic_passthrough()
         
         # Shutdown TTS engine if it exists
         if hasattr(self, 'tts_engine'):
             self.tts_engine.shutdown()
+        
+        # Shutdown STT engine if it exists (stops any active recording stream)
+        if hasattr(self, 'stt_engine'):
+            self.stt_engine.shutdown()
 
 
 def main():

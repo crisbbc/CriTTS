@@ -5,11 +5,13 @@ Handles audio device enumeration and routing audio to specific output devices.
 import threading
 import queue
 import sounddevice as sd
-import soundfile as sf
 import numpy as np
 import io
 import asyncio
 import logging
+import subprocess
+import tempfile
+import os
 from typing import List, Dict, Optional, Tuple
 from scipy import signal
 from math import gcd
@@ -303,25 +305,27 @@ class AudioRouter:
             
         Returns:
             Dictionary with processing settings
+            
+        Note:
+            Normalization is controlled separately via the Audio tab settings
+            (enable_normalization and normalization_type). The profile only
+            controls resampling quality and stereo enhancement.
         """
         profiles = {
             "fast_preview": {
                 "sample_rate": None,  # No resampling - use original
                 "kaiser_beta": 0.0,   # No anti-aliasing filter
                 "stereo_width": 0.0,  # No stereo enhancement
-                "normalization_type": "None"
             },
             "balanced": {
                 "sample_rate": 48000,
                 "kaiser_beta": 5.0,
                 "stereo_width": 0.3,
-                "normalization_type": "Peak"
             },
             "high_quality": {
                 "sample_rate": 48000,
                 "kaiser_beta": 8.0,   # Higher quality anti-aliasing
                 "stereo_width": 0.5,  # More stereo enhancement
-                "normalization_type": "LUFS"
             }
         }
         
@@ -381,6 +385,111 @@ class AudioRouter:
         stereo = np.column_stack((left, right))
         return stereo
     
+    def _decode_mp3_audio(self, audio_data: bytes, target_sample_rate: int = 48000) -> Tuple[np.ndarray, int]:
+        """
+        Decode MP3 audio data to PCM float32 numpy array using ffmpeg.
+        
+        This method uses ffmpeg for reliable MP3 decoding, as soundfile often
+        lacks MP3 support due to licensing restrictions.
+        
+        Args:
+            audio_data: Raw MP3 audio bytes
+            target_sample_rate: Target sample rate for output (default 48000)
+            
+        Returns:
+            Tuple of (audio_data as float32 numpy array, sample_rate)
+            
+        Raises:
+            RuntimeError: If decoding fails or ffmpeg is not available
+        """
+        try:
+            # Use ffmpeg to decode MP3 to raw PCM
+            # -i = input, -f f32le = output format (32-bit float little-endian)
+            # -acodec pcm_f32le = PCM codec, -ar = sample rate
+            # - = output to stdout
+            process = subprocess.Popen(
+                [
+                    'ffmpeg',
+                    '-i', 'pipe:0',           # Read from stdin
+                    '-f', 'f32le',            # Output format: 32-bit float little-endian
+                    '-acodec', 'pcm_f32le',   # PCM codec
+                    '-ar', str(target_sample_rate),  # Sample rate
+                    '-ac', '2',               # Stereo output for consistency
+                    '-'                       # Output to stdout
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            stdout, stderr = process.communicate(input=audio_data, timeout=30)
+            
+            if process.returncode != 0:
+                error_msg = stderr.decode('utf-8', errors='replace') if stderr else 'Unknown ffmpeg error'
+                logger.error("ffmpeg MP3 decode failed (return code %d): %s", process.returncode, error_msg[:500])
+                raise RuntimeError(f"ffmpeg failed to decode MP3: {error_msg[:200]}")
+            
+            if len(stdout) == 0:
+                raise RuntimeError("ffmpeg produced no output - MP3 may be empty or corrupted")
+            
+            # Convert raw bytes to numpy array (stereo float32)
+            # Each sample is 2 channels * 4 bytes (float32) = 8 bytes per frame
+            audio_array = np.frombuffer(stdout, dtype=np.float32)
+            
+            # Reshape to stereo (2 channels)
+            audio_array = audio_array.reshape(-1, 2)
+            
+            logger.debug("Successfully decoded MP3: %d samples at %d Hz", len(audio_array), target_sample_rate)
+            
+            return audio_array, target_sample_rate
+            
+        except subprocess.TimeoutExpired:
+            process.kill()
+            raise RuntimeError("ffmpeg decode timeout - MP3 may be corrupted or too large")
+        except FileNotFoundError:
+            raise RuntimeError("ffmpeg not found - please install ffmpeg for MP3 decoding support")
+        except Exception as e:
+            if isinstance(e, RuntimeError):
+                raise
+            logger.error("MP3 decode error: %s", e)
+            raise RuntimeError(f"Failed to decode MP3: {str(e)}")
+    
+    def _decode_audio_data(self, audio_data: bytes, target_sample_rate: int = 48000) -> Tuple[np.ndarray, int]:
+        """
+        Decode audio data (MP3 or WAV) to PCM float32 numpy array.
+        
+        Attempts to use ffmpeg for MP3 decoding first (reliable), with fallback
+        to soundfile for WAV files. This ensures MP3 support is always available
+        when ffmpeg is installed.
+        
+        Args:
+            audio_data: Raw audio bytes (MP3 or WAV)
+            target_sample_rate: Target sample rate for MP3 decoding
+            
+        Returns:
+            Tuple of (audio_data as float32 numpy array, sample_rate)
+            
+        Raises:
+            RuntimeError: If decoding fails
+        """
+        # Try ffmpeg first - it handles MP3 reliably
+        try:
+            return self._decode_mp3_audio(audio_data, target_sample_rate)
+        except RuntimeError as e:
+            # If ffmpeg fails, try soundfile as fallback (for WAV files)
+            logger.debug("ffmpeg decode failed, trying soundfile: %s", e)
+            try:
+                import soundfile as sf
+                audio_buffer = io.BytesIO(audio_data)
+                data, sr = sf.read(audio_buffer, dtype=np.float32)
+                if data.size == 0:
+                    raise RuntimeError("soundfile produced empty audio")
+                return data, sr
+            except Exception as sf_error:
+                logger.error("soundfile also failed: %s", sf_error)
+                # Re-raise the original ffmpeg error with context
+                raise RuntimeError(f"Audio decode failed - ffmpeg: {e}; soundfile: {sf_error}")
+    
     async def play_audio_to_device(
         self, 
         audio_data: bytes, 
@@ -421,9 +530,13 @@ class AudioRouter:
             else:
                 norm_type = "None"
             
-            # Load audio data using soundfile
-            audio_buffer = io.BytesIO(audio_data)
-            data, sr = sf.read(audio_buffer, dtype=np.float32)
+            # Decode audio data using ffmpeg (reliable MP3 support) with fallback to soundfile
+            decode_sr = target_sr or 48000
+            try:
+                data, sr = self._decode_audio_data(audio_data, decode_sr)
+            except RuntimeError as e:
+                logger.error("Failed to decode audio data: %s", e)
+                return False
             
             # High-quality resampling using scipy (skip for fast_preview)
             # Do resampling BEFORE normalization so LUFS uses correct sample rate
@@ -440,6 +553,10 @@ class AudioRouter:
             # Convert mono to stereo with enhancement (skip for fast_preview)
             if len(data.shape) == 1 and stereo_width > 0:
                 data = self._stereo_enhancement(data, width=stereo_width)
+            
+            # Ensure stereo for consistent output
+            if len(data.shape) == 1:
+                data = np.column_stack((data, data))
             
             # Play audio using sounddevice
             def callback(outdata, frames, time, status):
@@ -482,7 +599,8 @@ class AudioRouter:
             
         except sd.PortAudioError:
             return False
-        except Exception:
+        except Exception as e:
+            logger.error("play_audio_to_device error: %s", e)
             return False
         finally:
             try:
@@ -549,9 +667,12 @@ class AudioRouter:
             Duration in seconds as a float, or 0.0 on error.
         """
         try:
-            audio_buffer = io.BytesIO(audio_data)
-            info = sf.info(audio_buffer)
-            return info.duration
+            # Try to decode the audio and calculate duration from samples
+            data, sr = self._decode_audio_data(audio_data, 48000)
+            if data.size > 0:
+                # Duration = number of samples / sample rate
+                return len(data) / sr
+            return 0.0
         except Exception:
             return 0.0
     
@@ -628,9 +749,13 @@ class AudioRouter:
             else:
                 norm_type = "None"
             
-            # Load audio data using soundfile
-            audio_buffer = io.BytesIO(audio_data)
-            data, sr = sf.read(audio_buffer, dtype=np.float32)
+            # Decode audio data using ffmpeg (reliable MP3 support) with fallback to soundfile
+            decode_sr = target_sr or 48000
+            try:
+                data, sr = self._decode_audio_data(audio_data, decode_sr)
+            except RuntimeError as e:
+                logger.error("Failed to decode audio data: %s", e)
+                return False
             
             # High-quality resampling using scipy (skip for fast_preview)
             if sr != target_sr and target_sr is not None:
@@ -646,6 +771,10 @@ class AudioRouter:
             # Convert mono to stereo with enhancement (skip for fast_preview)
             if len(data.shape) == 1 and stereo_width > 0:
                 data = self._stereo_enhancement(data, width=stereo_width)
+            
+            # Ensure stereo for consistent output
+            if len(data.shape) == 1:
+                data = np.column_stack((data, data))
             
             # Store original data for amplitude calculation
             original_data = data.copy()
@@ -708,7 +837,8 @@ class AudioRouter:
             
         except sd.PortAudioError:
             return False
-        except Exception:
+        except Exception as e:
+            logger.error("play_audio_with_amplitude error: %s", e)
             return False
         finally:
             try:
@@ -727,7 +857,9 @@ class AudioRouter:
         sample_rate: int = 48000,
         device_index: Optional[int] = None,
         processing_profile: str = "balanced",
-        stop_event=None
+        stop_event=None,
+        enable_normalization: bool = True,
+        normalization_type: str = "Peak"
     ) -> bool:
         """
         Play streaming audio data to a specific output device.
@@ -742,6 +874,8 @@ class AudioRouter:
             device_index: Output device index (None for default)
             processing_profile: Processing profile ("fast_preview", "balanced", "high_quality")
             stop_event: Optional threading.Event to signal stop
+            enable_normalization: Whether to apply normalization
+            normalization_type: Type of normalization ("Peak", "RMS", "LUFS", or "None")
             
         Returns:
             True if playback succeeded, False otherwise.
@@ -755,9 +889,15 @@ class AudioRouter:
             # Get profile settings
             profile_settings = self._get_profile_settings(processing_profile)
             target_sr = profile_settings["sample_rate"] or sample_rate
-            norm_type = profile_settings["normalization_type"]
             kaiser_beta = profile_settings["kaiser_beta"]
             stereo_width = profile_settings["stereo_width"]
+            
+            # Determine normalization type: respect enable_normalization flag
+            # If normalization is disabled, use "None"; otherwise use caller-provided type
+            if enable_normalization:
+                norm_type = normalization_type
+            else:
+                norm_type = "None"
             
             # Queue for decoded audio chunks - bounded to provide backpressure
             # Limits memory growth when decode outruns playback on long streams
@@ -800,14 +940,37 @@ class AudioRouter:
                         # Try to decode incrementally when we have enough data
                         while len(mp3_buffer) >= MIN_DECODE_BUFFER:
                             try:
-                                # Try to decode the current buffer
-                                audio_buffer = io.BytesIO(bytes(mp3_buffer))
-                                data, sr = sf.read(audio_buffer, dtype=np.float32)
+                                # Use ffmpeg for reliable MP3 decoding
+                                try:
+                                    data, sr = self._decode_mp3_audio(bytes(mp3_buffer), target_sr)
+                                    # ffmpeg decodes all available data, so we clear the buffer
+                                    consumed = len(mp3_buffer)
+                                except RuntimeError as decode_err:
+                                    # Check if it's a partial decode situation
+                                    if "produced no output" in str(decode_err):
+                                        # Not enough data yet, wait for more
+                                        break
+                                    # For other errors, try soundfile as fallback
+                                    try:
+                                        import soundfile as sf
+                                        audio_buffer = io.BytesIO(bytes(mp3_buffer))
+                                        data, sr = sf.read(audio_buffer, dtype=np.float32)
+                                        consumed = audio_buffer.tell()
+                                        if data.size == 0 or consumed == 0:
+                                            break
+                                    except Exception:
+                                        # Decoding failed, increment failure counter
+                                        consecutive_decode_failures[0] += 1
+                                        if consecutive_decode_failures[0] >= MAX_CONSECUTIVE_DECODE_FAILURES:
+                                            logger.error("Too many consecutive decode failures (%d), aborting decode", 
+                                                       consecutive_decode_failures[0])
+                                            decode_error[0] = RuntimeError(f"Too many consecutive decode failures ({MAX_CONSECUTIVE_DECODE_FAILURES})")
+                                            stream_ended[0] = True
+                                            audio_queue.put(None)
+                                            return
+                                        break
                                 
-                                # Calculate how many bytes were consumed
-                                consumed = audio_buffer.tell()
-                                
-                                if data.size > 0 and consumed > 0:
+                                if data.size > 0:
                                     # Reset consecutive decode failures on success
                                     consecutive_decode_failures[0] = 0
                                     
@@ -825,11 +988,8 @@ class AudioRouter:
                                     if norm_type != "None":
                                         data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
                                     
-                                    # Convert to stereo if needed
-                                    if len(data.shape) == 1 and stereo_width > 0:
-                                        data = self._stereo_enhancement(data, width=stereo_width)
-                                    elif len(data.shape) == 1:
-                                        # Convert to stereo without enhancement for consistent output
+                                    # Ensure stereo for consistent output
+                                    if len(data.shape) == 1:
                                         data = np.column_stack((data, data))
                                     
                                     # Queue for playback with backpressure handling
@@ -855,7 +1015,7 @@ class AudioRouter:
                                     # Couldn't decode yet, wait for more data
                                     break
                                     
-                            except Exception:
+                            except Exception as e:
                                 # Decoding failed, increment failure counter
                                 consecutive_decode_failures[0] += 1
                                 
@@ -874,8 +1034,7 @@ class AudioRouter:
                     # Decode any remaining data in the buffer
                     if len(mp3_buffer) > 0:
                         try:
-                            audio_buffer = io.BytesIO(bytes(mp3_buffer))
-                            data, sr = sf.read(audio_buffer, dtype=np.float32)
+                            data, sr = self._decode_audio_data(bytes(mp3_buffer), target_sr)
                             
                             if data.size > 0:
                                 # Resample if needed
@@ -889,10 +1048,8 @@ class AudioRouter:
                                 if norm_type != "None":
                                     data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
                                 
-                                # Convert to stereo if needed
-                                if len(data.shape) == 1 and stereo_width > 0:
-                                    data = self._stereo_enhancement(data, width=stereo_width)
-                                elif len(data.shape) == 1:
+                                # Ensure stereo for consistent output
+                                if len(data.shape) == 1:
                                     data = np.column_stack((data, data))
                                 
                                 # Queue for playback
