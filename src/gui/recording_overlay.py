@@ -110,8 +110,16 @@ class RecordingOverlay(ctk.CTkToplevel):
         )
         self._text_label.pack(side="left", fill="x", expand=True)
     
-    def _position_bottom_right(self):
-        """Position the overlay at the bottom-right corner of the screen."""
+    def _position_bottom_right(self, taskbar_offset: int = 60):
+        """
+        Position the overlay at the bottom-right corner of the screen.
+        
+        Args:
+            taskbar_offset: Pixels to offset from bottom of screen to account for taskbar.
+                           Default 60px works for Windows with default taskbar.
+                           Use 0 for auto-hide taskbar or fullscreen apps.
+                           Use ~30 for macOS (menu bar at top, no bottom taskbar).
+        """
         self.update_idletasks()
         
         # Get screen dimensions
@@ -125,7 +133,7 @@ class RecordingOverlay(ctk.CTkToplevel):
         # Calculate position (bottom-right with margin)
         margin = 20
         x = screen_width - overlay_width - margin
-        y = screen_height - overlay_height - margin - 60  # Account for taskbar
+        y = screen_height - overlay_height - margin - taskbar_offset
         
         self.geometry(f"+{x}+{y}")
     

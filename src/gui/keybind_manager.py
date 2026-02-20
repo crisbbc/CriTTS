@@ -88,15 +88,20 @@ class KeybindManager:
         # Check if this is a text widget and the keybind would interfere with text editing
         if hasattr(widget, 'tag_add'):  # This is likely a text widget
             # For text widgets, only trigger keybinds that are not standard text editing keys
-            # Allow Ctrl+T (clear), etc. but not Ctrl+A, Ctrl+C, etc.
+            # Allow Ctrl+T (clear), Ctrl+S (speak), etc. but not Ctrl+A, Ctrl+C, etc.
             keysym = getattr(event, 'keysym', '').lower()
             state = getattr(event, 'state', 0)
             is_ctrl = (state & 0x4) != 0  # Control key is pressed
             
-            # Standard text editing shortcuts that should not trigger keybinds
-            text_editing_keys = {
-                'a', 'c', 'v', 'x', 'z', 'y', 's', 'o', 'n', 'w', 'f', 'h', 'g'
-            }
+            # Standard clipboard/undo shortcuts that should not trigger keybinds
+            # Narrowed to only the essential text editing shortcuts:
+            # - a: select all
+            # - c: copy
+            # - v: paste
+            # - x: cut
+            # - z: undo
+            # - y: redo
+            text_editing_keys = {'a', 'c', 'v', 'x', 'z', 'y'}
             
             # If Ctrl is pressed and the key is a text editing key, don't trigger keybind
             if is_ctrl and keysym in text_editing_keys:
@@ -129,9 +134,16 @@ class KeybindManager:
         try:
             info = self._registered_keybinds[keybind_string]
             tk_format = info['tk_format']
+            bind_id = info.get('bind_id')
             
-            # Use unbind_all to properly remove bind_all bindings
-            root.unbind_all(tk_format)
+            # Use unbind with the specific bind_id to avoid removing third-party bindings
+            # This is safer than unbind_all which removes ALL bindings for that key sequence
+            if bind_id is not None:
+                root.unbind(tk_format, bind_id)
+            else:
+                # Fallback to unbind_all only if bind_id wasn't stored (legacy compatibility)
+                root.unbind_all(tk_format)
+            
             del self._registered_keybinds[keybind_string]
             
             # Remove from keybind-to-actions mapping
@@ -153,9 +165,14 @@ class KeybindManager:
         for keybind_string, info in list(self._registered_keybinds.items()):
             try:
                 tk_format = info.get('tk_format')
+                bind_id = info.get('bind_id')
                 if tk_format:
-                    # Use unbind_all to properly remove bind_all bindings
-                    root.unbind_all(tk_format)
+                    # Use unbind with the specific bind_id to avoid removing third-party bindings
+                    if bind_id is not None:
+                        root.unbind(tk_format, bind_id)
+                    else:
+                        # Fallback to unbind_all only if bind_id wasn't stored (legacy compatibility)
+                        root.unbind_all(tk_format)
             except Exception:
                 pass
         
@@ -255,77 +272,18 @@ class KeybindManager:
         """
         Check if a keybind string is valid with comprehensive validation.
         
+        Delegates to the shared validation utility in keybind_utils to avoid
+        code duplication and ensure consistent validation across the application.
+        
         Args:
             keybind_string: Keybind to validate
             
         Returns:
             True if valid, False otherwise
         """
-        if not keybind_string or not isinstance(keybind_string, str):
-            return False
+        from ..utils.keybind_utils import validate_keybind_format
         
-        # Strip whitespace
-        keybind_string = keybind_string.strip()
-        if not keybind_string:
-            return False
-        
-        # Basic format check - should contain only valid characters
-        pattern = r'^[A-Za-z0-9+\-_=,\.\/;\'\[\]\\`~!@#$%^&*(){}|:<>? ]+$'
-        if not re.match(pattern, keybind_string):
-            return False
-        
-        # Check for critical system shortcuts
-        normalized = keybind_string.lower().replace(' ', '')
-        critical_shortcuts = ['alt+f4', 'ctrl+alt+delete', 'win+l', 'win+r', 'win+e', 'ctrl+shift+esc']
-        if any(cs in normalized for cs in critical_shortcuts):
-            return False
-        
-        # Check for reasonable length
-        if len(keybind_string) > 50:
-            return False
-        
-        # Parse parts and validate
-        parts = [part.strip().lower() for part in keybind_string.split('+')]
-        
-        # Check for at least one non-modifier key
-        has_non_modifier = False
-        valid_modifiers = {'ctrl', 'control', 'shift', 'alt', 'win', 'super'}
-        valid_keys = {
-            'enter', 'return', 'space', 'escape', 'esc', 'tab', 'backspace',
-            'delete', 'del', 'insert', 'home', 'end', 'pageup', 'pagedown',
-            'up', 'down', 'left', 'right', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6',
-            'f7', 'f8', 'f9', 'f10', 'f11', 'f12', 'comma', 'period', 'slash',
-            'semicolon', 'quote', 'backslash', 'bracketleft', 'bracketright',
-            'minus', 'equal', 'grave', 'plus', 'asterisk', 'question', 'exclam',
-            'at', 'numbersign', 'dollar', 'percent', 'asciicircum', 'ampersand',
-            'parenleft', 'parenright', 'underscore', 'braceleft', 'braceright',
-            'bar', 'colon', 'less', 'greater', 'question', 'tilde'
-        }
-        
-        for part in parts:
-            if part not in valid_modifiers:
-                if len(part) == 1 and part.isalnum():
-                    has_non_modifier = True
-                elif part in valid_keys:
-                    has_non_modifier = True
-                else:
-                    return False
-        
-        # Should have at least one non-modifier key
-        if not has_non_modifier:
-            return False
-        
-        # Should not have duplicate modifiers
-        modifier_parts = [part for part in parts if part in valid_modifiers]
-        if len(set(modifier_parts)) != len(modifier_parts):
-            return False
-        
-        # Validate that the parsed Tkinter format is not empty
-        tk_format = self.parse_keybind(keybind_string)
-        if not tk_format:
-            return False
-        
-        return True
+        return validate_keybind_format(keybind_string)
     
     def check_duplicate_keybind(self, keybind_string: str, current_action: str = None) -> list:
         """

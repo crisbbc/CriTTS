@@ -1314,6 +1314,27 @@ class MainWindow:
         if self._overlay_visible and self._recording_overlay:
             self._recording_overlay.set_recording(False)
     
+    def on_stt_auto_stop(self):
+        """
+        Handle STT auto-stop event (called from STTEngine when buffer limit is hit).
+        
+        This method is called from the audio callback thread, so it uses root.after
+        to safely update the UI on the main thread.
+        """
+        # Schedule UI update on main thread
+        self.root.after(0, self._handle_stt_auto_stop)
+    
+    def _handle_stt_auto_stop(self):
+        """Handle STT auto-stop on the main thread."""
+        # Update recording state
+        self._stt_recording = False
+        
+        # Restore voice button to idle state
+        self._restore_voice_button()
+        
+        # Update status to inform user
+        self._set_status("⚠ Recording auto-stopped (5 min limit reached)", "⚠️")
+    
     def _update_ui_speaking(self, speaking: bool):
         """Update UI state based on speaking status with smooth animations."""
         if speaking:

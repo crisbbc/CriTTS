@@ -56,14 +56,16 @@ class STTEngine:
     # Maximum recording duration in seconds to prevent unbounded memory growth
     _MAX_RECORDING_DURATION_SECONDS = 300  # 5 minutes max
     
-    def __init__(self, settings_manager=None):
+    def __init__(self, settings_manager=None, on_auto_stop: Callable[[], None] = None):
         """
         Initialize the STT engine.
         
         Args:
             settings_manager: SettingsManager instance for accessing STT settings
+            on_auto_stop: Optional callback fired when recording auto-stops due to buffer limit
         """
         self.settings_manager = settings_manager
+        self._on_auto_stop = on_auto_stop
         self.recognizer = sr.Recognizer()
         self._is_listening_event = threading.Event()  # Thread-safe flag for cross-thread visibility
         self._audio_buffer: List[np.ndarray] = []
@@ -147,6 +149,14 @@ class STTEngine:
             # Reset listening flag before stopping the stream (thread-safe)
             # This ensures UI state is correct when the stream stops
             self._is_listening_event.clear()
+            # Notify UI of auto-stop via callback (if registered)
+            # Must be called before raising CallbackStop since the callback
+            # runs in the audio thread and won't execute after the exception
+            if self._on_auto_stop:
+                try:
+                    self._on_auto_stop()
+                except Exception as e:
+                    logger.warning("on_auto_stop callback raised exception: %s", e)
             # Signal stop by raising an exception in the callback
             # This will stop the stream
             raise sd.CallbackStop()

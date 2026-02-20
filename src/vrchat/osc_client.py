@@ -91,7 +91,7 @@ class VRChatOSCClient:
         message: str,
         play_notification_sound: bool = True,
         show_keyboard: bool = False,
-        priority: bool = False
+        bypass_rate_limit: bool = False
     ) -> bool:
         """
         Send a message to VRChat's chatbox.
@@ -100,10 +100,14 @@ class VRChatOSCClient:
             message: The text message to send
             play_notification_sound: Whether to play the notification sound
             show_keyboard: Whether to show the keyboard (typing indicator)
-            priority: If True, bypass rate limit (for actual messages vs typing animation)
+            bypass_rate_limit: If True, skip VRChat's ~1.5s rate limit check.
+                              Use for actual messages that should override typing animation.
+                              Leave False for typing animation frames to respect rate limits.
             
         Returns:
-            True if message sent successfully, False otherwise
+            True if message sent successfully, False if rate-limited or not connected.
+            Note: Returns False for rate-limit skips, which is expected behavior for
+            typing animation - the caller should continue the animation loop.
         """
         if not self.is_connected():
             logger.warning("Cannot send message: OSC client not connected")
@@ -114,8 +118,9 @@ class VRChatOSCClient:
             return False
         
         # Rate limit guard - VRChat enforces ~1.5s between chatbox messages
-        # Priority messages bypass this limit (actual messages override typing animation)
-        if not priority:
+        # Messages with bypass_rate_limit=True skip this check (e.g., actual messages
+        # that should immediately replace typing animation text)
+        if not bypass_rate_limit:
             elapsed = time.time() - self._last_chatbox_send_time
             if elapsed < self.CHATBOX_MIN_INTERVAL:
                 logger.debug("Chatbox rate limit: skipping send (%.2fs remaining)", self.CHATBOX_MIN_INTERVAL - elapsed)
@@ -160,13 +165,13 @@ class VRChatOSCClient:
         """
         Clear the VRChat chatbox by sending an empty message.
         
-        Uses priority=True to bypass rate limiting, ensuring the clear
+        Uses bypass_rate_limit=True to bypass rate limiting, ensuring the clear
         operation always succeeds even if called shortly after another message.
         
         Returns:
             True if cleared successfully, False otherwise
         """
-        return self.send_to_chatbox("", play_notification_sound=False, show_keyboard=False, priority=True)
+        return self.send_to_chatbox("", play_notification_sound=False, show_keyboard=False, bypass_rate_limit=True)
 
     def send_typing_indicator(self, is_typing: bool) -> bool:
         """

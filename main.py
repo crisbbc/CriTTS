@@ -100,7 +100,7 @@ class CriTTSApp(ctk.CTk):
         # Audio router
         self.audio_router = AudioRouter()
         
-        # STT engine - for voice input
+        # STT engine - for voice input (on_auto_stop will be set after main_window is created)
         self.stt_engine = STTEngine(settings_manager=self.settings_manager)
         
         # Settings window reference
@@ -137,6 +137,9 @@ class CriTTSApp(ctk.CTk):
             icon_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "image.ico"),
             stt_engine=self.stt_engine
         )
+        
+        # Wire STT auto-stop callback to main_window's handler
+        self.stt_engine._on_auto_stop = self.main_window.on_stt_auto_stop
         
         # Schedule VBCable check after window is rendered
         self.after(500, self._check_vbcable)
@@ -314,6 +317,9 @@ class CriTTSApp(ctk.CTk):
     def _signal_handler(self, _signum, _frame):
         """Handle termination signals."""
         self._cleanup()
+        # Schedule destroy on the main loop before exiting
+        # This prevents TclError from a still-running Tkinter mainloop
+        self.after(0, self.destroy)
         sys.exit(0)
     
     def _on_close(self):

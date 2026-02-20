@@ -189,26 +189,44 @@ class AudioCache:
             logger.warning("Failed to save cache index: %s", e)
     
     def _rebuild_index(self):
-        """Rebuild cache index from disk files."""
+        """
+        Rebuild cache index from disk files.
+        
+        Scans for .mp3 files and creates minimal metadata entries.
+        Individual .meta.json files are no longer used - all metadata
+        is stored in the centralized cache_index.json file.
+        """
         self._index = OrderedDict()
         
         try:
+            # Scan for audio files and create minimal entries
+            for audio_file in self.cache_dir.glob("*.mp3"):
+                try:
+                    key = audio_file.stem
+                    # Create minimal metadata from file stats
+                    stat = audio_file.stat()
+                    self._index[key] = {
+                        "text": "",  # Unknown after rebuild
+                        "voice": "",  # Unknown after rebuild
+                        "rate": 0,
+                        "volume": 100,
+                        "pitch": 0,
+                        "size_bytes": stat.st_size,
+                        "created": stat.st_mtime,
+                        "last_access": stat.st_mtime,
+                        "access_count": 0,
+                        "generation_time": 0
+                    }
+                except Exception as e:
+                    logger.debug("Failed to index audio file %s: %s", audio_file, e)
+            
+            # Clean up any orphaned .meta.json files from older versions
             for meta_file in self.cache_dir.glob("*.meta.json"):
                 try:
-                    with open(meta_file, 'r', encoding='utf-8') as f:
-                        entry = json.load(f)
-                    
-                    key = meta_file.stem.replace(".meta", "")
-                    cache_path = self.cache_dir / f"{key}.mp3"
-                    
-                    if cache_path.exists():
-                        self._index[key] = entry
-                    else:
-                        # Remove orphaned meta file
-                        meta_file.unlink()
-                        
-                except Exception as e:
-                    logger.debug("Failed to load meta file %s: %s", meta_file, e)
+                    meta_file.unlink()
+                    logger.debug("Removed orphaned meta file: %s", meta_file)
+                except OSError:
+                    pass
             
             self._save_index()
             logger.info("Rebuilt cache index with %d entries", len(self._index))
@@ -325,7 +343,7 @@ class AudioCache:
                 with open(cache_path, 'wb') as f:
                     f.write(audio_data)
                 
-                # Create metadata
+                # Create metadata (stored in centralized index, not individual files)
                 meta = {
                     "text": text[:200],  # Truncate for storage
                     "voice": voice,
@@ -339,12 +357,7 @@ class AudioCache:
                     "generation_time": generation_time
                 }
                 
-                # Save metadata
-                meta_path = self.cache_dir / f"{key}.meta.json"
-                with open(meta_path, 'w', encoding='utf-8') as f:
-                    json.dump(meta, f, indent=2)
-                
-                # Update index
+                # Update index (metadata is stored in cache_index.json, not individual .meta.json files)
                 self._index[key] = meta
                 self._index.move_to_end(key)
                 self._dirty = True  # Mark index as modified

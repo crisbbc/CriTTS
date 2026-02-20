@@ -250,10 +250,14 @@ class SettingsManager:
             # Map friendly name to short_name
             self._settings["voice"] = self._voices_mapping[voice]
             logger.info("Migrated voice setting '%s' to '%s'", voice, self._settings["voice"])
+            # Persist the migration immediately to avoid re-running on next launch
+            self.save_settings()
         else:
             # No mapping available - fall back to default
             logger.warning("Could not map voice '%s' to short_name; resetting to default", voice)
             self._settings["voice"] = self.DEFAULT_SETTINGS["voice"]
+            # Persist the migration immediately to avoid re-running on next launch
+            self.save_settings()
     
     def save_settings(self):
         """Save current settings to JSON file."""
@@ -370,5 +374,30 @@ class SettingsManager:
             appearance = self._settings.get("appearance_mode")
             if appearance not in ["Dark", "Light", "System"]:
                 issues.append(f"Invalid appearance mode: {appearance}")
+            
+            # Check numeric range settings
+            rate = self._settings.get("rate")
+            if not isinstance(rate, (int, float)) or not (-100 <= rate <= 100):
+                issues.append(f"Rate out of range (-100 to 100): {rate}")
+            
+            volume = self._settings.get("volume")
+            if not isinstance(volume, (int, float)) or not (0 <= volume <= 100):
+                issues.append(f"Volume out of range (0 to 100): {volume}")
+            
+            pitch = self._settings.get("pitch")
+            if not isinstance(pitch, (int, float)) or not (-100 <= pitch <= 100):
+                issues.append(f"Pitch out of range (-100 to 100): {pitch}")
+            
+            cache_size = self._settings.get("audio_cache_max_size_mb")
+            if not isinstance(cache_size, (int, float)) or cache_size <= 0:
+                issues.append(f"Audio cache size must be positive: {cache_size}")
+            
+            silence_threshold = self._settings.get("stt_silence_threshold")
+            if not isinstance(silence_threshold, (int, float)) or silence_threshold < 0:
+                issues.append(f"STT silence threshold must be non-negative: {silence_threshold}")
+            
+            mic_passthrough_volume = self._settings.get("mic_passthrough_volume")
+            if not isinstance(mic_passthrough_volume, (int, float)) or not (0 <= mic_passthrough_volume <= 200):
+                issues.append(f"Mic passthrough volume out of range (0 to 200): {mic_passthrough_volume}")
         
         return issues

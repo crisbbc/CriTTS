@@ -223,24 +223,6 @@ def get_color_for_state(state: str) -> str:
     return color_map.get(state, COLOR_STATUS_IDLE)
 
 
-def get_elevation_shadow(elevation: int) -> dict:
-    """
-    Get shadow properties for elevation level.
-    
-    Args:
-        elevation: Elevation level (0-4)
-    
-    Returns:
-        Dictionary with shadow properties (for reference)
-    """
-    shadows = {
-        0: {"blur": 0, "spread": 0, "color": "transparent"},
-        1: {"blur": 4, "spread": 0, "color": "rgba(0,0,0,0.1)"},
-        2: {"blur": 8, "spread": 0, "color": "rgba(0,0,0,0.12)"},
-        3: {"blur": 16, "spread": 0, "color": "rgba(0,0,0,0.14)"},
-        4: {"blur": 24, "spread": 0, "color": "rgba(0,0,0,0.16)"},
-    }
-    return shadows.get(elevation, shadows[0])
 
 
 def get_theme_colors(mode: str) -> dict:
