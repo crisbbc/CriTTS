@@ -105,8 +105,8 @@ FONT_3XL = 32   # Hero text
 
 # Font weights
 FONT_WEIGHT_NORMAL = "normal"
-FONT_WEIGHT_MEDIUM = "normal"  # CustomTkinter doesn't support medium
 FONT_WEIGHT_BOLD = "bold"
+# Note: CustomTkinter doesn't support medium weight, only normal and bold
 
 # Line heights (for reference, CTk doesn't directly support)
 LINE_HEIGHT_TIGHT = 1.25

@@ -18,6 +18,9 @@ class STTEngine:
     using Google Web Speech API (free, no API key required).
     """
     
+    # Maximum recording duration in seconds to prevent unbounded memory growth
+    _MAX_RECORDING_DURATION_SECONDS = 300  # 5 minutes max
+    
     def __init__(self, settings_manager=None):
         """
         Initialize the STT engine.
@@ -32,8 +35,10 @@ class STTEngine:
         self._sample_rate = 16000  # Standard sample rate for speech recognition
         self._stream: Optional[sd.InputStream] = None
         self._lock = threading.Lock()
+        self._buffer_size_bytes = 0  # Track total buffer size for memory limit
+        self._max_buffer_bytes = self._MAX_RECORDING_DURATION_SECONDS * self._sample_rate * 2  # 2 bytes per sample (int16)
         
-        logger.info("STT Engine initialized")
+        logger.info("STT Engine initialized (max recording duration: %d seconds)", self._MAX_RECORDING_DURATION_SECONDS)
     
     def start_listening(self) -> bool:
         """
@@ -48,8 +53,9 @@ class STTEngine:
                 return False
             
             try:
-                # Clear the audio buffer
+                # Clear the audio buffer and reset size counter
                 self._audio_buffer = []
+                self._buffer_size_bytes = 0
                 
                 # Get microphone device index from settings
                 device_index = None
@@ -94,8 +100,22 @@ class STTEngine:
         if status:
             logger.warning(f"Audio stream status: {status}")
         
+        # Check if buffer size limit would be exceeded
+        chunk_size_bytes = indata.nbytes
+        if self._buffer_size_bytes + chunk_size_bytes > self._max_buffer_bytes:
+            # Stop recording to prevent memory exhaustion
+            logger.error(
+                "Recording buffer exceeded maximum size (%d seconds), stopping recording. "
+                "Recording may be incomplete.",
+                self._MAX_RECORDING_DURATION_SECONDS
+            )
+            # Signal stop by raising an exception in the callback
+            # This will stop the stream
+            raise sd.CallbackStop()
+        
         # Append a copy of the audio data to the buffer
         self._audio_buffer.append(indata.copy())
+        self._buffer_size_bytes += chunk_size_bytes
     
     def stop_and_transcribe(
         self,

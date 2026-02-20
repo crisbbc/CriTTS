@@ -6,8 +6,7 @@ a common interface for TTS services like Edge TTS.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Union, Any
-import asyncio
+from typing import Dict, List, Any
 
 
 class TTSProvider(ABC):

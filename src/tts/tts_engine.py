@@ -2,14 +2,12 @@
 TTS Engine Module
 Async wrapper around edge_tts library for text-to-speech generation.
 """
-import edge_tts
 import asyncio
 import threading
 from typing import List, Dict, Optional, Tuple
 import time
 import logging
 import re
-from functools import lru_cache
 from pathlib import Path
 
 from .providers.edge_tts_provider import EdgeTTSProvider
@@ -558,7 +556,7 @@ class TTSEngine:
             try:
                 settings_manager = self._get_settings()
                 current_voice = settings_manager.get("voice", "en-US-AriaNeural")
-            except:
+            except Exception:
                 current_voice = "en-US-AriaNeural"
         
         # Extract language from voice short name
@@ -666,13 +664,11 @@ class TTSEngine:
         
         # Auto-select voice if requested and provider supports it
         actual_voice = voice
-        voice_changed = False
         
         if auto_select_voice:
             suggested_voice = self.get_optimal_voice_for_text(text)
             if suggested_voice and suggested_voice != voice:
                 actual_voice = suggested_voice
-                voice_changed = True
                 logger.info(f"Auto-selected voice '{actual_voice}' for text language")
         
         # Check settings for auto language detection (only for Edge TTS)
@@ -688,13 +684,11 @@ class TTSEngine:
                     custom_voice = self._get_custom_language_voice(text, detected_voice)
                     if custom_voice:
                         actual_voice = custom_voice
-                        voice_changed = True
                         logger.info(f"Using custom language voice '{actual_voice}' for text")
                     else:
                         actual_voice = detected_voice
-                        voice_changed = True
                         logger.info(f"Auto-detected language voice '{actual_voice}' for text")
-        except:
+        except Exception:
             pass
         
         # Validate voice before generation (cached)
@@ -847,7 +841,7 @@ class TTSEngine:
                     # Check if user has a custom voice mapping for this language
                     custom_voice = self._get_custom_language_voice(text, detected_voice)
                     actual_voice = custom_voice if custom_voice else detected_voice
-        except:
+        except Exception:
             pass
         
         # Validate voice before streaming

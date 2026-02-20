@@ -109,7 +109,7 @@ class AudioCache:
                     if meta_path.exists():
                         try:
                             meta_path.unlink()
-                        except:
+                        except OSError:
                             pass
             
             logger.info(f"Loaded {len(self._index)} cached audio entries")
@@ -376,7 +376,7 @@ class AudioCache:
                             cache_path.unlink()
                         if meta_path.exists():
                             meta_path.unlink()
-                    except:
+                    except OSError:
                         pass
                 
                 self._index.clear()

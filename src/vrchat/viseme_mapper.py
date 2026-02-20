@@ -305,7 +305,7 @@ class VisemeMapper:
             if not self._stop_event.is_set():
                 try:
                     send_callback(int(Viseme.SIL))
-                except:
+                except Exception:
                     pass
         
         self._viseme_thread = threading.Thread(target=animate, daemon=True)
@@ -364,7 +364,7 @@ class AmplitudeAnalyzer:
             # Try float32 first (common for processed audio)
             try:
                 samples = np.frombuffer(audio_data, dtype=np.float32)
-            except:
+            except (ValueError, TypeError):
                 # Fall back to int16
                 samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
             

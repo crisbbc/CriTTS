@@ -4,14 +4,13 @@ Handles audio device enumeration and routing audio to specific output devices.
 """
 import threading
 import queue
+import re
 import sounddevice as sd
 import numpy as np
 import io
 import asyncio
 import logging
 import subprocess
-import tempfile
-import os
 from typing import List, Dict, Optional, Tuple
 from scipy import signal
 from math import gcd
@@ -65,7 +64,6 @@ class AudioRouter:
                 })
         
         # Multi-pass deduplication (same logic as get_input_devices)
-        import re
         
         # Pass 1: Exact name deduplication (case-insensitive)
         seen_names_lower = {}
@@ -155,7 +153,6 @@ class AudioRouter:
         
         # Pass 2: Remove host API suffixes and check for duplicates
         # Patterns: "Device Name [MME]", "Device Name [DirectSound]", "Device Name [WASAPI]"
-        import re
         host_api_pattern = re.compile(r'\s*\[(?:MME|DirectSound|WASAPI|WDM-KS|ASIO)\]\s*$', re.IGNORECASE)
         
         # Map base names (without host API suffix) to devices
@@ -455,7 +452,6 @@ class AudioRouter:
             else:
                 # Extract native sample rate from ffmpeg stderr output
                 # Look for patterns like "Stream #0:0: Audio: mp3, 44100 Hz, stereo"
-                import re
                 stderr_text = stderr.decode('utf-8', errors='replace') if stderr else ''
                 sr_match = re.search(r'(\d+)\s*Hz', stderr_text)
                 if sr_match:
@@ -827,7 +823,7 @@ class AudioRouter:
                         self._current_amplitude = amp
                         try:
                             self._amplitude_callback(amp)
-                        except:
+                        except Exception:
                             pass
                     
                     data = data[chunksize:]
@@ -838,7 +834,7 @@ class AudioRouter:
                     if self._amplitude_callback:
                         try:
                             self._amplitude_callback(0.0)
-                        except:
+                        except Exception:
                             pass
                     raise sd.CallbackStop()
             
@@ -886,7 +882,8 @@ class AudioRouter:
         processing_profile: str = "balanced",
         stop_event=None,
         enable_normalization: bool = True,
-        normalization_type: str = "Peak"
+        normalization_type: str = "Peak",
+        amplitude_callback=None
     ) -> bool:
         """
         Play streaming audio data to a specific output device.
@@ -903,6 +900,7 @@ class AudioRouter:
             stop_event: Optional threading.Event to signal stop
             enable_normalization: Whether to apply normalization
             normalization_type: Type of normalization ("Peak", "RMS", "LUFS", or "None")
+            amplitude_callback: Optional callback for real-time amplitude updates
             
         Returns:
             True if playback succeeded, False otherwise.
@@ -915,7 +913,7 @@ class AudioRouter:
             
             # Get profile settings
             profile_settings = self._get_profile_settings(processing_profile)
-            target_sr = profile_settings["sample_rate"] or sample_rate
+            target_sr = profile_settings["sample_rate"]  # None for fast_preview means no resampling
             kaiser_beta = profile_settings["kaiser_beta"]
             stereo_width = profile_settings["stereo_width"]
             
@@ -933,6 +931,7 @@ class AudioRouter:
             playback_finished = th.Event()
             decode_error = [None]
             stream_ended = [False]  # Track when generator is exhausted
+            stream_sample_rate = [None]  # Track actual sample rate for fast_preview mode
             
             # Accumulated MP3 data for decoding - need enough for valid MP3 frames
             mp3_buffer = bytearray()
@@ -1005,7 +1004,8 @@ class AudioRouter:
                                     mp3_buffer = mp3_buffer[consumed:]
                                     
                                     # Resample if needed (before normalization for correct LUFS)
-                                    if sr != target_sr:
+                                    # Skip resampling when target_sr is None (fast_preview profile)
+                                    if target_sr is not None and sr != target_sr:
                                         data = self._resample_high_quality(data, sr, target_sr, kaiser_beta)
                                         effective_sr = target_sr
                                     else:
@@ -1014,6 +1014,10 @@ class AudioRouter:
                                     # Apply normalization
                                     if norm_type != "None":
                                         data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
+                                    
+                                    # Apply stereo enhancement for mono data before converting to stereo
+                                    if len(data.shape) == 1 and stereo_width > 0:
+                                        data = self._stereo_enhancement(data, width=stereo_width)
                                     
                                     # Ensure stereo for consistent output
                                     if len(data.shape) == 1:
@@ -1034,6 +1038,10 @@ class AudioRouter:
                                             # Queue is full, loop back and check stop_event
                                             # This provides backpressure - decoder waits for playback to catch up
                                             continue
+                                    
+                                    # Track the sample rate for stream creation (needed for fast_preview)
+                                    if stream_sample_rate[0] is None:
+                                        stream_sample_rate[0] = effective_sr
                                     
                                     # Signal that playback can start
                                     if not playback_started.is_set():
@@ -1065,7 +1073,8 @@ class AudioRouter:
                             
                             if data.size > 0:
                                 # Resample if needed
-                                if sr != target_sr:
+                                # Skip resampling when target_sr is None (fast_preview profile)
+                                if target_sr is not None and sr != target_sr:
                                     data = self._resample_high_quality(data, sr, target_sr, kaiser_beta)
                                     effective_sr = target_sr
                                 else:
@@ -1074,6 +1083,10 @@ class AudioRouter:
                                 # Apply normalization
                                 if norm_type != "None":
                                     data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
+                                
+                                # Apply stereo enhancement for mono data before converting to stereo
+                                if len(data.shape) == 1 and stereo_width > 0:
+                                    data = self._stereo_enhancement(data, width=stereo_width)
                                 
                                 # Ensure stereo for consistent output
                                 if len(data.shape) == 1:
@@ -1113,7 +1126,13 @@ class AudioRouter:
                     try:
                         chunk = audio_queue.get_nowait()
                         if chunk is None:
-                            # End of stream
+                            # End of stream - reset amplitude
+                            self._current_amplitude = 0.0
+                            if amplitude_callback:
+                                try:
+                                    amplitude_callback(0.0)
+                                except Exception:
+                                    pass
                             raise sd.CallbackStop()
                     except queue.Empty:
                         # No data available yet, output silence
@@ -1127,9 +1146,25 @@ class AudioRouter:
                     remaining = chunk[frames:]
                     if len(remaining) > 0:
                         leftover[0] = remaining
+                    # Calculate amplitude for this chunk
+                    if self._amplitude_callback:
+                        amp = self._calculate_chunk_amplitude(chunk[:frames])
+                        self._current_amplitude = amp
+                        try:
+                            self._amplitude_callback(amp)
+                        except Exception:
+                            pass
                 else:
                     outdata[:len(chunk)] = chunk
                     outdata[len(chunk):] = 0
+                    # Calculate amplitude for this chunk
+                    if amplitude_callback:
+                        amp = self._calculate_chunk_amplitude(chunk)
+                        self._current_amplitude = amp
+                        try:
+                            amplitude_callback(amp)
+                        except Exception:
+                            pass
             
             # Start decode task
             decode_task = asyncio.create_task(decode_chunks())
@@ -1146,10 +1181,19 @@ class AudioRouter:
             if decode_error[0]:
                 return False
             
+            # Determine the sample rate for the output stream
+            # For fast_preview (target_sr is None), use the tracked native sample rate
+            # For other profiles, use the target sample rate from profile settings
+            output_sr = target_sr if target_sr is not None else stream_sample_rate[0]
+            
+            if output_sr is None:
+                logger.error("Could not determine sample rate for playback stream")
+                return False
+            
             # Start playback stream
             self._current_stream = sd.OutputStream(
                 device=device_index,
-                samplerate=target_sr,
+                samplerate=output_sr,
                 channels=2,
                 callback=audio_callback,
                 finished_callback=lambda: playback_finished.set()
@@ -1544,7 +1588,7 @@ class AudioRouter:
             
             self._passthrough_active = True
             
-            logger.info("Microphone passthrough started (input=%s, output=%s, sample_rate=%d, volume=%.2f, blocksize=%d)",
+            logger.info("Microphone passthrough started (input=%s, output=%s, sample_rate=%s, volume=%.2f, blocksize=%d)",
                        input_device_index, output_device_index, chosen_sr, volume, self._PASSTHROUGH_BLOCKSIZE)
             return (True, None)
             

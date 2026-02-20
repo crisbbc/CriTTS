@@ -4,6 +4,7 @@ Handles JSON-based configuration persistence for user settings.
 """
 import json
 import os
+import re
 import logging
 import threading
 from pathlib import Path
@@ -203,7 +204,6 @@ class SettingsManager:
         # Check for parameter-like patterns that shouldn't be in text settings
         # Use anchored patterns to catch corrupted TTS parameter strings while
         # allowing normal sentences that contain these words mid-sentence
-        import re
         param_patterns = [
             r'^rate\s*=',      # Matches "rate=" at start of string or line
             r'^volume\s*=',
@@ -327,7 +327,6 @@ class SettingsManager:
             return False
         
         # Basic format check - should contain only valid characters
-        import re
         pattern = r'^[A-Za-z0-9+\-_=,\.\/;\'\[\]\\`~!@#$%^&*(){}|:<>? ]+$'
         if not re.match(pattern, keybind_string):
             return False

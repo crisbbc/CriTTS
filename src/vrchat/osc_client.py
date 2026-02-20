@@ -3,12 +3,12 @@ VRChat OSC Client Module
 Handles sending messages to VRChat's chatbox via OSC protocol.
 """
 
-import threading
 import logging
 import time
 from typing import Optional, Callable
 from pythonosc import udp_client
-from pythonosc.osc_message_builder import OscMessageBuilder
+
+logger = logging.getLogger(__name__)
 
 
 class VRChatOSCClient:
@@ -44,16 +44,7 @@ class VRChatOSCClient:
         
         self._client: Optional[udp_client.SimpleUDPClient] = None
         self._connected = False
-        self._logger = logging.getLogger('vrchat_osc')
         self._last_chatbox_send_time: float = 0.0
-        
-        # Setup logging
-        if not self._logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
-            self._logger.addHandler(handler)
-            self._logger.setLevel(logging.INFO)
     
     def connect(self) -> bool:
         """
@@ -65,7 +56,7 @@ class VRChatOSCClient:
         try:
             self._client = udp_client.SimpleUDPClient(self.ip, self.port)
             self._connected = True
-            self._logger.info(f"OSC client connected to {self.ip}:{self.port}")
+            logger.info(f"OSC client connected to {self.ip}:{self.port}")
             
             if self.status_callback:
                 self.status_callback("OSC: Connected", False)
@@ -73,7 +64,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            self._logger.error(f"Failed to connect OSC client: {e}")
+            logger.error(f"Failed to connect OSC client: {e}")
             self._connected = False
             
             if self.status_callback:
@@ -85,7 +76,7 @@ class VRChatOSCClient:
         """Close the OSC client connection."""
         self._connected = False
         self._client = None
-        self._logger.info("OSC client disconnected")
+        logger.info("OSC client disconnected")
         
         if self.status_callback:
             self.status_callback("OSC: Disconnected", False)
@@ -114,7 +105,7 @@ class VRChatOSCClient:
             True if message sent successfully, False otherwise
         """
         if not self.is_connected():
-            self._logger.warning("Cannot send message: OSC client not connected")
+            logger.warning("Cannot send message: OSC client not connected")
             
             if self.status_callback:
                 self.status_callback("OSC: Not connected", True)
@@ -126,7 +117,7 @@ class VRChatOSCClient:
         if not priority:
             elapsed = time.time() - self._last_chatbox_send_time
             if elapsed < self.CHATBOX_MIN_INTERVAL:
-                self._logger.debug(f"Chatbox rate limit: skipping send ({self.CHATBOX_MIN_INTERVAL - elapsed:.2f}s remaining)")
+                logger.debug(f"Chatbox rate limit: skipping send ({self.CHATBOX_MIN_INTERVAL - elapsed:.2f}s remaining)")
                 return False
         
         try:
@@ -144,7 +135,7 @@ class VRChatOSCClient:
             
             # Only append "..." if message was truncated
             display_msg = message[:50] + "..." if len(message) > 50 else message
-            self._logger.info(f"Sent message to chatbox (notification_sound={play_sound_int}): {display_msg}")
+            logger.info(f"Sent message to chatbox (notification_sound={play_sound_int}): {display_msg}")
             
             if self.status_callback:
                 self.status_callback("OSC: Message sent", False)
@@ -152,7 +143,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            self._logger.error(f"Failed to send OSC message: {e}")
+            logger.error(f"Failed to send OSC message: {e}")
             
             if self.status_callback:
                 self.status_callback(f"OSC: Send failed - {e}", True)
@@ -179,7 +170,7 @@ class VRChatOSCClient:
             True if message sent successfully, False otherwise
         """
         if not self.is_connected():
-            self._logger.warning("Cannot send typing indicator: OSC client not connected")
+            logger.warning("Cannot send typing indicator: OSC client not connected")
             
             if self.status_callback:
                 self.status_callback("OSC: Not connected", True)
@@ -190,7 +181,7 @@ class VRChatOSCClient:
             # VRChat expects the typing indicator as a boolean argument to /chatbox/typing
             self._client.send_message("/chatbox/typing", [is_typing])
             
-            self._logger.info(f"Sent typing indicator: {is_typing}")
+            logger.info(f"Sent typing indicator: {is_typing}")
             
             if self.status_callback:
                 self.status_callback(f"OSC: Typing indicator {'on' if is_typing else 'off'}", False)
@@ -198,7 +189,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            self._logger.error(f"Failed to send typing indicator: {e}")
+            logger.error(f"Failed to send typing indicator: {e}")
             
             if self.status_callback:
                 self.status_callback(f"OSC: Typing indicator failed - {e}", True)
@@ -231,7 +222,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            self._logger.debug(f"Failed to send viseme: {e}")
+            logger.debug(f"Failed to send viseme: {e}")
             return False
     
     def send_voice_amplitude(self, amplitude: float) -> bool:
@@ -257,7 +248,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            self._logger.debug(f"Failed to send voice amplitude: {e}")
+            logger.debug(f"Failed to send voice amplitude: {e}")
             return False
     
     def send_avatar_parameter(self, parameter_name: str, value) -> bool:
@@ -284,7 +275,7 @@ class VRChatOSCClient:
             return True
             
         except Exception as e:
-            self._logger.debug(f"Failed to send avatar parameter: {e}")
+            logger.debug(f"Failed to send avatar parameter: {e}")
             return False
 
     def test_connection(self) -> tuple[bool, str]:
@@ -331,7 +322,7 @@ class VRChatOSCClient:
             reconnect_needed = True
         
         if reconnect_needed and self.is_connected():
-            self._logger.info("Reconnecting with new settings...")
+            logger.info("Reconnecting with new settings...")
             self.disconnect()
             self.connect()
     

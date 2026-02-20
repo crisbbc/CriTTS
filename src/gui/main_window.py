@@ -729,20 +729,14 @@ class MainWindow:
         self._pulse_label(self.voice_indicator_value, duration)
     
     def _pulse_label(self, label, duration: float):
-        """Create a subtle pulse animation for a label."""
-        steps = 8
-        delay = int((duration * 1000) / steps)
-        current_alpha = 0.5
+        """Create a subtle pulse animation for a label.
         
-        def pulse_step():
-            nonlocal current_alpha
-            current_alpha += 0.125
-            if current_alpha >= 1.0:
-                current_alpha = 1.0
-            else:
-                self.root.after(delay, pulse_step)
-        
-        pulse_step()
+        Note: CustomTkinter doesn't support alpha/opacity animation directly.
+        This method is kept as a placeholder for potential future enhancements.
+        """
+        # CustomTkinter doesn't support alpha interpolation
+        # The label is already visible with the new text/color
+        pass
 
 
     
@@ -1058,6 +1052,9 @@ class MainWindow:
             # Update status
             self.root.after(0, lambda: self._set_status("Streaming speech...", "🔊"))
             
+            # Check if voice amplitude feature is enabled for VRChat
+            voice_amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
+            
             # Start viseme animation if enabled (use estimated duration for streaming)
             if self._viseme_mapper is not None and self.osc_client is not None:
                 # Estimate duration based on text length and speech rate
@@ -1067,17 +1064,35 @@ class MainWindow:
                 if rate != 0:
                     estimated_duration *= (100 - rate) / 100
                 
+                # Get amplitude callback if enabled
+                amplitude_callback = None
+                if voice_amplitude_enabled and self._amplitude_analyzer is not None:
+                    amplitude_callback = self._amplitude_analyzer.get_amplitude
+                
                 self._viseme_mapper.start_viseme_animation(
                     text, 
                     self.osc_client.send_viseme, 
                     duration=estimated_duration,
-                    speech_rate=rate
+                    speech_rate=rate,
+                    amplitude_callback=amplitude_callback
                 )
             
             # Create the audio chunk generator
             audio_generator = self.tts_engine.stream_speech(
                 text, voice, rate, volume, pitch, self._stop_event
             )
+            
+            # Create amplitude callback for streaming playback if VRChat voice amplitude is enabled
+            streaming_amplitude_callback = None
+            if voice_amplitude_enabled and self._amplitude_analyzer is not None and self.osc_client is not None:
+                def streaming_amplitude_callback_with_osc(amplitude: float):
+                    """Update amplitude analyzer and forward to VRChat OSC during streaming."""
+                    # Update the local amplitude analyzer (for viseme intensity)
+                    self._amplitude_analyzer.update_amplitude(amplitude)
+                    # Forward amplitude to VRChat
+                    if self.osc_client:
+                        self.osc_client.send_voice_amplitude(amplitude)
+                streaming_amplitude_callback = streaming_amplitude_callback_with_osc
             
             # Play streaming audio
             success = await self.audio_router.play_audio_streaming(
@@ -1087,7 +1102,8 @@ class MainWindow:
                 processing_profile,
                 self._stop_event,
                 enable_normalization,
-                normalization_type
+                normalization_type,
+                amplitude_callback=streaming_amplitude_callback
             )
             
             return success
@@ -1320,16 +1336,6 @@ class MainWindow:
     
     def _animate_button_color(self, button, target_color: str, duration: float):
         """Animate button color transition."""
-        steps = 15
-        delay = int((duration * 1000) / steps)
-        
-        # Get current color (if exists)
-        try:
-            current_color = button.cget("fg_color") or "#34495e"
-        except:
-            current_color = "#34495e"
-        
-        # Simple color transition by changing opacity effect
         # CustomTkinter doesn't support direct color interpolation, so we use a pulse effect
         self._pulse_button(button, target_color, duration)
     
@@ -1351,7 +1357,6 @@ class MainWindow:
     def _set_status(self, message: str, icon: str = "", message_type: str = "info"):
         """Update status message with enhanced formatting and visual indicators."""
         # Format message with timestamp for better logging
-        import datetime
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         formatted_message = f"[{timestamp}] {message}"
         

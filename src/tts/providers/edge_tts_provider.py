@@ -2,7 +2,6 @@ import asyncio
 import edge_tts
 from typing import List, Dict, Any, Optional
 from . import TTSProvider
-from ..text_preprocessor import TextPreprocessor
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,7 +13,6 @@ class EdgeTTSProvider(TTSProvider):
         self._voice_cache = None
         self._cache_time = 0
         self._cache_duration = 300  # 5 minutes
-        self._text_preprocessor = TextPreprocessor()
         self._settings_manager = settings_manager
     
     def _format_prosody_parameters(self, rate: int, volume: int, pitch: int) -> tuple:
@@ -105,7 +103,7 @@ class EdgeTTSProvider(TTSProvider):
         """Generate speech from text using Edge TTS.
         
         Args:
-            text: Text to synthesize
+            text: Text to synthesize (already preprocessed by TTS engine)
             voice: Voice identifier (short name)
             rate: Speech rate adjustment (-100 to 100, 0 is normal)
             volume: Volume level (0 to 100, 100 is normal)
@@ -118,10 +116,6 @@ class EdgeTTSProvider(TTSProvider):
         MAX_RETRIES = 3
         RETRY_DELAY = 1.0  # seconds
         
-        # Preprocess text with abbreviations from settings
-        abbreviations = self._settings_manager.get("abbreviations", {}) if self._settings_manager else {}
-        processed_text = self._text_preprocessor.preprocess_text(text, abbreviations)
-        
         # Format prosody parameters for edge-tts
         rate_str, volume_str, pitch_str = self._format_prosody_parameters(rate, volume, pitch)
         
@@ -131,7 +125,7 @@ class EdgeTTSProvider(TTSProvider):
             try:
                 # Generate speech with prosody parameters
                 communicate = edge_tts.Communicate(
-                    processed_text, 
+                    text, 
                     voice,
                     rate=rate_str,
                     volume=volume_str,
@@ -175,7 +169,7 @@ class EdgeTTSProvider(TTSProvider):
         TTS generation is complete.
         
         Args:
-            text: Text to synthesize
+            text: Text to synthesize (already preprocessed by TTS engine)
             voice: Voice identifier (short name)
             rate: Speech rate adjustment (-100 to 100, 0 is normal)
             volume: Volume level (0 to 100, 100 is normal)
@@ -185,10 +179,6 @@ class EdgeTTSProvider(TTSProvider):
         Yields:
             Audio bytes chunks in MP3 format
         """
-        # Preprocess text with abbreviations from settings
-        abbreviations = self._settings_manager.get("abbreviations", {}) if self._settings_manager else {}
-        processed_text = self._text_preprocessor.preprocess_text(text, abbreviations)
-        
         # Format prosody parameters for edge-tts
         rate_str, volume_str, pitch_str = self._format_prosody_parameters(rate, volume, pitch)
         
@@ -197,7 +187,7 @@ class EdgeTTSProvider(TTSProvider):
         try:
             # Generate speech with prosody parameters
             communicate = edge_tts.Communicate(
-                processed_text, 
+                text, 
                 voice,
                 rate=rate_str,
                 volume=volume_str,
