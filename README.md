@@ -87,6 +87,7 @@ python main.py
 ```
 customtkinter
 edge-tts>=7.2.3
+langid>=1.1.6
 sounddevice
 soundfile>=0.12.0
 numpy>=1.21.0
@@ -270,12 +271,24 @@ CriTTS/
     │   └── audio_router.py        # Audio device routing & processing
     ├── stt/
     │   └── stt_engine.py          # Speech-to-text engine
+    ├── utils/
+    │   ├── language_detector.py   # Language detection for auto voice selection
+    │   └── keybind_utils.py       # Keybind utility functions
     ├── gui/
     │   ├── main_window.py         # Main application window
     │   ├── settings_window.py     # Settings dialog
     │   ├── keybind_manager.py     # Dynamic keybind registration
     │   ├── theme_constants.py     # UI theme & layout constants
-    │   └── recording_overlay.py   # Recording state overlay
+    │   ├── recording_overlay.py   # Recording state overlay
+    │   └── settings_tabs/         # Settings tab components
+    │       ├── voice_tab.py           # Voice selection & customization
+    │       ├── audio_output_tab.py    # Audio device & normalization
+    │       ├── appearance_tab.py      # Theme & button visibility
+    │       ├── abbreviations_tab.py   # Text expansion shortcuts
+    │       ├── keybinds_tab.py        # Keyboard shortcuts
+    │       ├── behavior_tab.py        # Speak mode & language detection
+    │       ├── vrchat_osc_tab.py      # VRChat OSC integration
+    │       └── advanced_tab.py        # Cache & processing profiles
     └── vrchat/
         ├── osc_client.py          # VRChat OSC client
         └── viseme_mapper.py       # Phoneme-to-viseme mapping
