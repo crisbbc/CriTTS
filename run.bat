@@ -52,7 +52,7 @@ if exist "%SCRIPT_DIR%venv\Scripts\activate.bat" (
     echo [INFO] Virtual environment found. Activating...
     call "%SCRIPT_DIR%venv\Scripts\activate.bat"
     REM After activating venv, check if requirements are satisfied
-    python -c "import customtkinter, speech_recognition, sounddevice, edge_tts" >nul 2>&1
+    python -c "import customtkinter, edge_tts, langid, sounddevice, soundfile, numpy, scipy, pyloudnorm, pythonosc, speech_recognition, keyboard" >nul 2>&1
     if errorlevel 1 (
         echo [WARN] Some dependencies are missing or outdated.
         echo [INFO] Installing dependencies from requirements.txt...
@@ -68,7 +68,7 @@ if exist "%SCRIPT_DIR%venv\Scripts\activate.bat" (
     )
 ) else (
     REM Check if all required packages are installed
-    python -c "import customtkinter, speech_recognition, sounddevice, edge_tts" >nul 2>&1
+    python -c "import customtkinter, edge_tts, langid, sounddevice, soundfile, numpy, scipy, pyloudnorm, pythonosc, speech_recognition, keyboard" >nul 2>&1
     if errorlevel 1 (
         echo [WARN] Some dependencies are missing or outdated.
         echo [INFO] Installing dependencies from requirements.txt...

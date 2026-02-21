@@ -53,7 +53,7 @@ echo "[OK] pip is available."
 
 # Function to check if all requirements are satisfied
 check_requirements() {
-    $PYTHON_CMD -c "import customtkinter, speech_recognition, sounddevice, edge_tts" >/dev/null 2>&1
+    $PYTHON_CMD -c "import customtkinter, edge_tts, langid, sounddevice, soundfile, numpy, scipy, pyloudnorm, pythonosc, speech_recognition, keyboard" >/dev/null 2>&1
     return $?
 }
 
