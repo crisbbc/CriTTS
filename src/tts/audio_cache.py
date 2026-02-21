@@ -432,6 +432,9 @@ class AudioCache:
         if removed_count > 0:
             logger.info("Cache cleanup: removed %d entries, freed %.2f MB", removed_count, removed_size / (1024*1024))
             self._save_index()
+            # Reset state after cleanup to ensure consistency
+            self._dirty = False
+            self._store_count = 0
     
     def clear(self) -> bool:
         """

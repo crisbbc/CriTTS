@@ -74,6 +74,7 @@ class STTEngine:
         self._lock = threading.Lock()
         self._buffer_size_bytes = 0  # Track total buffer size for memory limit
         self._max_buffer_bytes = self._MAX_RECORDING_DURATION_SECONDS * self._sample_rate * 2  # 2 bytes per sample (int16)
+        self._auto_stopped_event = threading.Event()  # Thread-safe flag for auto-stop signaling
         
         logger.info("STT Engine initialized (max recording duration: %d seconds)", self._MAX_RECORDING_DURATION_SECONDS)
     
@@ -93,6 +94,7 @@ class STTEngine:
                 # Clear the audio buffer and reset size counter
                 self._audio_buffer = []
                 self._buffer_size_bytes = 0
+                self._auto_stopped_event.clear()  # Reset auto-stop flag (thread-safe)
                 
                 # Get microphone device index from settings
                 device_index = None
@@ -133,6 +135,11 @@ class STTEngine:
             _frames: Number of frames (unused, required by callback signature)
             _time_info: Time information (unused, required by callback signature)
             status: Status flags
+        
+        Note:
+            This callback runs in a high-priority PortAudio thread. To avoid
+            audio glitches and potential deadlocks, we minimize work here and
+            use a thread-safe flag instead of calling Python callbacks directly.
         """
         if status:
             logger.warning("Audio stream status: %s", status)
@@ -146,17 +153,12 @@ class STTEngine:
                 "Recording may be incomplete.",
                 self._MAX_RECORDING_DURATION_SECONDS
             )
-            # Reset listening flag before stopping the stream (thread-safe)
-            # This ensures UI state is correct when the stream stops
+            # Reset listening flag (thread-safe operation)
+            # The main thread polls this flag via the is_listening property
             self._is_listening_event.clear()
-            # Notify UI of auto-stop via callback (if registered)
-            # Must be called before raising CallbackStop since the callback
-            # runs in the audio thread and won't execute after the exception
-            if self._on_auto_stop:
-                try:
-                    self._on_auto_stop()
-                except Exception as e:
-                    logger.warning("on_auto_stop callback raised exception: %s", e)
+            # Set thread-safe event to signal auto-stop occurred - the main thread will
+            # handle the callback via polling in stop_and_transcribe
+            self._auto_stopped_event.set()
             # Signal stop by raising an exception in the callback
             # This will stop the stream
             raise sd.CallbackStop()
@@ -480,6 +482,23 @@ class STTEngine:
     def is_listening(self) -> bool:
         """Check if currently recording."""
         return self._is_listening_event.is_set()
+    
+    def check_auto_stopped(self) -> bool:
+        """
+        Check if recording was auto-stopped due to buffer limit.
+        
+        This method should be called from the main thread to safely check
+        if the audio callback triggered an auto-stop. If True, the caller
+        should handle the UI update and call the on_auto_stop callback.
+        
+        Returns:
+            True if auto-stop occurred, False otherwise
+        """
+        return self._auto_stopped_event.is_set()
+    
+    def clear_auto_stopped(self):
+        """Clear the auto-stop flag after handling."""
+        self._auto_stopped_event.clear()
     
     def shutdown(self):
         """

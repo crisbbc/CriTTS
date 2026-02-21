@@ -2369,7 +2369,7 @@ Examples:
                         text_color="red"
                     ).pack(pady=5)
             except Exception as e:
-                logger.error(f"Error clearing cache: {e}")
+                logger.error("Error clearing cache: %s", e)
         
         buttons_frame = ctk.CTkFrame(confirm_dialog, fg_color="transparent")
         buttons_frame.pack(pady=20)
@@ -2426,7 +2426,7 @@ Examples:
             else:
                 self.cache_stats_text.insert("1.0", "TTS engine not available.")
         except Exception as e:
-            logger.error(f"Error getting cache statistics: {e}")
+            logger.error("Error getting cache statistics: %s", e)
             self.cache_stats_text.insert("1.0", f"Error retrieving cache statistics: {e}")
         
         self.cache_stats_text.configure(state="disabled")

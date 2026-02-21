@@ -148,14 +148,22 @@ class EdgeTTSProvider(TTSProvider):
                 return audio_data
                 
             except Exception as e:
-                error_str = str(e)
-                # Check if this is an HTTP 500 error and we have retries left
-                if "500" in error_str and attempt < MAX_RETRIES - 1:
-                    logger.warning("Edge TTS returned 500, retrying (attempt %d/%d)...", attempt + 1, MAX_RETRIES)
-                    await asyncio.sleep(RETRY_DELAY)
+                error_str = str(e).lower()
+                # Check if this is a retryable error (transient network/server issues)
+                # Retryable errors include: HTTP 500, timeouts, connection errors, network issues
+                is_retryable = any(keyword in error_str for keyword in [
+                    '500', '502', '503', '504',  # Server errors
+                    'timeout', 'timed out',      # Timeout errors
+                    'connection', 'connect',     # Connection errors
+                    'network', 'reset', 'unreachable', 'temporarily'  # Network issues
+                ])
+                
+                if is_retryable and attempt < MAX_RETRIES - 1:
+                    logger.warning("Edge TTS error (retryable): %s, retrying (attempt %d/%d)...", e, attempt + 1, MAX_RETRIES)
+                    await asyncio.sleep(RETRY_DELAY * (attempt + 1))  # Exponential backoff
                     continue
                 else:
-                    # Non-500 error or final attempt - log and raise
+                    # Non-retryable error or final attempt - log and raise
                     logger.error("Error generating Edge TTS speech: %s", e)
                     raise
     

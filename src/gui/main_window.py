@@ -11,6 +11,8 @@ import time
 import datetime
 import logging
 
+from collections import OrderedDict
+
 from ..tts.text_preprocessor import TextPreprocessor
 from ..gui.keybind_manager import KeybindManager
 from ..vrchat import VRChatOSCClient
@@ -83,8 +85,10 @@ class MainWindow:
         # STT (Voice Input) state
         self._stt_recording = False
         
-        # Abbreviation expansion cache: (input_text) -> expanded_text
-        self._abbreviation_cache = {}
+        # Abbreviation expansion cache with LRU eviction
+        # Uses OrderedDict to implement LRU: most recently used items at the end
+        self._abbreviation_cache: OrderedDict = OrderedDict()
+        self._abbreviation_cache_max_size = 100
         
         # Initialize OSC client
         self.osc_client: Optional[VRChatOSCClient] = None
@@ -496,9 +500,9 @@ class MainWindow:
                     self.root, keybind_string, callback, action_name
                 )
                 if not success:
-                    logger.warning(f"Failed to register keybind for '{action_name}': '{keybind_string}'")
+                    logger.warning("Failed to register keybind for '%s': '%s'", action_name, keybind_string)
             except Exception as e:
-                logger.warning(f"Error registering keybind for '{action_name}': {e}")
+                logger.warning("Error registering keybind for '%s': %s", action_name, e)
         
         # Also bind each keybind directly to text_input widget (widget-level binding)
         # This overrides the Text widget's class bindings (e.g., Ctrl+T transpose)
@@ -517,7 +521,7 @@ class MainWindow:
                     self.text_input.bind(tk_format, lambda e, cb=callback: self._handle_widget_keybind(e, cb))
                     self._text_widget_bound_sequences.append(tk_format)
             except Exception as e:
-                logger.warning(f"Error binding widget-level keybind for '{action_name}': {e}")
+                logger.warning("Error binding widget-level keybind for '%s': %s", action_name, e)
         
         # Setup global hotkeys if enabled
         self._setup_global_hotkeys()
@@ -565,13 +569,13 @@ class MainWindow:
                 )
                 if success:
                     registered_count += 1
-                    logger.debug(f"Registered global hotkey for '{action_name}': '{keybind_string}'")
+                    logger.debug("Registered global hotkey for '%s': '%s'", action_name, keybind_string)
                 else:
-                    logger.warning(f"Failed to register global hotkey for '{action_name}': '{keybind_string}'")
+                    logger.warning("Failed to register global hotkey for '%s': '%s'", action_name, keybind_string)
             except Exception as e:
-                logger.warning(f"Error registering global hotkey for '{action_name}': {e}")
+                logger.warning("Error registering global hotkey for '%s': %s", action_name, e)
         
-        logger.info(f"Registered {registered_count} global hotkeys")
+        logger.info("Registered %d global hotkeys", registered_count)
     
     def _handle_widget_keybind(self, event, callback):
         """Handle widget-level keybind event."""
@@ -873,17 +877,19 @@ class MainWindow:
             self._show_error("Current line is empty. Please type some text.")
             return
         
-        # Get abbreviations from settings and expand text (with cache)
+        # Get abbreviations from settings and expand text (with LRU cache)
         abbreviations = self.settings.get("abbreviations", {})
         if abbreviations:
             # Use a stable, content-based cache key instead of id()
             cache_key = (text, tuple(sorted(abbreviations.items())))
             if cache_key in self._abbreviation_cache:
-                processed_text = self._abbreviation_cache[cache_key]
+                # Cache hit: move to end (most recently used) for LRU
+                processed_text = self._abbreviation_cache.pop(cache_key)
+                self._abbreviation_cache[cache_key] = processed_text
             else:
-                # Cap cache size to prevent unbounded memory growth
-                if len(self._abbreviation_cache) > 100:
-                    self._abbreviation_cache.clear()
+                # Cache miss: evict oldest (first) item if at capacity
+                while len(self._abbreviation_cache) >= self._abbreviation_cache_max_size:
+                    self._abbreviation_cache.popitem(last=False)
                 processed_text = self._text_preprocessor.expand_abbreviations(text, abbreviations)
                 self._abbreviation_cache[cache_key] = processed_text
         else:

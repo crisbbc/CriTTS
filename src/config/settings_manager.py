@@ -61,6 +61,8 @@ class SettingsManager:
         "speak_mode": "all_text",
         "auto_language_detection": False,
         "language_voice_mappings": {},
+        "language_detection_confidence_threshold": 0.3,  # Minimum confidence for language detection (0.0-1.0)
+        "language_detection_min_length": 5,  # Minimum text length for language detection
         
         # Audio Cache Settings
         "audio_cache_enabled": True,

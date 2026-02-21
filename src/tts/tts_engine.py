@@ -14,13 +14,8 @@ from .providers.edge_tts_provider import EdgeTTSProvider
 from .audio_cache import AudioCache, PhraseTracker
 from ..config.settings_manager import SettingsManager
 
-# langdetect import with graceful degradation
-try:
-    from langdetect import detect as langdetect_detect, LangDetectException
-    _LANGDETECT_AVAILABLE = True
-except ImportError:
-    _LANGDETECT_AVAILABLE = False
-    LangDetectException = Exception  # Fallback for type hints
+# Import the new language detector module
+from ..utils.language_detector import LanguageDetector, detect_language, get_detector
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +38,7 @@ class TTSEngine:
         self._cache_duration: float = 300  # Cache voices for 5 minutes
         self._voice_cache = {}  # Cache for voice validation
         self._text_cache = {}  # Cache for text processing
+        self._text_cache_lock = threading.Lock()  # Lock for thread-safe cache access
         
         # Initialize providers - pass settings_manager to avoid per-call SettingsManager instantiation
         self._edge_tts_provider = EdgeTTSProvider(settings_manager=self._settings_manager)
@@ -302,11 +298,15 @@ class TTSEngine:
         short_names = {v.get("short_name") for v in voices if v.get("short_name")}
         is_valid = voice_short_name in short_names
         
-        # Update cache with size limit
+        # Update cache with efficient batch eviction when full
         if len(self._voice_cache) >= self._max_cache_size:
-            # Remove oldest entry
-            oldest_key = next(iter(self._voice_cache))
-            del self._voice_cache[oldest_key]
+            # Remove 10% of entries (minimum 1) for better performance
+            # than single-entry eviction on every insert
+            entries_to_remove = max(1, self._max_cache_size // 10)
+            for _ in range(entries_to_remove):
+                if self._voice_cache:
+                    oldest_key = next(iter(self._voice_cache))
+                    del self._voice_cache[oldest_key]
         
         self._voice_cache[voice_short_name] = is_valid
         return is_valid
@@ -326,8 +326,11 @@ class TTSEngine:
         # Use cached preprocessing for repeated text
         # Include voice in cache key so number words are regenerated when voice changes
         cache_key = (text.strip(), voice or "default")
-        if cache_key in self._text_cache:
-            return self._text_cache[cache_key]
+        
+        # Thread-safe cache lookup
+        with self._text_cache_lock:
+            if cache_key in self._text_cache:
+                return self._text_cache[cache_key]
         
         # Text preprocessing for better TTS quality
         processed_text = text
@@ -345,12 +348,13 @@ class TTSEngine:
         # Note: No hard truncation - edge_tts handles long inputs without a documented
         # 2000-character limit. If issues arise, consider chunking instead.
         
-        # Update cache with size limit
-        if len(self._text_cache) >= self._max_cache_size:
-            oldest_key = next(iter(self._text_cache))
-            del self._text_cache[oldest_key]
+        # Thread-safe cache update with size limit
+        with self._text_cache_lock:
+            if len(self._text_cache) >= self._max_cache_size:
+                oldest_key = next(iter(self._text_cache))
+                del self._text_cache[oldest_key]
+            self._text_cache[cache_key] = processed_text
         
-        self._text_cache[cache_key] = processed_text
         return processed_text
     
     def _expand_common_abbreviations(self, text: str) -> str:
@@ -1101,82 +1105,67 @@ class TTSEngine:
         text_lower = text.lower()
         
         # Calculate the length of letters-only text for minimum length guard
-        letters_only = re.sub(r'[^a-zA-ZÀ-ÿ\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u0400-\u04ff\u0600-\u06ff\u0900-\u097f]', '', text)
-        letters_only_length = len(letters_only)
+        # Also perform single-pass script detection for non-Latin scripts
+        letters_only_length = 0
         
-        # Script-based detection (high weight - very reliable)
-        # Chinese characters (Simplified and Traditional)
         for char in text:
-            if '\u4e00' <= char <= '\u9fff' or '\u3400' <= char <= '\u4dbf' or '\uf900' <= char <= '\ufaff':
+            # Script-based detection (high weight - very reliable) - single pass
+            code = ord(char)
+            
+            # Chinese characters (Simplified and Traditional)
+            if 0x4e00 <= code <= 0x9fff or 0x3400 <= code <= 0x4dbf or 0xf900 <= code <= 0xfaff:
                 scores['zh'] += 5
-        
-        # Japanese Hiragana and Katakana
-        for char in text:
-            if '\u3040' <= char <= '\u309f':  # Hiragana
+                letters_only_length += 1
+            # Japanese Hiragana
+            elif 0x3040 <= code <= 0x309f:
                 scores['ja'] += 5
-            if '\u30a0' <= char <= '\u30ff':  # Katakana
+                letters_only_length += 1
+            # Japanese Katakana
+            elif 0x30a0 <= code <= 0x30ff:
                 scores['ja'] += 5
-        
-        # Korean Hangul
-        for char in text:
-            if '\uac00' <= char <= '\ud7af' or '\u1100' <= char <= '\u11ff' or '\u3130' <= char <= '\u318f':
+                letters_only_length += 1
+            # Korean Hangul
+            elif 0xac00 <= code <= 0xd7af or 0x1100 <= code <= 0x11ff or 0x3130 <= code <= 0x318f:
                 scores['ko'] += 5
-        
-        # Cyrillic (Russian and related)
-        for char in text:
-            if '\u0400' <= char <= '\u04ff' or '\u0500' <= char <= '\u052f':
+                letters_only_length += 1
+            # Cyrillic (Russian and related)
+            elif 0x0400 <= code <= 0x04ff or 0x0500 <= code <= 0x052f:
                 scores['ru'] += 5
-        
-        # Arabic
-        for char in text:
-            if '\u0600' <= char <= '\u06ff' or '\u0750' <= char <= '\u077f':
+                letters_only_length += 1
+            # Arabic
+            elif 0x0600 <= code <= 0x06ff or 0x0750 <= code <= 0x077f:
                 scores['ar'] += 5
-        
-        # Devanagari (Hindi)
-        for char in text:
-            if '\u0900' <= char <= '\u097f':
+                letters_only_length += 1
+            # Devanagari (Hindi)
+            elif 0x0900 <= code <= 0x097f:
                 scores['hi'] += 5
+                letters_only_length += 1
+            # Latin script letters (including extended Latin for accented characters)
+            elif char.isalpha():
+                letters_only_length += 1
         
         # Character-based indicators for Latin script languages (weight = 3)
-        # German-specific characters (ä, ö, ü - ONLY for German, not French)
+        # Single pass through lowercase text for diacritic detection
         for char in text_lower:
             if char in 'äöü':
                 scores['de'] += 3
             elif char == 'ß':
                 scores['de'] += 3
-        
-        # French-specific characters (excluding ä, ö, ü which are German-specific)
-        for char in text_lower:
-            if char in 'âêîôûëïÿ':  # French-specific diacritics (ü is German-only)
+            elif char in 'âêîôûëïÿ':  # French-specific diacritics
                 scores['fr'] += 3
             elif char in 'æœ':
                 scores['fr'] += 3
-        
-        # Portuguese-specific characters (ã, õ - unique to Portuguese)
-        for char in text_lower:
-            if char in 'ãõ':
+            elif char in 'ãõ':  # Portuguese-specific
                 scores['pt'] += 3
-        
-        # Spanish-specific character (ñ - unique to Spanish)
-        for char in text_lower:
-            if char == 'ñ':
+            elif char == 'ñ':  # Spanish-specific
                 scores['es'] += 3
-        
-        # Shared characters (ç - shared between French and Portuguese, NOT Spanish)
-        for char in text_lower:
-            if char == 'ç':
+            elif char == 'ç':  # Shared between French and Portuguese
                 scores['fr'] += 1.5
                 scores['pt'] += 1.5
-        
-        # Shared accented vowels (à, á, é, è, í, ó, ò, ú) - distribute among relevant
-        # These are common across multiple Romance languages
-        for char in text_lower:
-            if char in 'àèìòù':
-                # Italian and French use grave accent more
+            elif char in 'àèìòù':  # Grave accent - Italian and French
                 scores['it'] += 1
                 scores['fr'] += 1
-            elif char in 'áéíóú':
-                # Spanish and Portuguese use acute accent more
+            elif char in 'áéíóú':  # Acute accent - Spanish and Portuguese
                 scores['es'] += 1
                 scores['pt'] += 1
         
@@ -1212,16 +1201,18 @@ class TTSEngine:
         
         return scores
     
-    def _detect_language_voice(self, text: str, min_length: int = 15) -> Optional[str]:
+    def _detect_language_voice(self, text: str, min_length: int = 3) -> Optional[str]:
         """
         Detect language from text and return appropriate voice.
         
-        Uses langdetect as primary method with heuristic fallback.
-        Skips detection for very short texts to avoid false positives.
+        Uses the new LanguageDetector module with multi-tier detection:
+        1. Script-based detection for non-Latin scripts
+        2. langid for fast, accurate detection
+        3. Heuristic scoring as fallback
         
         Args:
             text: Input text to analyze
-            min_length: Minimum text length (stripped) for detection. Default 15.
+            min_length: Minimum text length (stripped) for detection. Default 5.
             
         Returns:
             Voice short name (e.g., 'en-US-AriaNeural') or None if text too short
@@ -1285,15 +1276,17 @@ class TTSEngine:
         
         return None
     
-    # Supported language codes for langdetect
-    _SUPPORTED_LANGUAGES = {'en', 'es', 'fr', 'de', 'it', 'pt', 'zh', 'ja', 'ko', 'ru', 'ar', 'hi'}
+    # Supported language codes for the new language detector
+    _SUPPORTED_LANGUAGES = LanguageDetector.SUPPORTED_LANGUAGES
     
     def _detect_language_from_text(self, text: str) -> Optional[str]:
         """
-        Detect language code from text using langdetect with heuristic fallback.
+        Detect language code from text using the new LanguageDetector module.
         
-        Primary: Uses langdetect library for accurate detection.
-        Fallback: Uses weighted heuristic scoring when langdetect is unavailable or fails.
+        Uses a robust multi-tier approach:
+        1. Script-based detection for non-Latin scripts (CJK, Cyrillic, Arabic, etc.)
+        2. langid for fast, accurate detection on remaining text
+        3. Heuristic scoring as fallback for edge cases
         
         Args:
             text: Input text to analyze
@@ -1304,69 +1297,17 @@ class TTSEngine:
         if not text or not text.strip():
             return None
         
-        # Check if text is primarily numbers or symbols (no clear language indicators)
-        # This handles cases like "1 2 3 4 5 6 7" or "Hello 123"
-        text_lower = text.lower()
-        text_without_numbers = re.sub(r'[0-9\s\.,!?;:()\-_]+', '', text_lower)
-        has_letters = any(c.isalpha() for c in text_without_numbers)
+        # Use the new language detector
+        try:
+            result = detect_language(text)
+            
+            if result and result.language:
+                logger.debug(f"Language detected: {result.language} (confidence: {result.confidence:.2f}, method: {result.method})")
+                return result.language
+        except Exception as e:
+            logger.debug(f"Language detection failed: {e}")
         
-        # If text has no letters or very few letters compared to numbers/symbols,
-        # return None to indicate no clear language detection
-        if not has_letters or len(text_without_numbers) < len(text_lower) * 0.3:
-            return None
-        
-        # Try langdetect first (primary method)
-        if _LANGDETECT_AVAILABLE:
-            try:
-                detected = langdetect_detect(text)
-                # langdetect uses 'zh-cn' for Chinese, map to our 'zh'
-                if detected == 'zh-cn' or detected == 'zh-tw':
-                    detected = 'zh'
-                # Check if detected language is supported
-                if detected in self._SUPPORTED_LANGUAGES:
-                    logger.debug(f"langdetect detected: {detected}")
-                    return detected
-                # If not supported, fall through to heuristic
-                logger.debug(f"langdetect detected unsupported language: {detected}, falling back to heuristic")
-            except LangDetectException as e:
-                logger.debug(f"langdetect failed: {e}, falling back to heuristic")
-            except Exception as e:
-                logger.debug(f"langdetect unexpected error: {e}, falling back to heuristic")
-        
-        # Fallback to heuristic scoring
-        scores = self._calculate_language_scores(text)
-        
-        # Find the language with the highest score and second highest for confidence gap
-        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        
-        if len(sorted_scores) < 2:
-            return 'en'  # Default to English if no scores
-        
-        max_score = sorted_scores[0][1]
-        second_score = sorted_scores[1][1]
-        detected_lang = sorted_scores[0][0]
-        
-        # Log the detection results
-        logger.debug(f"Language detection scores (heuristic): {scores}, selected: {detected_lang}")
-        
-        # Minimum confidence gap check (gap must be >= 2.0)
-        # This prevents false positives when scores are too close
-        if max_score - second_score < 2.0:
-            # Scores are too close, default to English for Latin scripts
-            has_latin = any(c.isalpha() and ord(c) < 0x0250 for c in text)
-            if has_latin:
-                return 'en'
-            return None
-        
-        # Minimum threshold to avoid false positives for non-script-based detection
-        if max_score < 5 and detected_lang not in ['zh', 'ja', 'ko', 'ru', 'ar', 'hi']:
-            # Check if there are any Latin characters at all
-            has_latin = any(c.isalpha() and ord(c) < 0x0250 for c in text)
-            if has_latin:
-                return 'en'
-            return None
-        
-        return detected_lang
+        return None
     
     def _validate_voice_exists(self, voice_short_name: str) -> bool:
         """Check if a voice exists in the available voices."""

@@ -29,6 +29,9 @@ class AudioRouter:
     # Blocksize for passthrough streams to ensure synchronized callbacks
     _PASSTHROUGH_BLOCKSIZE = 512
     
+    # Host API suffix pattern for deduplication
+    _HOST_API_PATTERN = re.compile(r'\s*\[(?:MME|DirectSound|WASAPI|WDM-KS|ASIO)\]\s*$', re.IGNORECASE)
+    
     def __init__(self):
         """Initialize the audio router."""
         self._current_stream = None
@@ -42,134 +45,47 @@ class AudioRouter:
         self._passthrough_duplex_stream: Optional[sd.Stream] = None
         self._passthrough_queue: queue.Queue = queue.Queue()
         self._passthrough_active: bool = False
+        self._passthrough_lock = threading.Lock()  # Protects passthrough state transitions
     
-    def get_audio_devices(self) -> List[Dict]:
+    @staticmethod
+    def _deduplicate_devices(devices: List[Dict]) -> List[Dict]:
         """
-        Enumerate all available audio output devices.
+        Deduplicate audio device list using multi-pass algorithm.
         
+        Handles:
+        1. Exact name matches (case-insensitive) - same device from different host APIs
+        2. Host API suffix patterns like "Device Name [MME]", "Device Name [DirectSound]"
+        3. Prefix matches - truncated vs full names
+        
+        Args:
+            devices: List of device dictionaries to deduplicate
+            
         Returns:
-            List of dictionaries with 'index', 'name', and 'channels' for each device.
+            Deduplicated and sorted list of device dictionaries
         """
-        device_list = sd.query_devices()
-        
-        # Collect all output devices first
-        all_output = []
-        for i, device in enumerate(device_list):
-            if device['max_output_channels'] > 0:
-                all_output.append({
-                    'index': i,
-                    'name': device['name'],
-                    'channels': device['max_output_channels'],
-                    'sample_rate': device['default_samplerate']
-                })
-        
-        # Multi-pass deduplication (same logic as get_input_devices)
+        if not devices:
+            return []
         
         # Pass 1: Exact name deduplication (case-insensitive)
         seen_names_lower = {}
-        for device in all_output:
+        for device in devices:
             name_lower = device['name'].lower().strip()
             if name_lower not in seen_names_lower:
                 seen_names_lower[name_lower] = device
         
         # Pass 2: Remove host API suffixes and check for duplicates
-        host_api_pattern = re.compile(r'\s*\[(?:MME|DirectSound|WASAPI|WDM-KS|ASIO)\]\s*$', re.IGNORECASE)
-        
         base_name_to_device = {}
         for device in seen_names_lower.values():
             name = device['name']
-            base_name = host_api_pattern.sub('', name).strip()
+            base_name = AudioRouter._HOST_API_PATTERN.sub('', name).strip()
             base_lower = base_name.lower()
             
             if base_lower not in base_name_to_device:
                 base_name_to_device[base_lower] = device
             else:
                 existing = base_name_to_device[base_lower]
-                existing_has_suffix = bool(host_api_pattern.search(existing['name']))
-                current_has_suffix = bool(host_api_pattern.search(name))
-                
-                if current_has_suffix and not existing_has_suffix:
-                    pass
-                elif not current_has_suffix and existing_has_suffix:
-                    base_name_to_device[base_lower] = device
-                elif len(name) < len(existing['name']):
-                    base_name_to_device[base_lower] = device
-        
-        # Pass 3: Prefix-based deduplication for truncated names
-        devices_sorted = sorted(base_name_to_device.values(), key=lambda d: len(d['name']), reverse=True)
-        
-        final_devices = []
-        for device in devices_sorted:
-            name = device['name']
-            is_duplicate = False
-            
-            for existing in final_devices:
-                existing_name = existing['name']
-                name_lower = name.lower()
-                existing_lower = existing_name.lower()
-                
-                if name_lower.startswith(existing_lower) or existing_lower.startswith(name_lower):
-                    is_duplicate = True
-                    break
-            
-            if not is_duplicate:
-                final_devices.append(device)
-        
-        final_devices.sort(key=lambda d: d['name'].lower())
-        
-        return final_devices
-    
-    def get_input_devices(self) -> List[Dict]:
-        """
-        Enumerate all available audio input devices (microphones).
-        
-        Returns:
-            List of dictionaries with 'index', 'name', 'channels', and 'sample_rate' for each device.
-        """
-        device_list = sd.query_devices()
-        
-        # Collect all input devices first
-        all_input = []
-        for i, device in enumerate(device_list):
-            if device['max_input_channels'] > 0:
-                all_input.append({
-                    'index': i,
-                    'name': device['name'],
-                    'channels': device['max_input_channels'],
-                    'sample_rate': device['default_samplerate']
-                })
-        
-        # Multi-pass deduplication to handle various duplicate scenarios:
-        # 1. Exact name matches (case-insensitive) - same device from different host APIs
-        # 2. Prefix matches - truncated vs full names
-        # 3. Host API suffix patterns like "Device Name [MME]", "Device Name [DirectSound]"
-        
-        # Pass 1: Exact name deduplication (case-insensitive)
-        seen_names_lower = {}  # lowercase name -> device dict
-        for device in all_input:
-            name_lower = device['name'].lower().strip()
-            if name_lower not in seen_names_lower:
-                seen_names_lower[name_lower] = device
-        
-        # Pass 2: Remove host API suffixes and check for duplicates
-        # Patterns: "Device Name [MME]", "Device Name [DirectSound]", "Device Name [WASAPI]"
-        host_api_pattern = re.compile(r'\s*\[(?:MME|DirectSound|WASAPI|WDM-KS|ASIO)\]\s*$', re.IGNORECASE)
-        
-        # Map base names (without host API suffix) to devices
-        base_name_to_device = {}
-        for device in seen_names_lower.values():
-            name = device['name']
-            # Remove host API suffix if present
-            base_name = host_api_pattern.sub('', name).strip()
-            base_lower = base_name.lower()
-            
-            if base_lower not in base_name_to_device:
-                base_name_to_device[base_lower] = device
-            else:
-                # Keep the one without suffix (shorter, cleaner name)
-                existing = base_name_to_device[base_lower]
-                existing_has_suffix = bool(host_api_pattern.search(existing['name']))
-                current_has_suffix = bool(host_api_pattern.search(name))
+                existing_has_suffix = bool(AudioRouter._HOST_API_PATTERN.search(existing['name']))
+                current_has_suffix = bool(AudioRouter._HOST_API_PATTERN.search(name))
                 
                 # Prefer device without host API suffix
                 if current_has_suffix and not existing_has_suffix:
@@ -192,7 +108,6 @@ class AudioRouter:
             # Check if this device's name is a prefix of or is prefixed by any existing device
             for existing in final_devices:
                 existing_name = existing['name']
-                # Check prefix relationship (case-insensitive)
                 name_lower = name.lower()
                 existing_lower = existing_name.lower()
                 
@@ -207,6 +122,50 @@ class AudioRouter:
         final_devices.sort(key=lambda d: d['name'].lower())
         
         return final_devices
+    
+    def get_audio_devices(self) -> List[Dict]:
+        """
+        Enumerate all available audio output devices.
+        
+        Returns:
+            List of dictionaries with 'index', 'name', and 'channels' for each device.
+        """
+        device_list = sd.query_devices()
+        
+        # Collect all output devices
+        all_output = []
+        for i, device in enumerate(device_list):
+            if device['max_output_channels'] > 0:
+                all_output.append({
+                    'index': i,
+                    'name': device['name'],
+                    'channels': device['max_output_channels'],
+                    'sample_rate': device['default_samplerate']
+                })
+        
+        return self._deduplicate_devices(all_output)
+    
+    def get_input_devices(self) -> List[Dict]:
+        """
+        Enumerate all available audio input devices (microphones).
+        
+        Returns:
+            List of dictionaries with 'index', 'name', 'channels', and 'sample_rate' for each device.
+        """
+        device_list = sd.query_devices()
+        
+        # Collect all input devices
+        all_input = []
+        for i, device in enumerate(device_list):
+            if device['max_input_channels'] > 0:
+                all_input.append({
+                    'index': i,
+                    'name': device['name'],
+                    'channels': device['max_input_channels'],
+                    'sample_rate': device['default_samplerate']
+                })
+        
+        return self._deduplicate_devices(all_input)
     
     def get_default_device(self) -> Optional[Dict]:
         """Get the system default output device."""
@@ -1253,84 +1212,68 @@ class AudioRouter:
             Tuple of (success: bool, error_message: Optional[str]).
             If successful, error_message will be None.
         """
-        try:
-            # Stop any existing passthrough first
-            self.stop_mic_passthrough()
+        with self._passthrough_lock:
+            # Stop any existing passthrough first (without re-acquiring lock)
+            self._stop_mic_passthrough_unlocked()
             
-            # Query native sample rates from devices for negotiation
-            input_native_sr = None
-            output_native_sr = None
-            
-            if input_device_index is not None:
-                try:
-                    input_device_info = sd.query_devices(input_device_index)
-                    input_native_sr = int(input_device_info.get('default_samplerate', sample_rate))
-                except Exception as e:
-                    logger.warning("Could not query input device sample rate: %s", e)
-            
-            if output_device_index is not None:
-                try:
-                    output_device_info = sd.query_devices(output_device_index)
-                    output_native_sr = int(output_device_info.get('default_samplerate', sample_rate))
-                except Exception as e:
-                    logger.warning("Could not query output device sample rate: %s", e)
-            
-            # Determine the best sample rate to use
-            # Priority: caller's preference > input native > output native > default
-            chosen_sr = sample_rate
-            
-            # Check if same device (treat None == None as equal)
-            same_device = (input_device_index == output_device_index)
-            
-            # ========== SAME-DEVICE PATH: Full-duplex stream ==========
-            if same_device:
-                # Duplex callback: handles both input and output atomically
-                def duplex_callback(indata, outdata, frames, time, status):
-                    try:
-                        # Direct copy with volume - no queue needed
-                        outdata[:] = indata * volume
-                    except Exception as e:
-                        logger.warning("Passthrough duplex callback error: %s", e)
-                        outdata[:] = 0
+            try:
+                # Query native sample rates from devices for negotiation
+                input_native_sr = None
+                output_native_sr = None
                 
-                # Try to open duplex stream with negotiated sample rate
-                # Attempt 1: Use caller-provided sample rate
-                try:
-                    self._passthrough_duplex_stream = sd.Stream(
-                        device=input_device_index,
-                        samplerate=chosen_sr,
-                        channels=1,
-                        dtype='float32',
-                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                        callback=duplex_callback
-                    )
-                    self._passthrough_duplex_stream.start()
-                    
-                except sd.PortAudioError as e:
-                    # Attempt 2: Use input device's native sample rate
-                    if input_native_sr is not None and input_native_sr != chosen_sr:
-                        logger.info("Retrying passthrough with input device native sample rate: %d", input_native_sr)
-                        self.stop_mic_passthrough()
-                        chosen_sr = input_native_sr
-                        
+                if input_device_index is not None:
+                    try:
+                        input_device_info = sd.query_devices(input_device_index)
+                        input_native_sr = int(input_device_info.get('default_samplerate', sample_rate))
+                    except Exception as e:
+                        logger.warning("Could not query input device sample rate: %s", e)
+                
+                if output_device_index is not None:
+                    try:
+                        output_device_info = sd.query_devices(output_device_index)
+                        output_native_sr = int(output_device_info.get('default_samplerate', sample_rate))
+                    except Exception as e:
+                        logger.warning("Could not query output device sample rate: %s", e)
+                
+                # Determine the best sample rate to use
+                # Priority: caller's preference > input native > output native > default
+                chosen_sr = sample_rate
+                
+                # Check if same device (treat None == None as equal)
+                same_device = (input_device_index == output_device_index)
+                
+                # ========== SAME-DEVICE PATH: Full-duplex stream ==========
+                if same_device:
+                    # Duplex callback: handles both input and output atomically
+                    def duplex_callback(indata, outdata, frames, time, status):
                         try:
-                            self._passthrough_duplex_stream = sd.Stream(
-                                device=input_device_index,
-                                samplerate=chosen_sr,
-                                channels=1,
-                                dtype='float32',
-                                blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                callback=duplex_callback
-                            )
-                            self._passthrough_duplex_stream.start()
+                            # Direct copy with volume - no queue needed
+                            outdata[:] = indata * volume
+                        except Exception as e:
+                            logger.warning("Passthrough duplex callback error: %s", e)
+                            outdata[:] = 0
+                    
+                    # Try to open duplex stream with negotiated sample rate
+                    # Attempt 1: Use caller-provided sample rate
+                    try:
+                        self._passthrough_duplex_stream = sd.Stream(
+                            device=input_device_index,
+                            samplerate=chosen_sr,
+                            channels=1,
+                            dtype='float32',
+                            blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                            callback=duplex_callback
+                        )
+                        self._passthrough_duplex_stream.start()
+                        
+                    except sd.PortAudioError as e:
+                        # Attempt 2: Use input device's native sample rate
+                        if input_native_sr is not None and input_native_sr != chosen_sr:
+                            logger.info("Retrying passthrough with input device native sample rate: %d", input_native_sr)
+                            self._stop_mic_passthrough_unlocked()
+                            chosen_sr = input_native_sr
                             
-                        except sd.PortAudioError as e2:
-                            # Attempt 3: Use output device's native sample rate
-                            if output_native_sr is not None and output_native_sr != chosen_sr:
-                                logger.info("Retrying passthrough with output device native sample rate: %d", output_native_sr)
-                                self.stop_mic_passthrough()
-                                chosen_sr = output_native_sr
-                                
+                            try:
                                 self._passthrough_duplex_stream = sd.Stream(
                                     device=input_device_index,
                                     samplerate=chosen_sr,
@@ -1340,269 +1283,317 @@ class AudioRouter:
                                     callback=duplex_callback
                                 )
                                 self._passthrough_duplex_stream.start()
+                                
+                            except sd.PortAudioError as e2:
+                                # Attempt 3: Use output device's native sample rate
+                                if output_native_sr is not None and output_native_sr != chosen_sr:
+                                    logger.info("Retrying passthrough with output device native sample rate: %d", output_native_sr)
+                                    self._stop_mic_passthrough_unlocked()
+                                    chosen_sr = output_native_sr
+                                    
+                                    self._passthrough_duplex_stream = sd.Stream(
+                                        device=input_device_index,
+                                        samplerate=chosen_sr,
+                                        channels=1,
+                                        dtype='float32',
+                                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                                        callback=duplex_callback
+                                    )
+                                    self._passthrough_duplex_stream.start()
+                                else:
+                                    raise e2
+                        else:
+                            raise
+                    
+                    self._passthrough_active = True
+                    
+                    logger.info("Microphone passthrough started (duplex mode, device=%s, sample_rate=%d, volume=%.2f)",
+                               input_device_index, chosen_sr, volume)
+                    return (True, None)
+                
+                # ========== DIFFERENT-DEVICE PATH: Two streams with synchronized blocksize ==========
+                
+                # Create bounded queue (smaller for tighter latency)
+                self._passthrough_queue = queue.Queue(maxsize=10)
+                
+                # Input callback: puts audio data into the queue
+                def input_callback(indata, frames, time, status):
+                    try:
+                        # Apply volume and copy data
+                        audio_chunk = indata.copy() * volume
+                        # Put into queue, drop oldest if full
+                        if self._passthrough_queue.full():
+                            try:
+                                self._passthrough_queue.get_nowait()
+                            except queue.Empty:
+                                pass
+                        self._passthrough_queue.put(audio_chunk)
+                    except Exception as e:
+                        logger.warning("Passthrough input callback error: %s", e)
+                
+                # Output callback: gets audio data from the queue
+                def output_callback(outdata, frames, time, status):
+                    try:
+                        audio_chunk = self._passthrough_queue.get_nowait()
+                        # Flatten to 1-D if needed, then reshape to (frames, 1)
+                        flat = audio_chunk.flatten()
+                        chunk_len = min(len(flat), frames)
+                        outdata[:chunk_len, 0] = flat[:chunk_len]
+                        if chunk_len < frames:
+                            outdata[chunk_len:] = 0
+                    except queue.Empty:
+                        # No data available, output silence
+                        outdata[:] = 0
+                    except Exception as e:
+                        logger.warning("Passthrough output callback error: %s", e)
+                        outdata[:] = 0
+                
+                # Pre-fill silence chunks for startup buffer
+                silence_chunk = np.zeros((self._PASSTHROUGH_BLOCKSIZE, 1), dtype='float32')
+                
+                # Helper function to clean up partially created streams
+                def cleanup_partial_streams():
+                    """Clean up any partially created streams on error."""
+                    if self._passthrough_input_stream is not None:
+                        try:
+                            self._passthrough_input_stream.stop()
+                            self._passthrough_input_stream.close()
+                        except Exception:
+                            pass
+                        self._passthrough_input_stream = None
+                    if self._passthrough_output_stream is not None:
+                        try:
+                            self._passthrough_output_stream.stop()
+                            self._passthrough_output_stream.close()
+                        except Exception:
+                            pass
+                        self._passthrough_output_stream = None
+                
+                # Try to open streams with negotiated sample rate
+                # Attempt 1: Use caller-provided sample rate
+                stream_opened = False
+                try:
+                    # Open input stream (mono) with fixed blocksize
+                    self._passthrough_input_stream = sd.InputStream(
+                        device=input_device_index,
+                        samplerate=chosen_sr,
+                        channels=1,
+                        dtype='float32',
+                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                        callback=input_callback
+                    )
+                    
+                    # Open output stream (mono) with fixed blocksize
+                    self._passthrough_output_stream = sd.OutputStream(
+                        device=output_device_index,
+                        samplerate=chosen_sr,
+                        channels=1,
+                        dtype='float32',
+                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                        callback=output_callback
+                    )
+                    
+                    # Start input stream first
+                    self._passthrough_input_stream.start()
+                    
+                    # Pre-fill queue with 2 silence chunks before starting output
+                    self._passthrough_queue.put(silence_chunk)
+                    self._passthrough_queue.put(silence_chunk)
+                    
+                    # Now start output stream
+                    self._passthrough_output_stream.start()
+                    stream_opened = True
+                    
+                except sd.PortAudioError as e:
+                    # Attempt 2: Use input device's native sample rate
+                    if input_native_sr is not None and input_native_sr != chosen_sr:
+                        logger.info("Retrying passthrough with input device native sample rate: %d", input_native_sr)
+                        cleanup_partial_streams()
+                        chosen_sr = input_native_sr
+                        
+                        try:
+                            self._passthrough_input_stream = sd.InputStream(
+                                device=input_device_index,
+                                samplerate=chosen_sr,
+                                channels=1,
+                                dtype='float32',
+                                blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                                callback=input_callback
+                            )
+                            
+                            self._passthrough_output_stream = sd.OutputStream(
+                                device=output_device_index,
+                                samplerate=chosen_sr,
+                                channels=1,
+                                dtype='float32',
+                                blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                                callback=output_callback
+                            )
+                            
+                            self._passthrough_input_stream.start()
+                            
+                            # Pre-fill queue with 2 silence chunks
+                            self._passthrough_queue.put(silence_chunk)
+                            self._passthrough_queue.put(silence_chunk)
+                            
+                            self._passthrough_output_stream.start()
+                            stream_opened = True
+                            
+                        except sd.PortAudioError as e2:
+                            # Attempt 3: Use output device's native sample rate
+                            if output_native_sr is not None and output_native_sr != chosen_sr:
+                                logger.info("Retrying passthrough with output device native sample rate: %d", output_native_sr)
+                                cleanup_partial_streams()
+                                chosen_sr = output_native_sr
+                                
+                                try:
+                                    self._passthrough_input_stream = sd.InputStream(
+                                        device=input_device_index,
+                                        samplerate=chosen_sr,
+                                        channels=1,
+                                        dtype='float32',
+                                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                                        callback=input_callback
+                                    )
+                                    
+                                    self._passthrough_output_stream = sd.OutputStream(
+                                        device=output_device_index,
+                                        samplerate=chosen_sr,
+                                        channels=1,
+                                        dtype='float32',
+                                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                                        callback=output_callback
+                                    )
+                                    
+                                    self._passthrough_input_stream.start()
+                                    
+                                    # Pre-fill queue with 2 silence chunks
+                                    self._passthrough_queue.put(silence_chunk)
+                                    self._passthrough_queue.put(silence_chunk)
+                                    
+                                    self._passthrough_output_stream.start()
+                                    stream_opened = True
+                                    
+                                except sd.PortAudioError as e3:
+                                    # Attempt 4: Use each device's native rate with resampling
+                                    # This handles the case where input and output only support different rates
+                                    if (input_native_sr is not None and output_native_sr is not None and 
+                                        input_native_sr != output_native_sr):
+                                        logger.info("Retrying passthrough with native rates (input=%d, output=%d) and resampling",
+                                                   input_native_sr, output_native_sr)
+                                        cleanup_partial_streams()
+                                        
+                                        # Store sample rates for resampling in callbacks
+                                        input_sr_for_resample = input_native_sr
+                                        output_sr_for_resample = output_native_sr
+                                        
+                                        # Resampling input callback: captures at input native rate
+                                        def resampling_input_callback(indata, frames, time, status):
+                                            try:
+                                                # Apply volume and copy data
+                                                audio_chunk = indata.copy() * volume
+                                                # Resample from input rate to output rate
+                                                resampled = self._resample_high_quality(
+                                                    audio_chunk.flatten(), 
+                                                    input_sr_for_resample, 
+                                                    output_sr_for_resample,
+                                                    kaiser_beta=5.0
+                                                )
+                                                # Reshape to match expected output format
+                                                resampled = resampled.reshape(-1, 1)
+                                                # Put into queue, drop oldest if full
+                                                if self._passthrough_queue.full():
+                                                    try:
+                                                        self._passthrough_queue.get_nowait()
+                                                    except queue.Empty:
+                                                        pass
+                                                self._passthrough_queue.put(resampled)
+                                            except Exception as e:
+                                                logger.warning("Passthrough resampling input callback error: %s", e)
+                                        
+                                        # Resampling output callback: plays at output native rate
+                                        def resampling_output_callback(outdata, frames, time, status):
+                                            try:
+                                                audio_chunk = self._passthrough_queue.get_nowait()
+                                                # Flatten to 1-D if needed, then reshape to (frames, 1)
+                                                flat = audio_chunk.flatten()
+                                                chunk_len = min(len(flat), frames)
+                                                outdata[:chunk_len, 0] = flat[:chunk_len]
+                                                if chunk_len < frames:
+                                                    outdata[chunk_len:] = 0
+                                            except queue.Empty:
+                                                # No data available, output silence
+                                                outdata[:] = 0
+                                            except Exception as e:
+                                                logger.warning("Passthrough resampling output callback error: %s", e)
+                                                outdata[:] = 0
+                                        
+                                        # Calculate appropriate blocksize for output based on resampling ratio
+                                        ratio = output_sr_for_resample / input_sr_for_resample
+                                        output_blocksize = int(self._PASSTHROUGH_BLOCKSIZE * ratio)
+                                        
+                                        self._passthrough_input_stream = sd.InputStream(
+                                            device=input_device_index,
+                                            samplerate=input_native_sr,
+                                            channels=1,
+                                            dtype='float32',
+                                            blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                                            callback=resampling_input_callback
+                                        )
+                                        
+                                        self._passthrough_output_stream = sd.OutputStream(
+                                            device=output_device_index,
+                                            samplerate=output_native_sr,
+                                            channels=1,
+                                            dtype='float32',
+                                            blocksize=output_blocksize,
+                                            callback=resampling_output_callback
+                                        )
+                                        
+                                        self._passthrough_input_stream.start()
+                                        
+                                        # Pre-fill queue with silence chunks (at output rate)
+                                        output_silence_chunk = np.zeros((output_blocksize, 1), dtype='float32')
+                                        self._passthrough_queue.put(output_silence_chunk)
+                                        self._passthrough_queue.put(output_silence_chunk)
+                                        
+                                        self._passthrough_output_stream.start()
+                                        
+                                        # Update chosen_sr for logging
+                                        chosen_sr = f"{input_native_sr}->{output_native_sr}"
+                                        stream_opened = True
+                                    else:
+                                        raise e3
                             else:
                                 raise e2
                     else:
                         raise
                 
-                self._passthrough_active = True
-                
-                logger.info("Microphone passthrough started (duplex mode, device=%s, sample_rate=%d, volume=%.2f)",
-                           input_device_index, chosen_sr, volume)
-                return (True, None)
-            
-            # ========== DIFFERENT-DEVICE PATH: Two streams with synchronized blocksize ==========
-            
-            # Create bounded queue (smaller for tighter latency)
-            self._passthrough_queue = queue.Queue(maxsize=10)
-            
-            # Input callback: puts audio data into the queue
-            def input_callback(indata, frames, time, status):
-                try:
-                    # Apply volume and copy data
-                    audio_chunk = indata.copy() * volume
-                    # Put into queue, drop oldest if full
-                    if self._passthrough_queue.full():
-                        try:
-                            self._passthrough_queue.get_nowait()
-                        except queue.Empty:
-                            pass
-                    self._passthrough_queue.put(audio_chunk)
-                except Exception as e:
-                    logger.warning("Passthrough input callback error: %s", e)
-            
-            # Output callback: gets audio data from the queue
-            def output_callback(outdata, frames, time, status):
-                try:
-                    audio_chunk = self._passthrough_queue.get_nowait()
-                    # Flatten to 1-D if needed, then reshape to (frames, 1)
-                    flat = audio_chunk.flatten()
-                    chunk_len = min(len(flat), frames)
-                    outdata[:chunk_len, 0] = flat[:chunk_len]
-                    if chunk_len < frames:
-                        outdata[chunk_len:] = 0
-                except queue.Empty:
-                    # No data available, output silence
-                    outdata[:] = 0
-                except Exception as e:
-                    logger.warning("Passthrough output callback error: %s", e)
-                    outdata[:] = 0
-            
-            # Pre-fill silence chunks for startup buffer
-            silence_chunk = np.zeros((self._PASSTHROUGH_BLOCKSIZE, 1), dtype='float32')
-            
-            # Try to open streams with negotiated sample rate
-            # Attempt 1: Use caller-provided sample rate
-            try:
-                # Open input stream (mono) with fixed blocksize
-                self._passthrough_input_stream = sd.InputStream(
-                    device=input_device_index,
-                    samplerate=chosen_sr,
-                    channels=1,
-                    dtype='float32',
-                    blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                    callback=input_callback
-                )
-                
-                # Open output stream (mono) with fixed blocksize
-                self._passthrough_output_stream = sd.OutputStream(
-                    device=output_device_index,
-                    samplerate=chosen_sr,
-                    channels=1,
-                    dtype='float32',
-                    blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                    callback=output_callback
-                )
-                
-                # Start input stream first
-                self._passthrough_input_stream.start()
-                
-                # Pre-fill queue with 2 silence chunks before starting output
-                self._passthrough_queue.put(silence_chunk)
-                self._passthrough_queue.put(silence_chunk)
-                
-                # Now start output stream
-                self._passthrough_output_stream.start()
-                
-            except sd.PortAudioError as e:
-                # Attempt 2: Use input device's native sample rate
-                if input_native_sr is not None and input_native_sr != chosen_sr:
-                    logger.info("Retrying passthrough with input device native sample rate: %d", input_native_sr)
-                    self.stop_mic_passthrough()
-                    chosen_sr = input_native_sr
+                if stream_opened:
+                    self._passthrough_active = True
                     
-                    try:
-                        self._passthrough_input_stream = sd.InputStream(
-                            device=input_device_index,
-                            samplerate=chosen_sr,
-                            channels=1,
-                            dtype='float32',
-                            blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                            callback=input_callback
-                        )
-                        
-                        self._passthrough_output_stream = sd.OutputStream(
-                            device=output_device_index,
-                            samplerate=chosen_sr,
-                            channels=1,
-                            dtype='float32',
-                            blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                            callback=output_callback
-                        )
-                        
-                        self._passthrough_input_stream.start()
-                        
-                        # Pre-fill queue with 2 silence chunks
-                        self._passthrough_queue.put(silence_chunk)
-                        self._passthrough_queue.put(silence_chunk)
-                        
-                        self._passthrough_output_stream.start()
-                        
-                    except sd.PortAudioError as e2:
-                        # Attempt 3: Use output device's native sample rate
-                        if output_native_sr is not None and output_native_sr != chosen_sr:
-                            logger.info("Retrying passthrough with output device native sample rate: %d", output_native_sr)
-                            self.stop_mic_passthrough()
-                            chosen_sr = output_native_sr
-                            
-                            try:
-                                self._passthrough_input_stream = sd.InputStream(
-                                    device=input_device_index,
-                                    samplerate=chosen_sr,
-                                    channels=1,
-                                    dtype='float32',
-                                    blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                    callback=input_callback
-                                )
-                                
-                                self._passthrough_output_stream = sd.OutputStream(
-                                    device=output_device_index,
-                                    samplerate=chosen_sr,
-                                    channels=1,
-                                    dtype='float32',
-                                    blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                    callback=output_callback
-                                )
-                                
-                                self._passthrough_input_stream.start()
-                                
-                                # Pre-fill queue with 2 silence chunks
-                                self._passthrough_queue.put(silence_chunk)
-                                self._passthrough_queue.put(silence_chunk)
-                                
-                                self._passthrough_output_stream.start()
-                                
-                            except sd.PortAudioError as e3:
-                                # Attempt 4: Use each device's native rate with resampling
-                                # This handles the case where input and output only support different rates
-                                if (input_native_sr is not None and output_native_sr is not None and 
-                                    input_native_sr != output_native_sr):
-                                    logger.info("Retrying passthrough with native rates (input=%d, output=%d) and resampling",
-                                               input_native_sr, output_native_sr)
-                                    self.stop_mic_passthrough()
-                                    
-                                    # Store sample rates for resampling in callbacks
-                                    input_sr_for_resample = input_native_sr
-                                    output_sr_for_resample = output_native_sr
-                                    
-                                    # Resampling input callback: captures at input native rate
-                                    def resampling_input_callback(indata, frames, time, status):
-                                        try:
-                                            # Apply volume and copy data
-                                            audio_chunk = indata.copy() * volume
-                                            # Resample from input rate to output rate
-                                            resampled = self._resample_high_quality(
-                                                audio_chunk.flatten(), 
-                                                input_sr_for_resample, 
-                                                output_sr_for_resample,
-                                                kaiser_beta=5.0
-                                            )
-                                            # Reshape to match expected output format
-                                            resampled = resampled.reshape(-1, 1)
-                                            # Put into queue, drop oldest if full
-                                            if self._passthrough_queue.full():
-                                                try:
-                                                    self._passthrough_queue.get_nowait()
-                                                except queue.Empty:
-                                                    pass
-                                            self._passthrough_queue.put(resampled)
-                                        except Exception as e:
-                                            logger.warning("Passthrough resampling input callback error: %s", e)
-                                    
-                                    # Resampling output callback: plays at output native rate
-                                    def resampling_output_callback(outdata, frames, time, status):
-                                        try:
-                                            audio_chunk = self._passthrough_queue.get_nowait()
-                                            # Flatten to 1-D if needed, then reshape to (frames, 1)
-                                            flat = audio_chunk.flatten()
-                                            chunk_len = min(len(flat), frames)
-                                            outdata[:chunk_len, 0] = flat[:chunk_len]
-                                            if chunk_len < frames:
-                                                outdata[chunk_len:] = 0
-                                        except queue.Empty:
-                                            # No data available, output silence
-                                            outdata[:] = 0
-                                        except Exception as e:
-                                            logger.warning("Passthrough resampling output callback error: %s", e)
-                                            outdata[:] = 0
-                                    
-                                    # Calculate appropriate blocksize for output based on resampling ratio
-                                    ratio = output_sr_for_resample / input_sr_for_resample
-                                    output_blocksize = int(self._PASSTHROUGH_BLOCKSIZE * ratio)
-                                    
-                                    self._passthrough_input_stream = sd.InputStream(
-                                        device=input_device_index,
-                                        samplerate=input_native_sr,
-                                        channels=1,
-                                        dtype='float32',
-                                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                        callback=resampling_input_callback
-                                    )
-                                    
-                                    self._passthrough_output_stream = sd.OutputStream(
-                                        device=output_device_index,
-                                        samplerate=output_native_sr,
-                                        channels=1,
-                                        dtype='float32',
-                                        blocksize=output_blocksize,
-                                        callback=resampling_output_callback
-                                    )
-                                    
-                                    self._passthrough_input_stream.start()
-                                    
-                                    # Pre-fill queue with silence chunks (at output rate)
-                                    output_silence_chunk = np.zeros((output_blocksize, 1), dtype='float32')
-                                    self._passthrough_queue.put(output_silence_chunk)
-                                    self._passthrough_queue.put(output_silence_chunk)
-                                    
-                                    self._passthrough_output_stream.start()
-                                    
-                                    # Update chosen_sr for logging
-                                    chosen_sr = f"{input_native_sr}->{output_native_sr}"
-                                else:
-                                    raise e3
-                        else:
-                            raise e2
+                    logger.info("Microphone passthrough started (input=%s, output=%s, sample_rate=%s, volume=%.2f, blocksize=%d)",
+                               input_device_index, output_device_index, chosen_sr, volume, self._PASSTHROUGH_BLOCKSIZE)
+                    return (True, None)
                 else:
-                    raise
-            
-            self._passthrough_active = True
-            
-            logger.info("Microphone passthrough started (input=%s, output=%s, sample_rate=%s, volume=%.2f, blocksize=%d)",
-                       input_device_index, output_device_index, chosen_sr, volume, self._PASSTHROUGH_BLOCKSIZE)
-            return (True, None)
-            
-        except sd.PortAudioError as e:
-            logger.error("PortAudio error starting mic passthrough: %s", e)
-            self.stop_mic_passthrough()
-            return (False, str(e))
-        except Exception as e:
-            logger.error("Error starting mic passthrough: %s", e)
-            self.stop_mic_passthrough()
-            return (False, str(e))
+                    return (False, "Failed to open audio streams")
+                    
+            except sd.PortAudioError as e:
+                logger.error("PortAudio error starting mic passthrough: %s", e)
+                self.stop_mic_passthrough()
+                return (False, str(e))
+            except Exception as e:
+                logger.error("Error starting mic passthrough: %s", e)
+                self.stop_mic_passthrough()
+                return (False, str(e))
     
-    def stop_mic_passthrough(self):
-        """Stop microphone passthrough and clean up resources."""
+    def _stop_mic_passthrough_unlocked(self):
+        """
+        Internal method to stop microphone passthrough without acquiring lock.
+        
+        This must only be called while holding _passthrough_lock to avoid race conditions.
+        Used internally by start_mic_passthrough to restart with different devices.
+        """
         self._passthrough_active = False
         
         # Stop and close duplex stream (same-device mode)
@@ -1642,7 +1633,10 @@ class AudioRouter:
                     self._passthrough_queue.get_nowait()
             except queue.Empty:
                 pass
-        
+    
+    def stop_mic_passthrough(self):
+        """Stop microphone passthrough and clean up resources."""
+        self._stop_mic_passthrough_unlocked()
         logger.info("Microphone passthrough stopped")
     
     def is_mic_passthrough_active(self) -> bool:

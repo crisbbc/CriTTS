@@ -209,7 +209,12 @@ class VisemeMapper:
         
         # Calculate duration per viseme
         # Adjust for speech rate
-        rate_factor = 1.0 - (speech_rate / 200.0)  # -100% = 1.5x slower, +100% = 0.5x faster
+        # Clamp rate_factor to prevent division by zero and extreme values
+        # speech_rate range: -100 to +100
+        # -100% = 1.5x slower (rate_factor = 1.5)
+        # +100% = 0.5x faster (rate_factor = 0.5)
+        # Clamp to minimum 0.25 to prevent extremely fast speech
+        rate_factor = max(0.25, 1.0 - (speech_rate / 200.0))
         base_duration = self.BASE_PHONEME_DURATION * rate_factor
         
         # If total duration is specified, adjust accordingly
