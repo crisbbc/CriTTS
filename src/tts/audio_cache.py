@@ -62,10 +62,13 @@ class AudioCache:
         
         # In-memory index for fast lookups
         self._index: OrderedDict[str, Dict[str, Any]] = OrderedDict()
-        
+
+        # Running total of cache size in bytes (O(1) size checks)
+        self._total_size_bytes: int = 0
+
         # Initialize cache directory and load index
         self._initialize_cache()
-        
+
         # Start periodic flush timer
         self._start_flush_timer()
     
@@ -128,6 +131,7 @@ class AudioCache:
         index_path = self._get_index_path()
         if not index_path.exists():
             self._index = OrderedDict()
+            self._total_size_bytes = 0
             return
         
         try:
@@ -164,6 +168,9 @@ class AudioCache:
                         except OSError:
                             pass
             
+            # Compute running total from loaded entries
+            self._total_size_bytes = sum(e.get("size_bytes", 0) for e in self._index.values())
+
             logger.info("Loaded %d cached audio entries", len(self._index))
             
         except Exception as e:
@@ -228,6 +235,9 @@ class AudioCache:
                 except OSError:
                     pass
             
+            # Recompute running total
+            self._total_size_bytes = sum(e.get("size_bytes", 0) for e in self._index.values())
+
             self._save_index()
             logger.info("Rebuilt cache index with %d entries", len(self._index))
             
@@ -301,7 +311,8 @@ class AudioCache:
                 
             except Exception as e:
                 logger.debug("Failed to read cached audio: %s", e)
-                # Remove stale entry
+                # Remove stale entry and update running total
+                self._total_size_bytes -= self._index[key].get("size_bytes", 0)
                 del self._index[key]
                 self._misses += 1
                 return None
@@ -358,8 +369,12 @@ class AudioCache:
                 }
                 
                 # Update index (metadata is stored in cache_index.json, not individual .meta.json files)
+                # Subtract old size if key already existed (overwrite)
+                if key in self._index:
+                    self._total_size_bytes -= self._index[key].get("size_bytes", 0)
                 self._index[key] = meta
                 self._index.move_to_end(key)
+                self._total_size_bytes += len(audio_data)
                 self._dirty = True  # Mark index as modified
                 
                 # Increment store counter for batch flushing
@@ -385,11 +400,8 @@ class AudioCache:
                 return False
     
     def _get_cache_size(self) -> int:
-        """Get total cache size in bytes."""
-        total = 0
-        for entry in self._index.values():
-            total += entry.get("size_bytes", 0)
-        return total
+        """Get total cache size in bytes (O(1) via running counter)."""
+        return self._total_size_bytes
     
     def get_cache_size_mb(self) -> float:
         """Get total cache size in megabytes."""
@@ -398,36 +410,35 @@ class AudioCache:
     def _cleanup_if_needed(self):
         """Remove oldest entries if cache exceeds max size."""
         max_bytes = self.max_size_mb * 1024 * 1024
-        current_size = self._get_cache_size()
-        
-        if current_size <= max_bytes:
+
+        if self._total_size_bytes <= max_bytes:
             return
-        
+
         # Remove oldest entries (LRU eviction)
         removed_count = 0
         removed_size = 0
-        
-        while current_size > max_bytes * 0.9 and self._index:  # Clean to 90% of max
+
+        while self._total_size_bytes > max_bytes * 0.9 and self._index:  # Clean to 90% of max
             # Remove oldest (first in OrderedDict)
             key, entry = self._index.popitem(last=False)
-            
+            entry_size = entry.get("size_bytes", 0)
+            self._total_size_bytes -= entry_size
+
             try:
                 # Delete files
                 cache_path = self.cache_dir / f"{key}.mp3"
                 meta_path = self.cache_dir / f"{key}.meta.json"
-                
+
                 if cache_path.exists():
                     cache_path.unlink()
                 if meta_path.exists():
                     meta_path.unlink()
-                
-                removed_size += entry.get("size_bytes", 0)
+
+                removed_size += entry_size
                 removed_count += 1
-                
+
             except Exception as e:
                 logger.debug("Failed to remove cache entry: %s", e)
-            
-            current_size = self._get_cache_size()
         
         if removed_count > 0:
             logger.info("Cache cleanup: removed %d entries, freed %.2f MB", removed_count, removed_size / (1024*1024))
@@ -458,8 +469,9 @@ class AudioCache:
                         pass
                 
                 self._index.clear()
+                self._total_size_bytes = 0
                 self._save_index()
-                
+
                 # Reset statistics
                 self._hits = 0
                 self._misses = 0
@@ -517,15 +529,16 @@ class AudioCache:
                 try:
                     cache_path = self.cache_dir / f"{key}.mp3"
                     meta_path = self.cache_dir / f"{key}.meta.json"
-                    
+
                     if cache_path.exists():
                         cache_path.unlink()
                     if meta_path.exists():
                         meta_path.unlink()
-                    
+
+                    self._total_size_bytes -= self._index[key].get("size_bytes", 0)
                     del self._index[key]
                     removed += 1
-                    
+
                 except Exception as e:
                     logger.debug("Failed to remove old cache entry: %s", e)
             

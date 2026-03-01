@@ -662,15 +662,17 @@ class AudioRouter:
         """Stop current audio playback."""
         self._stop_requested.set()
         self._current_amplitude = 0.0
-        if self._current_stream is not None:
+        stream = self._current_stream
+        if stream is not None:
             try:
-                self._current_stream.stop()
+                stream.stop()
             except Exception:
                 pass
     
     def is_playing(self) -> bool:
         """Check if audio is currently playing."""
-        return self._current_stream is not None and self._current_stream.active
+        stream = self._current_stream
+        return stream is not None and stream.active
     
     def is_vbcable_installed(self) -> bool:
         """
@@ -1106,11 +1108,11 @@ class AudioRouter:
                     if len(remaining) > 0:
                         leftover[0] = remaining
                     # Calculate amplitude for this chunk
-                    if self._amplitude_callback:
+                    if amplitude_callback:
                         amp = self._calculate_chunk_amplitude(chunk[:frames])
                         self._current_amplitude = amp
                         try:
-                            self._amplitude_callback(amp)
+                            amplitude_callback(amp)
                         except Exception:
                             pass
                 else:

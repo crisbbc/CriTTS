@@ -128,24 +128,24 @@ class EdgeTTSProvider(TTSProvider):
             try:
                 # Generate speech with prosody parameters
                 communicate = edge_tts.Communicate(
-                    text, 
+                    text,
                     voice,
                     rate=rate_str,
                     volume=volume_str,
                     pitch=pitch_str
                 )
-                audio_data = b""
-                
+                audio_chunks = []
+
                 async for chunk in communicate.stream():
                     # Check if stop was requested
                     if stop_event and stop_event.is_set():
                         logger.debug("Edge TTS generation stopped by request")
                         return None  # Return None to indicate cancellation
-                    
+
                     if chunk["type"] == "audio":
-                        audio_data += chunk["data"]
-                
-                return audio_data
+                        audio_chunks.append(chunk["data"])
+
+                return b"".join(audio_chunks)
                 
             except Exception as e:
                 error_str = str(e).lower()

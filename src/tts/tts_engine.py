@@ -24,7 +24,80 @@ logger = logging.getLogger(__name__)
 
 class TTSEngine:
     """Manages text-to-speech generation using edge_tts."""
-    
+
+    # Class-level constants for number-to-word conversion (avoids recreating on every call)
+    _NUMBER_WORDS = {
+        'en': ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+               'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen',
+               'seventeen', 'eighteen', 'nineteen', 'twenty'],
+        'es': ['cero', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve',
+               'diez', 'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis',
+               'diecisiete', 'dieciocho', 'diecinueve', 'veinte'],
+        'fr': ['zéro', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf',
+               'dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize',
+               'dix-sept', 'dix-huit', 'dix-neuf', 'vingt'],
+        'de': ['null', 'eins', 'zwei', 'drei', 'vier', 'fünf', 'sechs', 'sieben', 'acht', 'neun',
+               'zehn', 'elf', 'zwölf', 'dreizehn', 'vierzehn', 'fünfzehn', 'sechzehn',
+               'siebzehn', 'achtzehn', 'neunzehn', 'zwanzig'],
+        'it': ['zero', 'uno', 'due', 'tre', 'quattro', 'cinque', 'sei', 'sette', 'otto', 'nove',
+               'dieci', 'undici', 'dodici', 'tredici', 'quattordici', 'quindici', 'sedici',
+               'diciassette', 'diciotto', 'diciannove', 'venti'],
+        'pt': ['zero', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove',
+               'dez', 'onze', 'doze', 'treze', 'catorze', 'quinze', 'dezesseis',
+               'dezessete', 'dezoito', 'dezenove', 'vinte'],
+        'ru': ['ноль', 'один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять',
+               'десять', 'одиннадцать', 'двенадцать', 'тринадцать', 'четырнадцать', 'пятнадцать', 'шестнадцать',
+               'семнадцать', 'восемнадцать', 'девятнадцать', 'двадцать'],
+        'zh': ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九',
+               '十', '十一', '十二', '十三', '十四', '十五', '十六',
+               '十七', '十八', '十九', '二十'],
+        'ja': ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九',
+               '十', '十一', '十二', '十三', '十四', '十五', '十六',
+               '十七', '十八', '十九', '二十'],
+        'ko': ['영', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구',
+               '십', '십일', '십이', '십삼', '십사', '십오', '십육',
+               '십칠', '십팔', '십구', '이십'],
+    }
+
+    _TENS_WORDS = {
+        'en': ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'],
+        'es': ['', '', 'veinte', 'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa'],
+        'fr': ['', '', 'vingt', 'trente', 'quarante', 'cinquante', 'soixante', 'soixante', 'quatre-vingt', 'quatre-vingt'],
+        'de': ['', '', 'zwanzig', 'dreißig', 'vierzig', 'fünfzig', 'sechzig', 'siebzig', 'achtzig', 'neunzig'],
+        'it': ['', '', 'venti', 'trenta', 'quaranta', 'cinquanta', 'sessanta', 'settanta', 'ottanta', 'novanta'],
+        'pt': ['', '', 'vinte', 'trinta', 'quarenta', 'cinquenta', 'sessenta', 'setenta', 'oitenta', 'noventa'],
+        'ru': ['', '', 'двадцать', 'тридцать', 'сорок', 'пятьдесят', 'шестьдесят', 'семьдесят', 'восемьдесят', 'девяносто'],
+        'zh': ['', '', '二十', '三十', '四十', '五十', '六十', '七十', '八十', '九十'],
+        'ja': ['', '', '二十', '三十', '四十', '五十', '六十', '七十', '八十', '九十'],
+        'ko': ['', '', '이십', '삼십', '사십', '오십', '육십', '칠십', '팔십', '구십'],
+    }
+
+    _HUNDREDS_WORDS = {
+        'en': ['', 'one hundred', 'two hundred', 'three hundred', 'four hundred', 'five hundred', 'six hundred', 'seven hundred', 'eight hundred', 'nine hundred'],
+        'es': ['', 'cien', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos', 'seiscientos', 'setecientos', 'ochocientos', 'novecientos'],
+        'fr': ['', 'cent', 'deux cents', 'trois cents', 'quatre cents', 'cinq cents', 'six cents', 'sept cents', 'huit cents', 'neuf cents'],
+        'de': ['', 'einhundert', 'zweihundert', 'dreihundert', 'vierhundert', 'fünfhundert', 'sechshundert', 'siebenhundert', 'achthundert', 'neunhundert'],
+        'it': ['', 'cento', 'duecento', 'trecento', 'quattrocento', 'cinquecento', 'seicento', 'settecento', 'ottocento', 'novecento'],
+        'pt': ['', 'cem', 'duzentos', 'trezentos', 'quatrocentos', 'quinhentos', 'seiscentos', 'setecentos', 'oitocentos', 'novecentos'],
+        'ru': ['', 'сто', 'двести', 'триста', 'четыреста', 'пятьсот', 'шестьсот', 'семьсот', 'восемьсот', 'девятьсот'],
+        'zh': ['', '一百', '二百', '三百', '四百', '五百', '六百', '七百', '八百', '九百'],
+        'ja': ['', '百', '二百', '三百', '四百', '五百', '六百', '七百', '八百', '九百'],
+        'ko': ['', '백', '이백', '삼백', '사백', '오백', '육백', '칠백', '팔백', '구백'],
+    }
+
+    _THOUSANDS_WORDS = {
+        'en': ['', 'one thousand', 'two thousand', 'three thousand', 'four thousand', 'five thousand', 'six thousand', 'seven thousand', 'eight thousand', 'nine thousand'],
+        'es': ['', 'mil', 'dos mil', 'tres mil', 'cuatro mil', 'cinco mil', 'seis mil', 'siete mil', 'ocho mil', 'nueve mil'],
+        'fr': ['', 'mille', 'deux mille', 'trois mille', 'quatre mille', 'cinq mille', 'six mille', 'sept mille', 'huit mille', 'neuf mille'],
+        'de': ['', 'eintausend', 'zweitausend', 'dreitausend', 'viertausend', 'fünftausend', 'sechstausend', 'siebentausend', 'achttausend', 'neuntausend'],
+        'it': ['', 'mille', 'duemila', 'tremila', 'quattromila', 'cinquemila', 'seimila', 'settemila', 'ottomila', 'novemila'],
+        'pt': ['', 'mil', 'dois mil', 'três mil', 'quatro mil', 'cinco mil', 'seis mil', 'sete mil', 'oito mil', 'nove mil'],
+        'ru': ['', 'тысяча', 'две тысячи', 'три тысячи', 'четыре тысячи', 'пять тысяч', 'шесть тысяч', 'семь тысяч', 'восемь тысяч', 'девять тысяч'],
+        'zh': ['', '一千', '二千', '三千', '四千', '五千', '六千', '七千', '八千', '九千'],
+        'ja': ['', '千', '二千', '三千', '四千', '五千', '六千', '七千', '八千', '九千'],
+        'ko': ['', '천', '이천', '삼천', '사천', '오천', '육천', '칠천', '팔천', '구천'],
+    }
+
     def __init__(self, settings_manager: Optional['SettingsManager'] = None):
         """Initialize the TTS engine.
         
@@ -37,8 +110,9 @@ class TTSEngine:
         self._cache_timestamp: float = 0
         self._cache_duration: float = 300  # Cache voices for 5 minutes
         self._voice_cache = {}  # Cache for voice validation
+        self._voice_cache_lock = threading.Lock()  # Lock for thread-safe voice cache access
         self._text_cache = {}  # Cache for text processing
-        self._text_cache_lock = threading.Lock()  # Lock for thread-safe cache access
+        self._text_cache_lock = threading.Lock()  # Lock for thread-safe text cache access
         
         # Initialize providers - pass settings_manager to avoid per-call SettingsManager instantiation
         self._edge_tts_provider = EdgeTTSProvider(settings_manager=self._settings_manager)
@@ -218,7 +292,8 @@ class TTSEngine:
     def clear_voices_cache(self):
         """Clear the voices cache to force refresh on next call."""
         self._voices_cache = None
-        self._voice_cache.clear()
+        with self._voice_cache_lock:
+            self._voice_cache.clear()
         
         # Clear provider caches
         try:
@@ -290,25 +365,27 @@ class TTSEngine:
         Return True if the given voice short_name exists in the available voices.
         Can be called before TTS generation to prevent errors.
         """
-        # Use cache for faster validation
-        if voice_short_name in self._voice_cache:
-            return self._voice_cache[voice_short_name]
-        
+        # Thread-safe cache lookup
+        with self._voice_cache_lock:
+            if voice_short_name in self._voice_cache:
+                return self._voice_cache[voice_short_name]
+
         voices = await self.get_available_voices()
         short_names = {v.get("short_name") for v in voices if v.get("short_name")}
         is_valid = voice_short_name in short_names
-        
-        # Update cache with efficient batch eviction when full
-        if len(self._voice_cache) >= self._max_cache_size:
-            # Remove 10% of entries (minimum 1) for better performance
-            # than single-entry eviction on every insert
-            entries_to_remove = max(1, self._max_cache_size // 10)
-            for _ in range(entries_to_remove):
-                if self._voice_cache:
-                    oldest_key = next(iter(self._voice_cache))
-                    del self._voice_cache[oldest_key]
-        
-        self._voice_cache[voice_short_name] = is_valid
+
+        # Thread-safe cache update with efficient batch eviction when full
+        with self._voice_cache_lock:
+            if len(self._voice_cache) >= self._max_cache_size:
+                # Remove 10% of entries (minimum 1) for better performance
+                # than single-entry eviction on every insert
+                entries_to_remove = max(1, self._max_cache_size // 10)
+                for _ in range(entries_to_remove):
+                    if self._voice_cache:
+                        oldest_key = next(iter(self._voice_cache))
+                        del self._voice_cache[oldest_key]
+
+            self._voice_cache[voice_short_name] = is_valid
         return is_valid
     
     async def preprocess_text(self, text: str, voice: Optional[str] = None) -> str:
@@ -395,43 +472,9 @@ class TTSEngine:
         """
         # Get the current voice to determine language
         current_voice = self._get_current_voice_language(voice)
-        
-        # Language-specific number words
-        number_words = {
-            'en': ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
-                   'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen',
-                   'seventeen', 'eighteen', 'nineteen', 'twenty'],
-            'es': ['cero', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve',
-                   'diez', 'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis',
-                   'diecisiete', 'dieciocho', 'diecinueve', 'veinte'],
-            'fr': ['zéro', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf',
-                   'dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize',
-                   'dix-sept', 'dix-huit', 'dix-neuf', 'vingt'],
-            'de': ['null', 'eins', 'zwei', 'drei', 'vier', 'fünf', 'sechs', 'sieben', 'acht', 'neun',
-                   'zehn', 'elf', 'zwölf', 'dreizehn', 'vierzehn', 'fünfzehn', 'sechzehn',
-                   'siebzehn', 'achtzehn', 'neunzehn', 'zwanzig'],
-            'it': ['zero', 'uno', 'due', 'tre', 'quattro', 'cinque', 'sei', 'sette', 'otto', 'nove',
-                   'dieci', 'undici', 'dodici', 'tredici', 'quattordici', 'quindici', 'sedici',
-                   'diciassette', 'diciotto', 'diciannove', 'venti'],
-            'pt': ['zero', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove',
-                   'dez', 'onze', 'doze', 'treze', 'catorze', 'quinze', 'dezesseis',
-                   'dezessete', 'dezoito', 'dezenove', 'vinte'],
-            'ru': ['ноль', 'один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять',
-                   'десять', 'одиннадцать', 'двенадцать', 'тринадцать', 'четырнадцать', 'пятнадцать', 'шестнадцать',
-                   'семнадцать', 'восемнадцать', 'девятнадцать', 'двадцать'],
-            'zh': ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九',
-                   '十', '十一', '十二', '十三', '十四', '十五', '十六',
-                   '十七', '十八', '十九', '二十'],
-            'ja': ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九',
-                   '十', '十一', '十二', '十三', '十四', '十五', '十六',
-                   '十七', '十八', '十九', '二十'],
-            'ko': ['영', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구',
-                   '십', '십일', '십이', '십삼', '십사', '십오', '십육',
-                   '십칠', '십팔', '십구', '이십'],
-        }
-        
+
         # Get number words for current language (default to English)
-        words = number_words.get(current_voice, number_words['en'])
+        words = self._NUMBER_WORDS.get(current_voice, self._NUMBER_WORDS['en'])
         
         def number_to_words(match):
             num = int(match.group())
@@ -455,25 +498,11 @@ class TTSEngine:
         """Convert numbers 21-99 to words."""
         if num <= 20:
             return words[num]
-        
+
         tens = num // 10
         ones = num % 10
-        
-        # Tens words for different languages
-        tens_words = {
-            'en': ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'],
-            'es': ['', '', 'veinte', 'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa'],
-            'fr': ['', '', 'vingt', 'trente', 'quarante', 'cinquante', 'soixante', 'soixante', 'quatre-vingt', 'quatre-vingt'],
-            'de': ['', '', 'zwanzig', 'dreißig', 'vierzig', 'fünfzig', 'sechzig', 'siebzig', 'achtzig', 'neunzig'],
-            'it': ['', '', 'venti', 'trenta', 'quaranta', 'cinquanta', 'sessanta', 'settanta', 'ottanta', 'novanta'],
-            'pt': ['', '', 'vinte', 'trinta', 'quarenta', 'cinquenta', 'sessenta', 'setenta', 'oitenta', 'noventa'],
-            'ru': ['', '', 'двадцать', 'тридцать', 'сорок', 'пятьдесят', 'шестьдесят', 'семьдесят', 'восемьдесят', 'девяносто'],
-            'zh': ['', '', '二十', '三十', '四十', '五十', '六十', '七十', '八十', '九十'],
-            'ja': ['', '', '二十', '三十', '四十', '五十', '六十', '七十', '八十', '九十'],
-            'ko': ['', '', '이십', '삼십', '사십', '오십', '육십', '칠십', '팔십', '구십'],
-        }
-        
-        tens_list = tens_words.get(language, tens_words['en'])
+
+        tens_list = self._TENS_WORDS.get(language, self._TENS_WORDS['en'])
         
         if ones == 0:
             return tens_list[tens]
@@ -493,22 +522,8 @@ class TTSEngine:
         """Convert numbers 100-999 to words."""
         hundreds = num // 100
         remainder = num % 100
-        
-        # Hundreds words for different languages
-        hundreds_words = {
-            'en': ['', 'one hundred', 'two hundred', 'three hundred', 'four hundred', 'five hundred', 'six hundred', 'seven hundred', 'eight hundred', 'nine hundred'],
-            'es': ['', 'cien', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos', 'seiscientos', 'setecientos', 'ochocientos', 'novecientos'],
-            'fr': ['', 'cent', 'deux cents', 'trois cents', 'quatre cents', 'cinq cents', 'six cents', 'sept cents', 'huit cents', 'neuf cents'],
-            'de': ['', 'einhundert', 'zweihundert', 'dreihundert', 'vierhundert', 'fünfhundert', 'sechshundert', 'siebenhundert', 'achthundert', 'neunhundert'],
-            'it': ['', 'cento', 'duecento', 'trecento', 'quattrocento', 'cinquecento', 'seicento', 'settecento', 'ottocento', 'novecento'],
-            'pt': ['', 'cem', 'duzentos', 'trezentos', 'quatrocentos', 'quinhentos', 'seiscentos', 'setecentos', 'oitocentos', 'novecentos'],
-            'ru': ['', 'сто', 'двести', 'триста', 'четыреста', 'пятьсот', 'шестьсот', 'семьсот', 'восемьсот', 'девятьсот'],
-            'zh': ['', '一百', '二百', '三百', '四百', '五百', '六百', '七百', '八百', '九百'],
-            'ja': ['', '百', '二百', '三百', '四百', '五百', '六百', '七百', '八百', '九百'],
-            'ko': ['', '백', '이백', '삼백', '사백', '오백', '육백', '칠백', '팔백', '구백'],
-        }
-        
-        hundreds_list = hundreds_words.get(language, hundreds_words['en'])
+
+        hundreds_list = self._HUNDREDS_WORDS.get(language, self._HUNDREDS_WORDS['en'])
         
         result = hundreds_list[hundreds]
         if remainder > 0:
@@ -523,27 +538,13 @@ class TTSEngine:
         """Convert numbers 1000-999999 to words."""
         thousands = num // 1000
         remainder = num % 1000
-        
+
         # Guard: if thousands > 9, the lookup tables won't have an entry
         # Fall back to returning the number as string (same as numbers > 999999)
         if thousands > 9:
             return str(num)
-        
-        # Thousands words for different languages
-        thousands_words = {
-            'en': ['', 'one thousand', 'two thousand', 'three thousand', 'four thousand', 'five thousand', 'six thousand', 'seven thousand', 'eight thousand', 'nine thousand'],
-            'es': ['', 'mil', 'dos mil', 'tres mil', 'cuatro mil', 'cinco mil', 'seis mil', 'siete mil', 'ocho mil', 'nueve mil'],
-            'fr': ['', 'mille', 'deux mille', 'trois mille', 'quatre mille', 'cinq mille', 'six mille', 'sept mille', 'huit mille', 'neuf mille'],
-            'de': ['', 'eintausend', 'zweitausend', 'dreitausend', 'viertausend', 'fünftausend', 'sechstausend', 'siebentausend', 'achttausend', 'neuntausend'],
-            'it': ['', 'mille', 'duemila', 'tremila', 'quattromila', 'cinquemila', 'seimila', 'settemila', 'ottomila', 'novemila'],
-            'pt': ['', 'mil', 'dois mil', 'três mil', 'quatro mil', 'cinco mil', 'seis mil', 'sete mil', 'oito mil', 'nove mil'],
-            'ru': ['', 'тысяча', 'две тысячи', 'три тысячи', 'четыре тысячи', 'пять тысяч', 'шесть тысяч', 'семь тысяч', 'восемь тысяч', 'девять тысяч'],
-            'zh': ['', '一千', '二千', '三千', '四千', '五千', '六千', '七千', '八千', '九千'],
-            'ja': ['', '千', '二千', '三千', '四千', '五千', '六千', '七千', '八千', '九千'],
-            'ko': ['', '천', '이천', '삼천', '사천', '오천', '육천', '칠천', '팔천', '구천'],
-        }
-        
-        thousands_list = thousands_words.get(language, thousands_words['en'])
+
+        thousands_list = self._THOUSANDS_WORDS.get(language, self._THOUSANDS_WORDS['en'])
         
         result = thousands_list[thousands]
         if remainder > 0:
