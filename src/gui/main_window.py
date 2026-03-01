@@ -109,6 +109,7 @@ class MainWindow:
         self._typing_animation_state = 0
         self._is_typing_active = False
         self._last_typing_time = 0
+        self._last_message_sent_time = 0  # Track when last message was sent for cooldown
         
         # Voice indicator debounce timer
         self._voice_indicator_timer = None
@@ -778,6 +779,13 @@ class MainWindow:
         if not self.settings.get("vrchat_osc_typing_animation", False):
             return
         
+        # Check if we're in the cooldown period after a message was sent
+        # This gives others time to read the message before typing animation starts
+        cooldown_seconds = self.settings.get("vrchat_osc_message_cooldown", 3.0)
+        time_since_message = time.time() - self._last_message_sent_time
+        if time_since_message < cooldown_seconds:
+            return
+        
         # Update last typing time
         self._last_typing_time = time.time()
         
@@ -898,11 +906,23 @@ class MainWindow:
         # Send to VRChat chatbox if OSC is enabled and send_on_speak is True
         if self.osc_client and self.settings.get("vrchat_osc_send_on_speak", False):
             try:
+                # Wait for VRChat's rate limit cooldown before sending the message
+                # This ensures the message is sent after the typing animation text
+                # VRChat enforces ~1.5 seconds between chatbox messages
+                elapsed = time.time() - self.osc_client._last_chatbox_send_time
+                wait_time = max(0, 1.5 - elapsed)
+                if wait_time > 0:
+                    time.sleep(wait_time)
+                
+                # Send the actual message (respects rate limit, guaranteed to replace typing text)
                 self.osc_client.send_to_chatbox(
                     processed_text,
                     play_notification_sound=self.settings.get("vrchat_osc_play_sound", True),
-                    priority=True  # Actual messages have priority over typing animation
+                    show_keyboard=False
                 )
+                
+                # Track when the message was sent for cooldown
+                self._last_message_sent_time = time.time()
             except Exception:
                 self._set_status("Failed to send to VRChat chatbox", "⚠️")
         

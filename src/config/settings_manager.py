@@ -57,6 +57,7 @@ class SettingsManager:
         "vrchat_osc_send_on_speak": False,
         "vrchat_osc_typing_animation": False,
         "vrchat_osc_typing_timeout": 2.0,
+        "vrchat_osc_message_cooldown": 3.0,
 
         "speak_mode": "all_text",
         "auto_language_detection": False,

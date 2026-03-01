@@ -265,9 +265,50 @@ class VRChatOSCTab(BaseTab):
         )
         self.typing_timeout_value_label.pack(side="right", padx=5)
         
+        ctk.CTkLabel(
+            self.scroll,
+            text="Message Cooldown:",
+            font=ctk.CTkFont(size=FONT_MD)
+        ).pack(anchor="w", pady=(10, 5))
+        
+        message_cooldown_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        message_cooldown_frame.pack(fill="x", pady=5)
+        
+        current_cooldown = self.settings.get("vrchat_osc_message_cooldown", 3.0)
+        self.message_cooldown_var = ctk.DoubleVar(value=current_cooldown)
+        self.message_cooldown_slider = ctk.CTkSlider(
+            message_cooldown_frame,
+            from_=0.0,
+            to=10.0,
+            number_of_steps=100,
+            variable=self.message_cooldown_var,
+            command=self._on_message_cooldown_change,
+            width=400
+        )
+        self.message_cooldown_slider.pack(side="left", fill="x", expand=True, padx=5)
+        
+        self.message_cooldown_value_label = ctk.CTkLabel(
+            message_cooldown_frame,
+            text=f"{current_cooldown:.1f}s",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=50
+        )
+        self.message_cooldown_value_label.pack(side="right", padx=5)
+        
+        message_cooldown_info_label = ctk.CTkLabel(
+            self.scroll,
+            text="Time to wait after sending a message before typing animation can restart. Gives others time to read your message.",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color="gray",
+            wraplength=500
+        )
+        message_cooldown_info_label.pack(anchor="w", pady=(0, 5))
+        self.add_wraplength_label(message_cooldown_info_label)
+        
         self._typing_indicator_widgets = [
             self.typing_animation_check,
             self.typing_timeout_slider,
+            self.message_cooldown_slider,
         ]
     
     def _on_osc_enabled_toggle(self):
@@ -297,6 +338,10 @@ class VRChatOSCTab(BaseTab):
     def _on_typing_timeout_change(self, value):
         """Update typing timeout label when slider changes."""
         self.typing_timeout_value_label.configure(text=f"{value:.1f}s")
+    
+    def _on_message_cooldown_change(self, value):
+        """Update message cooldown label when slider changes."""
+        self.message_cooldown_value_label.configure(text=f"{value:.1f}s")
     
     def _test_osc_connection(self):
         """Test OSC configuration."""
@@ -346,6 +391,7 @@ class VRChatOSCTab(BaseTab):
             "vrchat_voice_amplitude_enabled": self.viseme_amplitude_var.get(),
             "vrchat_osc_typing_animation": self.typing_animation_var.get(),
             "vrchat_osc_typing_timeout": self.typing_timeout_var.get(),
+            "vrchat_osc_message_cooldown": self.message_cooldown_var.get(),
         }
     
     def validate(self) -> List[str]:
