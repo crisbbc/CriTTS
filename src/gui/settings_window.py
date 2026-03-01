@@ -2066,6 +2066,44 @@ Examples:
             text_color="gray"
         ).pack(anchor="w", pady=(0, 10))
         
+        # Message cooldown slider
+        ctk.CTkLabel(
+            self.osc_scroll,
+            text="Message Cooldown:",
+            font=ctk.CTkFont(size=12)
+        ).pack(anchor="w", pady=(10, 5))
+        
+        message_cooldown_frame = ctk.CTkFrame(self.osc_scroll, fg_color="transparent")
+        message_cooldown_frame.pack(fill="x", pady=5)
+        
+        current_cooldown = self.settings.get("vrchat_osc_message_cooldown", 3.0)
+        self.message_cooldown_var = ctk.DoubleVar(value=current_cooldown)
+        self.message_cooldown_slider = ctk.CTkSlider(
+            message_cooldown_frame,
+            from_=0.0,
+            to=10.0,
+            number_of_steps=100,
+            variable=self.message_cooldown_var,
+            command=self._on_message_cooldown_change,
+            width=400
+        )
+        self.message_cooldown_slider.pack(side="left", fill="x", expand=True, padx=5)
+        
+        self.message_cooldown_value_label = ctk.CTkLabel(
+            message_cooldown_frame,
+            text=f"{current_cooldown:.1f}s",
+            font=ctk.CTkFont(size=12),
+            width=50
+        )
+        self.message_cooldown_value_label.pack(side="right", padx=5)
+        
+        ctk.CTkLabel(
+            self.osc_scroll,
+            text="Time to wait after sending a message before typing animation can restart. Gives others time to read your message.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        ).pack(anchor="w", pady=(0, 10))
+        
         # Store viseme-related widgets for enabling/disabling based on OSC state
         self._viseme_widgets = [
             self.viseme_enabled_check,
@@ -2108,6 +2146,10 @@ Examples:
     def _on_typing_timeout_change(self, value):
         """Update typing timeout label when slider changes."""
         self.typing_timeout_value_label.configure(text=f"{value:.1f}s")
+    
+    def _on_message_cooldown_change(self, value):
+        """Update message cooldown label when slider changes."""
+        self.message_cooldown_value_label.configure(text=f"{value:.1f}s")
     
     def _create_advanced_tab(self):
         """Create Advanced settings tab with cache management, performance, and experimental features."""
@@ -3261,6 +3303,7 @@ Examples:
         # Save typing indicator settings
         self.settings.set("vrchat_osc_typing_animation", self.typing_animation_var.get())
         self.settings.set("vrchat_osc_typing_timeout", self.typing_timeout_var.get())
+        self.settings.set("vrchat_osc_message_cooldown", self.message_cooldown_var.get())
         
         # Save visible buttons setting
         visible_buttons = [key for key, var in self.visible_buttons_vars.items() if var.get()]
