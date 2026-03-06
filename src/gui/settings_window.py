@@ -18,6 +18,7 @@ except Exception:
     VRChatOSCClient = None
 
 from .keybind_manager import KeybindManager
+from .utils.scroll_utils import prevent_scroll_propagation
 from .theme_constants import (
     SPACING_XS, SPACING_SM, SPACING_MD, SPACING_LG, SPACING_XL, SPACING_2XL,
     COLOR_SUCCESS, COLOR_SUCCESS_HOVER, COLOR_SUCCESS_LIGHT,
@@ -507,6 +508,7 @@ class SettingsWindow:
         
         self.favorites_frame = ctk.CTkScrollableFrame(self.voice_scroll, height=100)
         self.favorites_frame.pack(fill="x", pady=5)
+        prevent_scroll_propagation(self.favorites_frame)
         
         self.favorites_empty_label = ctk.CTkLabel(
             self.favorites_frame,
@@ -526,6 +528,7 @@ class SettingsWindow:
         
         self.recent_frame = ctk.CTkScrollableFrame(self.voice_scroll, height=80)
         self.recent_frame.pack(fill="x", pady=5)
+        prevent_scroll_propagation(self.recent_frame)
         
         self.recent_empty_label = ctk.CTkLabel(
             self.recent_frame,
@@ -1160,6 +1163,7 @@ Examples:
         # Language mapping frame
         self.language_mapping_frame = ctk.CTkScrollableFrame(self.behavior_scroll, height=200)
         self.language_mapping_frame.pack(fill="x", pady=5)
+        prevent_scroll_propagation(self.language_mapping_frame)
         
         # Note: Language mapping controls will be created after voices are loaded
         self.language_mapping_controls_created = False

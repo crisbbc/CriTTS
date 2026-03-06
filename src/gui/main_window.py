@@ -28,6 +28,7 @@ from .theme_constants import (
     COLOR_NEUTRAL_DARKEST, COLOR_NEUTRAL_DARK, COLOR_NEUTRAL_MEDIUM, COLOR_NEUTRAL, COLOR_NEUTRAL_LIGHT, COLOR_NEUTRAL_LIGHTER, COLOR_NEUTRAL_LIGHTEST,
     COLOR_BG_PRIMARY, COLOR_BG_SECONDARY, COLOR_BG_TERTIARY,
     COLOR_STATUS_ACTIVE, COLOR_STATUS_ERROR, COLOR_STATUS_WARNING, COLOR_STATUS_SUCCESS, COLOR_STATUS_IDLE,
+    COLOR_TRANSCRIBING, COLOR_TRANSCRIBING_HOVER,
     FONT_XS, FONT_SM, FONT_MD, FONT_LG, FONT_XL, FONT_2XL, FONT_WEIGHT_BOLD,
     BUTTON_HEIGHT, BUTTON_HEIGHT_SM, BUTTON_HEIGHT_LG, BUTTON_MIN_WIDTH, BUTTON_WIDTH_DEFAULT,
     INPUT_HEIGHT, INPUT_HEIGHT_SM,
@@ -38,6 +39,18 @@ from .theme_constants import (
     WINDOW_MAIN_WIDTH, WINDOW_MAIN_HEIGHT,
     get_theme_colors
 )
+
+
+# =============================================================================
+# STT STATE MACHINE
+# =============================================================================
+
+class STTState:
+    """State machine states for Speech-to-Text operations."""
+    IDLE = "idle"                    # Ready to record
+    RECORDING = "recording"          # Currently recording audio
+    TRANSCRIBING = "transcribing"    # Processing audio (transcription in progress)
+    ERROR = "error"                  # Error state (will auto-reset)
 
 
 
@@ -82,8 +95,26 @@ class MainWindow:
         self._stop_event = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
         
-        # STT (Voice Input) state
-        self._stt_recording = False
+        # TTS speaking animation state
+        self._tts_speaking = False
+        self._speaking_animation_running = False
+        self._speaking_animation_index = 0
+        self._speaking_animation_frames = ["▶  Speaking.", "▶  Speaking..", "▶  Speaking..."]
+        
+        # STT (Voice Input) state machine
+        self._stt_state = STTState.IDLE
+        self._stt_timeout_timer = None
+        self._STT_TIMEOUT_MS = 30000  # 30 seconds timeout for transcription
+        
+        # STT loading animation state
+        self._stt_spinner_running = False
+        self._stt_spinner_index = 0
+        self._stt_spinner_frames = ["⏳", "⏳", "⏳"]
+        
+        # Progress animation state
+        self._progress_animation_running = False
+        self._progress_animation_index = 0
+        self._progress_base_message = ""
         
         # Abbreviation expansion cache with LRU eviction
         # Uses OrderedDict to implement LRU: most recently used items at the end
@@ -1191,8 +1222,9 @@ class MainWindow:
         # Update overlay visibility
         if self._overlay_visible:
             self._recording_overlay.show_overlay()
-            # Sync current recording state
-            self._recording_overlay.set_recording(self._stt_recording)
+            # Sync current recording state (using state machine)
+            is_recording = (self._stt_state == STTState.RECORDING)
+            self._recording_overlay.set_recording(is_recording)
             # Update button appearance to active
             self.overlay_button.configure(
                 fg_color=COLOR_PRIMARY,
@@ -1206,39 +1238,143 @@ class MainWindow:
                 hover_color=COLOR_NEUTRAL
             )
     
+    # =========================================================================
+    # STT STATE MANAGEMENT
+    # =========================================================================
+    
+    def _set_stt_state(self, new_state: str):
+        """
+        Safely transition STT state and update UI accordingly.
+        
+        This method ensures the voice button is always in a consistent state
+        and handles timeout management for transcription operations.
+        
+        Args:
+            new_state: One of STTState constants (IDLE, RECORDING, TRANSCRIBING, ERROR)
+        """
+        old_state = self._stt_state
+        self._stt_state = new_state
+        
+        logger = logging.getLogger(__name__)
+        logger.debug(f"STT state transition: {old_state} -> {new_state}")
+        
+        # Cancel any existing timeout timer
+        if self._stt_timeout_timer:
+            self.root.after_cancel(self._stt_timeout_timer)
+            self._stt_timeout_timer = None
+        
+        # Stop spinner animation if not transcribing
+        if new_state != STTState.TRANSCRIBING:
+            self._stop_stt_spinner()
+        
+        # Update UI based on new state
+        if new_state == STTState.IDLE:
+            self._restore_voice_button()
+            
+        elif new_state == STTState.RECORDING:
+            self.voice_button.configure(
+                text="⏹  Stop Voice",
+                fg_color=COLOR_DANGER,
+                hover_color=COLOR_DANGER_HOVER,
+                state="normal"
+            )
+            # Sync overlay state
+            if self._overlay_visible and self._recording_overlay:
+                self._recording_overlay.set_recording(True)
+                
+        elif new_state == STTState.TRANSCRIBING:
+            self.voice_button.configure(
+                text="⏳  Transcribing...",
+                fg_color=COLOR_TRANSCRIBING,
+                state="disabled"
+            )
+            # Sync overlay state
+            if self._overlay_visible and self._recording_overlay:
+                self._recording_overlay.set_recording(False)
+            # Start spinner animation
+            self._start_stt_spinner()
+            # Set timeout to restore button if transcription hangs
+            self._stt_timeout_timer = self.root.after(
+                self._STT_TIMEOUT_MS,
+                self._on_stt_timeout
+            )
+            
+        elif new_state == STTState.ERROR:
+            self.voice_button.configure(
+                text="⚠  Error",
+                fg_color=COLOR_DANGER,
+                hover_color=COLOR_DANGER_HOVER,
+                state="normal"
+            )
+            # Sync overlay state
+            if self._overlay_visible and self._recording_overlay:
+                self._recording_overlay.set_recording(False)
+            # Auto-reset to IDLE after 2 seconds
+            self.root.after(2000, lambda: self._set_stt_state(STTState.IDLE))
+    
+    def _on_stt_timeout(self):
+        """Handle transcription timeout - restore button and show error."""
+        self._stt_timeout_timer = None
+        
+        if self._stt_state == STTState.TRANSCRIBING:
+            self._set_status("⚠ Transcription timed out (30s)", "⚠️")
+            self._set_stt_state(STTState.ERROR)
+    
+    def _start_stt_spinner(self):
+        """Start the loading spinner animation on voice button during transcription."""
+        self._stt_spinner_running = True
+        self._stt_spinner_index = 0
+        self._animate_stt_spinner()
+    
+    def _animate_stt_spinner(self):
+        """Animate the spinner frames during transcription."""
+        if not self._stt_spinner_running:
+            return
+        
+        if self._stt_state == STTState.TRANSCRIBING:
+            # Update button text with current spinner frame
+            frame = self._stt_spinner_frames[self._stt_spinner_index]
+            try:
+                self.voice_button.configure(text=f"{frame}  Transcribing...")
+            except Exception:
+                pass  # Button may have been destroyed
+            
+            # Cycle through frames
+            self._stt_spinner_index = (self._stt_spinner_index + 1) % len(self._stt_spinner_frames)
+            
+            # Schedule next frame
+            self.root.after(400, self._animate_stt_spinner)
+    
+    def _stop_stt_spinner(self):
+        """Stop the spinner animation."""
+        self._stt_spinner_running = False
+    
+    # =========================================================================
+    # STT EVENT HANDLERS
+    # =========================================================================
+    
     def _on_voice_input(self):
         """Handle voice input button click - toggle recording."""
         if not self.stt_engine:
             self._set_status("Voice input not available", "⚠️")
             return
         
-        if not self._stt_recording:
+        if self._stt_state == STTState.IDLE:
             # Start recording
             success = self.stt_engine.start_listening()
             if success:
-                self._stt_recording = True
-                self.voice_button.configure(
-                    text="⏹  Stop Voice",
-                    fg_color=COLOR_DANGER,
-                    hover_color=COLOR_DANGER_HOVER
-                )
+                self._set_stt_state(STTState.RECORDING)
                 self._set_status("🎙 Listening… click again to stop", "🎙")
-                # Sync overlay state
-                if self._overlay_visible and self._recording_overlay:
-                    self._recording_overlay.set_recording(True)
             else:
                 self._set_status("Failed to start voice recording", "⚠️")
-        else:
-            # Stop recording and transcribe
-            self.voice_button.configure(state="disabled")
-            self._stt_recording = False
+                
+        elif self._stt_state == STTState.RECORDING:
+            # Stop recording and start transcription
+            self._set_stt_state(STTState.TRANSCRIBING)
             self._set_status("⏳ Transcribing…", "⏳")
-            # Sync overlay state
-            if self._overlay_visible and self._recording_overlay:
-                self._recording_overlay.set_recording(False)
             self.stt_engine.stop_and_transcribe(
-                on_result=self._on_stt_result,
-                on_error=self._on_stt_error
+                on_result=self._on_stt_result_safe,
+                on_error=self._on_stt_error_safe
             )
     
     def _on_voice_input_toggle(self):
@@ -1247,34 +1383,53 @@ class MainWindow:
             self._set_status("Voice input not available", "⚠️")
             return
         
-        if not self._stt_recording:
+        if self._stt_state == STTState.IDLE:
             # Start recording
             success = self.stt_engine.start_listening()
             if success:
-                self._stt_recording = True
-                self.voice_button.configure(
-                    text="⏹  Stop Voice",
-                    fg_color=COLOR_DANGER,
-                    hover_color=COLOR_DANGER_HOVER
-                )
+                self._set_stt_state(STTState.RECORDING)
                 self._set_status("🎙 Listening… press keybind again to stop", "🎙")
-                # Sync overlay state
-                if self._overlay_visible and self._recording_overlay:
-                    self._recording_overlay.set_recording(True)
             else:
                 self._set_status("Failed to start voice recording", "⚠️")
-        else:
-            # Stop recording and transcribe
-            self.voice_button.configure(state="disabled")
-            self._stt_recording = False
+                
+        elif self._stt_state == STTState.RECORDING:
+            # Stop recording and start transcription
+            self._set_stt_state(STTState.TRANSCRIBING)
             self._set_status("⏳ Transcribing…", "⏳")
-            # Sync overlay state
-            if self._overlay_visible and self._recording_overlay:
-                self._recording_overlay.set_recording(False)
             self.stt_engine.stop_and_transcribe(
-                on_result=self._on_stt_result,
-                on_error=self._on_stt_error
+                on_result=self._on_stt_result_safe,
+                on_error=self._on_stt_error_safe
             )
+    
+    def _on_stt_result_safe(self, text: str):
+        """Handle successful STT transcription with guaranteed state restoration."""
+        # Use root.after to safely update UI from background thread
+        self.root.after(0, lambda: self._handle_stt_result_safe(text))
+    
+    def _handle_stt_result_safe(self, text: str):
+        """Safely handle STT result with guaranteed state restoration."""
+        try:
+            self._insert_stt_text(text)
+        except Exception as e:
+            logging.getLogger(__name__).error("Error processing STT result: %s", e)
+            self._set_status(f"⚠ Error processing text: {e}", "⚠️")
+            self._set_stt_state(STTState.ERROR)
+        else:
+            # Only transition to IDLE if no exception occurred
+            self._set_stt_state(STTState.IDLE)
+    
+    def _on_stt_error_safe(self, exception: Exception):
+        """Handle STT error with guaranteed state restoration."""
+        # Use root.after to safely update UI from background thread
+        self.root.after(0, lambda: self._handle_stt_error_safe(exception))
+    
+    def _handle_stt_error_safe(self, exception: Exception):
+        """Safely handle STT error with guaranteed state restoration."""
+        try:
+            self._handle_stt_error(exception)
+        finally:
+            # Always restore to ERROR state (which auto-resets to IDLE)
+            self._set_stt_state(STTState.ERROR)
     
     def _on_stt_result(self, text: str):
         """Handle successful STT transcription (called from background thread)."""
@@ -1298,9 +1453,6 @@ class MainWindow:
         # Insert text at current cursor position
         self.text_input.insert("insert", text)
         
-        # Restore voice button to idle state
-        self._restore_voice_button()
-        
         # Update status
         self._set_status("✅ Voice input added", "✅")
         
@@ -1316,9 +1468,6 @@ class MainWindow:
     
     def _handle_stt_error(self, exception: Exception):
         """Handle STT error on main thread."""
-        # Restore voice button to idle state
-        self._restore_voice_button()
-        
         # Show appropriate error message
         import speech_recognition as sr
         if isinstance(exception, sr.UnknownValueError):
@@ -1352,18 +1501,34 @@ class MainWindow:
     
     def _handle_stt_auto_stop(self):
         """Handle STT auto-stop on the main thread."""
-        # Update recording state
-        self._stt_recording = False
-        
-        # Restore voice button to idle state
-        self._restore_voice_button()
+        # If we were recording, transition to transcribing
+        if self._stt_state == STTState.RECORDING:
+            self._set_stt_state(STTState.TRANSCRIBING)
+            self._set_status("⏳ Transcribing…", "⏳")
+            self.stt_engine.stop_and_transcribe(
+                on_result=self._on_stt_result_safe,
+                on_error=self._on_stt_error_safe
+            )
         
         # Update status to inform user
         self._set_status("⚠ Recording auto-stopped (5 min limit reached)", "⚠️")
     
+    # =========================================================================
+    # BUTTON ANIMATION SYSTEM
+    # =========================================================================
+    
     def _update_ui_speaking(self, speaking: bool):
-        """Update UI state based on speaking status with smooth animations."""
+        """
+        Update UI state based on speaking status with smooth animations.
+        
+        This method handles the visual feedback for TTS operations, including
+        button state transitions and loading animations.
+        """
         if speaking:
+            # Start speaking animation
+            self._tts_speaking = True
+            self._start_speaking_animation()
+            
             # Animate speak button to disabled/speaking state
             self._animate_button(self.speak_button, "disabled", "▶  Speaking...", COLOR_NEUTRAL_MEDIUM, ANIMATION_NORMAL)
             # Animate stop button to active state
@@ -1371,6 +1536,10 @@ class MainWindow:
             # Animate clear button to disabled state
             self._animate_button(self.clear_button, "disabled", "🗑  Clear", COLOR_NEUTRAL, ANIMATION_NORMAL)
         else:
+            # Stop speaking animation
+            self._tts_speaking = False
+            self._stop_speaking_animation()
+            
             # Animate speak button back to normal
             self._animate_button(self.speak_button, "normal", "▶  Speak", COLOR_SUCCESS, ANIMATION_NORMAL)
             # Animate stop button back to disabled
@@ -1378,36 +1547,113 @@ class MainWindow:
             # Animate clear button back to normal
             self._animate_button(self.clear_button, "normal", "🗑  Clear", COLOR_NEUTRAL_MEDIUM, ANIMATION_NORMAL)
     
+    def _start_speaking_animation(self):
+        """Start the speaking animation with animated dots."""
+        self._speaking_animation_running = True
+        self._speaking_animation_index = 0
+        self._speaking_animation_frames = ["▶  Speaking.", "▶  Speaking..", "▶  Speaking..."]
+        self._animate_speaking_button()
+    
+    def _animate_speaking_button(self):
+        """Animate the speaking button with cycling dots."""
+        if not self._speaking_animation_running:
+            return
+        
+        if self._tts_speaking:
+            try:
+                frame = self._speaking_animation_frames[self._speaking_animation_index]
+                self.speak_button.configure(text=frame)
+            except Exception:
+                pass  # Button may have been destroyed
+            
+            # Cycle through frames
+            self._speaking_animation_index = (self._speaking_animation_index + 1) % len(self._speaking_animation_frames)
+            
+            # Schedule next frame (500ms for smooth animation)
+            self.root.after(500, self._animate_speaking_button)
+    
+    def _stop_speaking_animation(self):
+        """Stop the speaking animation."""
+        self._speaking_animation_running = False
+    
     def _animate_button(self, button, state: str, text: str, color: str, duration: float):
-        """Animate a button with smooth color and text transitions."""
+        """
+        Animate a button with smooth color and text transitions.
+        
+        Args:
+            button: The CTkButton to animate
+            state: Target state ("normal" or "disabled")
+            text: Target button text
+            color: Target foreground color
+            duration: Animation duration in seconds
+        """
         # Store original color for hover effect
         button._original_color = color
         
-        # Animate color change
+        # Animate color change with pulse effect
         self._animate_button_color(button, color, duration)
         
         # Update text and state
         button.configure(text=text, state=state)
     
     def _animate_button_color(self, button, target_color: str, duration: float):
-        """Animate button color transition."""
-        # CustomTkinter doesn't support direct color interpolation, so we use a pulse effect
-        self._pulse_button(button, target_color, duration)
+        """
+        Animate button color transition.
+        
+        Uses a multi-step color transition for smoother animation.
+        """
+        # Get current color
+        try:
+            current_color = button.cget("fg_color")
+        except Exception:
+            current_color = target_color
+        
+        # If colors are the same, no animation needed
+        if current_color == target_color:
+            return
+        
+        # CustomTkinter doesn't support direct color interpolation,
+        # so we use a stepped transition effect
+        self._transition_button_color(button, current_color, target_color, 3, duration)
+    
+    def _transition_button_color(self, button, from_color: str, to_color: str, steps: int, total_duration: float):
+        """
+        Transition button color through intermediate steps.
+        
+        Creates a smoother visual transition by briefly flashing through
+        an intermediate state.
+        """
+        if steps <= 0:
+            button.configure(fg_color=to_color)
+            return
+        
+        # For the first step, set to target color immediately with pulse effect
+        button.configure(fg_color=to_color)
+        
+        # Add a subtle scale pulse effect
+        self._pulse_button(button, to_color, total_duration)
     
     def _pulse_button(self, button, target_color: str, duration: float):
-        """Create a pulse effect for button animation."""
-        button.configure(fg_color=target_color)
-        # Add a subtle scale effect by changing size slightly
-        # Use the constant to prevent width accumulation on rapid repeated calls
-        button.configure(width=BUTTON_WIDTH_DEFAULT + 2)
+        """
+        Create a pulse effect for button animation.
         
-        def reset_size():
-            try:
-                button.configure(width=BUTTON_WIDTH_DEFAULT)
-            except Exception:
-                pass  # Button may have been destroyed or reconfigured
-        
-        self.root.after(int(duration * 500), reset_size)
+        This adds visual feedback by briefly expanding the button width
+        then returning to normal size.
+        """
+        try:
+            # Add a subtle scale effect by changing size slightly
+            # Use the constant to prevent width accumulation on rapid repeated calls
+            button.configure(width=BUTTON_WIDTH_DEFAULT + 4)
+            
+            def reset_size():
+                try:
+                    button.configure(width=BUTTON_WIDTH_DEFAULT)
+                except Exception:
+                    pass  # Button may have been destroyed or reconfigured
+            
+            self.root.after(int(duration * 300), reset_size)
+        except Exception:
+            pass  # Button may not support width configuration
     
     def _set_status(self, message: str, icon: str = "", message_type: str = "info"):
         """Update status message with enhanced formatting and visual indicators."""
@@ -1465,13 +1711,51 @@ class MainWindow:
         # Add a subtle pulse effect
         self._pulse_label(indicator, duration)
     
-    def _set_progress(self, message: str):
-        """Update progress indicator."""
-        self.progress_label.configure(text=message)
+    def _set_progress(self, message: str, animated: bool = False):
+        """
+        Update progress indicator with optional animation.
+        
+        Args:
+            message: Progress message to display
+            animated: If True, show animated loading indicator
+        """
+        if animated:
+            # Start animated progress
+            self._progress_animation_running = True
+            self._progress_animation_index = 0
+            self._progress_base_message = message
+            self._animate_progress()
+        else:
+            # Stop any running animation
+            self._progress_animation_running = False
+            self.progress_label.configure(text=message)
+        
         if message:
             self.progress_label.pack(side="right", padx=5)
         else:
             self.progress_label.pack_forget()
+    
+    def _animate_progress(self):
+        """Animate the progress indicator with cycling dots."""
+        if not self._progress_animation_running:
+            return
+        
+        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        frame = frames[self._progress_animation_index]
+        
+        try:
+            self.progress_label.configure(text=f"{frame} {self._progress_base_message}")
+        except Exception:
+            pass
+        
+        self._progress_animation_index = (self._progress_animation_index + 1) % len(frames)
+        
+        # Schedule next frame (80ms for smooth spinner)
+        self.root.after(80, self._animate_progress)
+    
+    def _stop_progress_animation(self):
+        """Stop the progress animation."""
+        self._progress_animation_running = False
     
     def _show_error(self, message: str):
         """Show error message in status and popup."""

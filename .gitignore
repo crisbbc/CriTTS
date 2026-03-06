@@ -35,3 +35,4 @@ ENV/
 *.swp
 *.swo
 .claude
+plans/

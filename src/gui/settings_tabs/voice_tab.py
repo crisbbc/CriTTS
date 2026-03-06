@@ -13,6 +13,7 @@ from .base_tab import BaseTab
 from ..theme_constants import (
     FONT_SM, FONT_MD, FONT_LG, FONT_WEIGHT_BOLD,
 )
+from ..utils.scroll_utils import prevent_scroll_propagation
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +359,7 @@ class VoiceTab(BaseTab):
         
         self.favorites_frame = ctk.CTkScrollableFrame(self.scroll, height=100)
         self.favorites_frame.pack(fill="x", pady=5)
+        prevent_scroll_propagation(self.favorites_frame)
         
         self.favorites_empty_label = ctk.CTkLabel(
             self.favorites_frame,
@@ -378,6 +380,7 @@ class VoiceTab(BaseTab):
         
         self.recent_frame = ctk.CTkScrollableFrame(self.scroll, height=80)
         self.recent_frame.pack(fill="x", pady=5)
+        prevent_scroll_propagation(self.recent_frame)
         
         self.recent_empty_label = ctk.CTkLabel(
             self.recent_frame,

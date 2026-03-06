@@ -87,7 +87,12 @@ COLOR_STATUS_IDLE = "#64748b"       # Slate 500
 # Recording overlay colors
 COLOR_RECORDING = "#ef4444"         # Red 500 — active recording
 COLOR_RECORDING_PULSE = "#fca5a5"   # Red 300 — pulse highlight
+COLOR_RECORDING_DIM = "#dc2626"     # Red 600 — dim pulse state
 COLOR_OVERLAY_BG = "#1e293b"        # Matches COLOR_BG_SECONDARY
+
+# Transcription/loading state colors
+COLOR_TRANSCRIBING = "#f59e0b"      # Amber 500 — transcribing state
+COLOR_TRANSCRIBING_HOVER = "#d97706"  # Amber 600
 
 # =============================================================================
 # TYPOGRAPHY SCALE
