@@ -156,6 +156,8 @@ def parse_keybind_to_tkinter(keybind_string: str) -> Optional[str]:
             modifiers.append('Shift')
         elif part == 'alt':
             modifiers.append('Alt')
+        elif part in ['win', 'super']:
+            modifiers.append('Mod4')
         else:
             key = part
     
