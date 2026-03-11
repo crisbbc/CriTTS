@@ -337,13 +337,8 @@ class LanguageDetector:
         self._word_pattern = re.compile(r'\b\w+\b', re.UNICODE)
         self._sentence_pattern = re.compile(r'[.!?。！？\n]+')
         
-        # Pre-calculate common word sets and reverse mapping for performance
+        # Pre-calculate common words as sets for O(1) lookups
         self._common_words_sets = {lang: set(words) for lang, words in self.COMMON_WORDS.items()}
-        self._word_to_lang = {}
-        for lang, words in self.COMMON_WORDS.items():
-            for word in words:
-                if word not in self._word_to_lang:
-                    self._word_to_lang[word] = lang
 
         logger.info(f"LanguageDetector initialized (langid available: {_LANGID_AVAILABLE})")
     
@@ -443,17 +438,17 @@ class LanguageDetector:
         if not words:
             return None
         
-        # Check each word against common words reverse mapping
+        # Check each word against common words sets
         for word in words:
-            lang = self._word_to_lang.get(word)
-            if lang:
-                # Found an exact match - return with high confidence
-                return LanguageDetectionResult(
-                    language=lang,
-                    confidence=0.9,
-                    method='heuristic',
-                    is_mixed=False
-                )
+            for lang, common_words_set in self._common_words_sets.items():
+                if word in common_words_set:
+                    # Found an exact match - return with high confidence
+                    return LanguageDetectionResult(
+                        language=lang,
+                        confidence=0.9,
+                        method='heuristic',
+                        is_mixed=False
+                    )
         
         return None
     
