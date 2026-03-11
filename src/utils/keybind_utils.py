@@ -60,6 +60,26 @@ KEY_TO_TKINTER = {
     'minus': 'minus',
     'equal': 'equal',
     'grave': 'grave',
+    'plus': 'plus',
+    'asterisk': 'asterisk',
+    'question': 'question',
+    'exclam': 'exclam',
+    'at': 'at',
+    'numbersign': 'numbersign',
+    'dollar': 'dollar',
+    'percent': 'percent',
+    'asciicircum': 'asciicircum',
+    'ampersand': 'ampersand',
+    'parenleft': 'parenleft',
+    'parenright': 'parenright',
+    'underscore': 'underscore',
+    'braceleft': 'braceleft',
+    'braceright': 'braceright',
+    'bar': 'bar',
+    'colon': 'colon',
+    'less': 'less',
+    'greater': 'greater',
+    'tilde': 'asciitilde'
 }
 
 
@@ -156,6 +176,8 @@ def parse_keybind_to_tkinter(keybind_string: str) -> Optional[str]:
             modifiers.append('Shift')
         elif part == 'alt':
             modifiers.append('Alt')
+        elif part in ['win', 'super']:
+            modifiers.append('Mod4')
         else:
             key = part
     
