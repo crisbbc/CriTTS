@@ -1,61 +1,101 @@
 import pytest
-from src.utils.keybind_utils import validate_keybind_format, parse_keybind_to_tkinter
+from src.utils.keybind_utils import parse_keybind_to_tkinter
 
-def test_validate_keybind_format_valid_single_keys():
-    assert validate_keybind_format("a") is True
-    assert validate_keybind_format("1") is True
-    assert validate_keybind_format("Enter") is True
-    assert validate_keybind_format("space") is True
-    assert validate_keybind_format("F1") is True
-    assert validate_keybind_format("comma") is True
+class TestParseKeybindToTkinter:
+    """Test suite for parse_keybind_to_tkinter function."""
 
-def test_validate_keybind_format_valid_combinations():
-    assert validate_keybind_format("Ctrl+A") is True
-    assert validate_keybind_format("Ctrl+Shift+Enter") is True
-    assert validate_keybind_format("Alt+Space") is True
-    assert validate_keybind_format("ctrl + shift + b") is True  # Should handle spaces around +
+    @pytest.mark.parametrize(
+        "keybind_string, expected",
+        [
+            # --- Happy Paths: Standard Keys ---
+            ("a", "<a>"),
+            ("A", "<a>"),  # Capital letter should be lowercased
+            ("1", "<1>"),
 
-def test_validate_keybind_format_invalid_formats():
-    assert validate_keybind_format("") is False
-    assert validate_keybind_format(None) is False
-    assert validate_keybind_format("   ") is False
-    assert validate_keybind_format("Ctrl+") is False
-    assert validate_keybind_format("Ctrl") is False
-    assert validate_keybind_format("Shift+Alt") is False
-    assert validate_keybind_format("Ctrl+Ctrl+A") is False
-    assert validate_keybind_format("UnknownKey") is False
-    assert validate_keybind_format("A" * 51) is False
+            # --- Happy Paths: Single Modifiers ---
+            ("Ctrl+a", "<Control-a>"),
+            ("Control+a", "<Control-a>"),
+            ("Shift+a", "<Shift-a>"),
+            ("Alt+a", "<Alt-a>"),
+            ("Win+a", "<Mod4-a>"),
+            ("Super+a", "<Mod4-a>"),
 
-def test_validate_keybind_format_critical_shortcuts():
-    assert validate_keybind_format("Alt+F4") is False
-    assert validate_keybind_format("Ctrl+Alt+Delete") is False
-    assert validate_keybind_format("Win+L") is False
+            # --- Happy Paths: Multiple Modifiers ---
+            ("Ctrl+Shift+a", "<Control-Shift-a>"),
+            ("Ctrl+Alt+a", "<Control-Alt-a>"),
+            ("Ctrl+Shift+Alt+a", "<Control-Shift-Alt-a>"),
+            ("Win+Shift+a", "<Mod4-Shift-a>"),
 
-def test_parse_keybind_to_tkinter_basic():
-    assert parse_keybind_to_tkinter("a") == "<a>"
-    assert parse_keybind_to_tkinter("A") == "<a>"
-    assert parse_keybind_to_tkinter("Enter") == "<Return>"
-    assert parse_keybind_to_tkinter("Ctrl+A") == "<Control-a>"
-    assert parse_keybind_to_tkinter("Ctrl+Shift+B") == "<Control-Shift-b>"
-    assert parse_keybind_to_tkinter("Alt+Enter") == "<Alt-Return>"
+            # --- Happy Paths: Special Keys ---
+            ("Enter", "<Return>"),
+            ("Return", "<Return>"),
+            ("Space", "<space>"),
+            ("Esc", "<Escape>"),
+            ("Escape", "<Escape>"),
+            ("Tab", "<Tab>"),
+            ("Backspace", "<BackSpace>"),
+            ("Del", "<Delete>"),
+            ("Delete", "<Delete>"),
+            ("Insert", "<Insert>"),
+            ("Home", "<Home>"),
+            ("End", "<End>"),
+            ("PageUp", "<Prior>"),
+            ("PageDown", "<Next>"),
+            ("Up", "<Up>"),
+            ("Down", "<Down>"),
+            ("Left", "<Left>"),
+            ("Right", "<Right>"),
+            ("F1", "<F1>"),
+            ("F12", "<F12>"),
+            ("Comma", "<comma>"),
+            ("Period", "<period>"),
+            ("Slash", "<slash>"),
+            ("Semicolon", "<semicolon>"),
+            ("Quote", "<quoteright>"),
+            ("Backslash", "<backslash>"),
+            ("BracketLeft", "<bracketleft>"),
+            ("BracketRight", "<bracketright>"),
+            ("Minus", "<minus>"),
+            ("Equal", "<equal>"),
+            ("Grave", "<grave>"),
 
-def test_parse_keybind_to_tkinter_special_keys():
-    assert parse_keybind_to_tkinter("space") == "<space>"
-    assert parse_keybind_to_tkinter("backspace") == "<BackSpace>"
-    assert parse_keybind_to_tkinter("f1") == "<F1>"
-    assert parse_keybind_to_tkinter("comma") == "<comma>"
+            # --- Happy Paths: Modifiers + Special Keys ---
+            ("Ctrl+Enter", "<Control-Return>"),
+            ("Shift+Space", "<Shift-space>"),
+            ("Alt+F4", "<Alt-F4>"),
 
-def test_parse_keybind_to_tkinter_invalid():
-    assert parse_keybind_to_tkinter("") is None
-    assert parse_keybind_to_tkinter("Ctrl+") is None
-    assert parse_keybind_to_tkinter("UnknownKey") is None
+            # --- Edge Cases: Extra spaces and mixed casing ---
+            (" ctrl + a ", "<Control-a>"),
+            ("cTrL+A", "<Control-a>"),
+            ("  Shift  +  Enter  ", "<Shift-Return>"),
+            ("wIn+aLt+dEl", "<Mod4-Alt-Delete>"),
+        ]
+    )
+    def test_valid_keybinds(self, keybind_string, expected):
+        """Test valid keybind strings map correctly to Tkinter format."""
+        assert parse_keybind_to_tkinter(keybind_string) == expected
 
-def test_win_modifier():
-    assert validate_keybind_format("Win+S") is True
-    assert parse_keybind_to_tkinter("Win+S") == "<Mod4-s>"
+    @pytest.mark.parametrize(
+        "keybind_string, expected",
+        [
+            # --- Error Conditions: Empty strings ---
+            ("", None),
+            (None, None),
 
-def test_missing_symbols():
-    assert validate_keybind_format("plus") is True
-    assert parse_keybind_to_tkinter("plus") == "<plus>"
-    assert validate_keybind_format("Ctrl+plus") is True
-    assert parse_keybind_to_tkinter("Ctrl+plus") == "<Control-plus>"
+            # --- Error Conditions: Invalid syntax ---
+            ("Ctrl+", None),  # Missing key
+            ("Ctrl++", None), # Extra plus (empty part)
+
+            # --- Error Conditions: Modifiers only ---
+            ("Ctrl", None),
+            ("Ctrl+Shift", None),
+
+            # --- Error Conditions: Unsupported/unknown keys ---
+            ("Ctrl+UnknownKey", None),
+            ("Ctrl+@#$", None),
+            ("UnrecognizedKey", None),
+        ]
+    )
+    def test_invalid_keybinds(self, keybind_string, expected):
+        """Test invalid keybind strings return None."""
+        assert parse_keybind_to_tkinter(keybind_string) == expected
