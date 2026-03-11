@@ -25,20 +25,20 @@ except ImportError:
 
 class AudioRouter:
     """Manages audio device enumeration and playback routing."""
-    
+
     # Blocksize for passthrough streams to ensure synchronized callbacks
     _PASSTHROUGH_BLOCKSIZE = 512
-    
+
     # Host API suffix pattern for deduplication
     _HOST_API_PATTERN = re.compile(r'\s*\[(?:MME|DirectSound|WASAPI|WDM-KS|ASIO)\]\s*$', re.IGNORECASE)
-    
+
     def __init__(self):
         """Initialize the audio router."""
         self._current_stream = None
         self._stop_requested = threading.Event()
         self._amplitude_callback = None
         self._current_amplitude = 0.0
-        
+
         # Microphone passthrough state
         self._passthrough_input_stream: Optional[sd.InputStream] = None
         self._passthrough_output_stream: Optional[sd.OutputStream] = None
@@ -46,47 +46,47 @@ class AudioRouter:
         self._passthrough_queue: queue.Queue = queue.Queue()
         self._passthrough_active: bool = False
         self._passthrough_lock = threading.Lock()  # Protects passthrough state transitions
-    
+
     @staticmethod
     def _deduplicate_devices(devices: List[Dict]) -> List[Dict]:
         """
         Deduplicate audio device list using multi-pass algorithm.
-        
+
         Handles:
         1. Exact name matches (case-insensitive) - same device from different host APIs
         2. Host API suffix patterns like "Device Name [MME]", "Device Name [DirectSound]"
         3. Prefix matches - truncated vs full names
-        
+
         Args:
             devices: List of device dictionaries to deduplicate
-            
+
         Returns:
             Deduplicated and sorted list of device dictionaries
         """
         if not devices:
             return []
-        
+
         # Pass 1: Exact name deduplication (case-insensitive)
         seen_names_lower = {}
         for device in devices:
             name_lower = device['name'].lower().strip()
             if name_lower not in seen_names_lower:
                 seen_names_lower[name_lower] = device
-        
+
         # Pass 2: Remove host API suffixes and check for duplicates
         base_name_to_device = {}
         for device in seen_names_lower.values():
             name = device['name']
             base_name = AudioRouter._HOST_API_PATTERN.sub('', name).strip()
             base_lower = base_name.lower()
-            
+
             if base_lower not in base_name_to_device:
                 base_name_to_device[base_lower] = device
             else:
                 existing = base_name_to_device[base_lower]
                 existing_has_suffix = bool(AudioRouter._HOST_API_PATTERN.search(existing['name']))
                 current_has_suffix = bool(AudioRouter._HOST_API_PATTERN.search(name))
-                
+
                 # Prefer device without host API suffix
                 if current_has_suffix and not existing_has_suffix:
                     pass  # Keep existing
@@ -95,43 +95,43 @@ class AudioRouter:
                 elif len(name) < len(existing['name']):
                     # Both have or don't have suffix, prefer shorter name
                     base_name_to_device[base_lower] = device
-        
+
         # Pass 3: Prefix-based deduplication for truncated names
         # Sort by name length (longest first) to prefer full names over truncated
         devices_sorted = sorted(base_name_to_device.values(), key=lambda d: len(d['name']), reverse=True)
-        
+
         final_devices = []
         for device in devices_sorted:
             name = device['name']
             is_duplicate = False
-            
+
             # Check if this device's name is a prefix of or is prefixed by any existing device
             for existing in final_devices:
                 existing_name = existing['name']
                 name_lower = name.lower()
                 existing_lower = existing_name.lower()
-                
+
                 if name_lower.startswith(existing_lower) or existing_lower.startswith(name_lower):
                     is_duplicate = True
                     break
-            
+
             if not is_duplicate:
                 final_devices.append(device)
-        
+
         # Sort by name for consistent display
         final_devices.sort(key=lambda d: d['name'].lower())
-        
+
         return final_devices
-    
+
     def get_audio_devices(self) -> List[Dict]:
         """
         Enumerate all available audio output devices.
-        
+
         Returns:
             List of dictionaries with 'index', 'name', and 'channels' for each device.
         """
         device_list = sd.query_devices()
-        
+
         # Collect all output devices
         all_output = []
         for i, device in enumerate(device_list):
@@ -142,18 +142,18 @@ class AudioRouter:
                     'channels': device['max_output_channels'],
                     'sample_rate': device['default_samplerate']
                 })
-        
+
         return self._deduplicate_devices(all_output)
-    
+
     def get_input_devices(self) -> List[Dict]:
         """
         Enumerate all available audio input devices (microphones).
-        
+
         Returns:
             List of dictionaries with 'index', 'name', 'channels', and 'sample_rate' for each device.
         """
         device_list = sd.query_devices()
-        
+
         # Collect all input devices
         all_input = []
         for i, device in enumerate(device_list):
@@ -164,9 +164,9 @@ class AudioRouter:
                     'channels': device['max_input_channels'],
                     'sample_rate': device['default_samplerate']
                 })
-        
+
         return self._deduplicate_devices(all_input)
-    
+
     def get_default_device(self) -> Optional[Dict]:
         """Get the system default output device."""
         try:
@@ -179,33 +179,33 @@ class AudioRouter:
             }
         except Exception:
             return None
-    
+
     def _normalize_audio(self, data: np.ndarray, norm_type: str = "Peak", sample_rate: int = 48000) -> np.ndarray:
         """
         Apply audio normalization to prevent clipping and ensure consistent volume.
-        
+
         Args:
             data: Audio data array
             norm_type: Type of normalization ("Peak", "RMS", or "None")
             sample_rate: Sample rate of the audio data (used for LUFS measurement)
-            
+
         Returns:
             Normalized audio data
         """
         if norm_type == "None" or data.size == 0:
             return data
-        
+
         # Prevent division by zero
         max_val = np.max(np.abs(data))
         if max_val < 1e-10:
             return data
-        
+
         if norm_type == "Peak":
             # Peak normalization to -1 dB (prevents clipping)
             target_peak = 0.891  # -1 dB
             gain = target_peak / max_val
             return data * gain
-        
+
         elif norm_type == "RMS":
             # RMS normalization for consistent loudness
             current_rms = np.sqrt(np.mean(data**2))
@@ -216,7 +216,7 @@ class AudioRouter:
             # Limit gain to prevent excessive amplification
             gain = min(gain, 10.0)
             return data * gain
-        
+
         elif norm_type == "LUFS":
             # LUFS normalization for professional loudness standards
             if pyln is None:
@@ -224,10 +224,10 @@ class AudioRouter:
                 target_peak = 0.891  # -1 dB
                 gain = target_peak / max_val
                 return data * gain
-            
+
             # Create meter for loudness measurement using the actual sample rate
             meter = pyln.Meter(sample_rate)
-            
+
             # Handle both mono and stereo
             if len(data.shape) == 1:
                 # Mono audio
@@ -235,33 +235,33 @@ class AudioRouter:
             else:
                 # Stereo audio - use left channel for measurement
                 loudness = meter.integrated_loudness(data[:, 0])
-            
+
             # Target loudness levels (industry standards)
             # -14 LUFS for streaming platforms (Spotify, YouTube)
             # -23 LUFS for broadcast (EBU R128)
             target_lufs = -14.0  # Default to streaming standard
-            
+
             # Calculate gain needed to reach target loudness
             gain_db = target_lufs - loudness
             gain = 10 ** (gain_db / 20)
-            
+
             # Limit gain to prevent excessive amplification
             gain = min(gain, 10.0)
-            
+
             return data * gain
-        
+
         return data
-    
+
     def _get_profile_settings(self, profile: str) -> Dict:
         """
         Get processing settings for a given profile.
-        
+
         Args:
             profile: Processing profile name ("fast_preview", "balanced", "high_quality")
-            
+
         Returns:
             Dictionary with processing settings
-            
+
         Note:
             Normalization is controlled separately via the Audio tab settings
             (enable_normalization and normalization_type). The profile only
@@ -284,78 +284,78 @@ class AudioRouter:
                 "stereo_width": 0.5,  # More stereo enhancement
             }
         }
-        
+
         return profiles.get(profile, profiles["balanced"])
-    
+
     def _resample_high_quality(self, data: np.ndarray, orig_sr: int, target_sr: int, kaiser_beta: float = 5.0) -> np.ndarray:
         """
         High-quality resampling using scipy's polyphase resampling with anti-aliasing.
-        
+
         Args:
             data: Audio data array
             orig_sr: Original sample rate
             target_sr: Target sample rate
             kaiser_beta: Kaiser window beta parameter (higher = better anti-aliasing)
-            
+
         Returns:
             Resampled audio data
         """
         if orig_sr == target_sr:
             return data
-        
+
         # Calculate GCD for optimal resampling ratio
         g = gcd(orig_sr, target_sr)
         up = target_sr // g
         down = orig_sr // g
-        
+
         # Use polyphase resampling with anti-aliasing filter
         resampled = signal.resample_poly(data, up, down, window=('kaiser', kaiser_beta))
-        
+
         return resampled
-    
+
     def _stereo_enhancement(self, data: np.ndarray, width: float = 0.5) -> np.ndarray:
         """
         Convert mono to stereo with width enhancement for more natural sound.
-        
+
         Args:
             data: Mono audio data
             width: Stereo width factor (0.0 to 1.0)
-            
+
         Returns:
             Stereo audio data (2D array with left and right channels)
         """
         if len(data.shape) > 1:
             # Already stereo, return as-is
             return data
-        
+
         # Create stereo with slight delay for width
         left = data * (1.0 - width * 0.5)
         right = data * (1.0 - width * 0.5)
-        
+
         # Add slight phase shift for width enhancement
         if width > 0 and len(data) > 10:
             delay_samples = int(0.001 * 48000)  # 1ms delay at 48kHz
             if delay_samples < len(data):
                 right[delay_samples:] += data[:-delay_samples] * width * 0.3
-        
+
         stereo = np.column_stack((left, right))
         return stereo
-    
-    def _decode_mp3_audio(self, audio_data: bytes, target_sample_rate: Optional[int] = 48000) -> Tuple[np.ndarray, int]:
+
+    async def _decode_mp3_audio(self, audio_data: bytes, target_sample_rate: Optional[int] = 48000) -> Tuple[np.ndarray, int]:
         """
         Decode MP3 audio data to PCM float32 numpy array using ffmpeg.
-        
+
         This method uses ffmpeg for reliable MP3 decoding, as soundfile often
         lacks MP3 support due to licensing restrictions.
-        
+
         Args:
             audio_data: Raw MP3 audio bytes
             target_sample_rate: Target sample rate for output (default 48000).
                                If None, decode at native sample rate without resampling.
-            
+
         Returns:
             Tuple of (audio_data as float32 numpy array, sample_rate)
-            
+
         Raises:
             RuntimeError: If decoding fails or ffmpeg is not available
         """
@@ -364,7 +364,7 @@ class AudioRouter:
             # -i = input, -f f32le = output format (32-bit float little-endian)
             # -acodec pcm_f32le = PCM codec, -ar = sample rate
             # - = output to stdout
-            
+
             # Build ffmpeg command - omit -ar if target_sample_rate is None for native rate
             ffmpeg_cmd = [
                 'ffmpeg',
@@ -372,39 +372,49 @@ class AudioRouter:
                 '-f', 'f32le',            # Output format: 32-bit float little-endian
                 '-acodec', 'pcm_f32le',   # PCM codec
             ]
-            
+
             if target_sample_rate is not None:
                 ffmpeg_cmd.extend(['-ar', str(target_sample_rate)])
-            
+
             ffmpeg_cmd.extend([
                 '-ac', '2',               # Stereo output for consistency
                 '-'                       # Output to stdout
             ])
-            
-            process = subprocess.Popen(
-                ffmpeg_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+
+            process = await asyncio.create_subprocess_exec(
+                *ffmpeg_cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
-            
-            stdout, stderr = process.communicate(input=audio_data, timeout=30)
-            
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(input=audio_data),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                raise RuntimeError("ffmpeg decode timeout - MP3 may be corrupted or too large")
+
             if process.returncode != 0:
                 error_msg = stderr.decode('utf-8', errors='replace') if stderr else 'Unknown ffmpeg error'
                 logger.error("ffmpeg MP3 decode failed (return code %d): %s", process.returncode, error_msg[:500])
                 raise RuntimeError(f"ffmpeg failed to decode MP3: {error_msg[:200]}")
-            
+
             if len(stdout) == 0:
                 raise RuntimeError("ffmpeg produced no output - MP3 may be empty or corrupted")
-            
+
             # Convert raw bytes to numpy array (stereo float32)
             # Each sample is 2 channels * 4 bytes (float32) = 8 bytes per frame
             audio_array = np.frombuffer(stdout, dtype=np.float32)
-            
+
             # Reshape to stereo (2 channels)
             audio_array = audio_array.reshape(-1, 2)
-            
+
             # Determine the actual sample rate
             if target_sample_rate is not None:
                 actual_sr = target_sample_rate
@@ -419,14 +429,11 @@ class AudioRouter:
                     # Fallback: assume 44100 Hz (common MP3 sample rate)
                     actual_sr = 44100
                     logger.warning("Could not detect native sample rate, assuming %d Hz", actual_sr)
-            
+
             logger.debug("Successfully decoded MP3: %d samples at %d Hz", len(audio_array), actual_sr)
-            
+
             return audio_array, actual_sr
-            
-        except subprocess.TimeoutExpired:
-            process.kill()
-            raise RuntimeError("ffmpeg decode timeout - MP3 may be corrupted or too large")
+
         except FileNotFoundError:
             raise RuntimeError("ffmpeg not found - please install ffmpeg for MP3 decoding support")
         except Exception as e:
@@ -434,29 +441,30 @@ class AudioRouter:
                 raise
             logger.error("MP3 decode error: %s", e)
             raise RuntimeError(f"Failed to decode MP3: {str(e)}")
-    
-    def _decode_audio_data(self, audio_data: bytes, target_sample_rate: Optional[int] = 48000) -> Tuple[np.ndarray, int]:
+
+
+    async def _decode_audio_data(self, audio_data: bytes, target_sample_rate: Optional[int] = 48000) -> Tuple[np.ndarray, int]:
         """
         Decode audio data (MP3 or WAV) to PCM float32 numpy array.
-        
+
         Attempts to use ffmpeg for MP3 decoding first (reliable), with fallback
         to soundfile for WAV files. This ensures MP3 support is always available
         when ffmpeg is installed.
-        
+
         Args:
             audio_data: Raw audio bytes (MP3 or WAV)
             target_sample_rate: Target sample rate for MP3 decoding.
                                If None, decode at native sample rate without resampling.
-            
+
         Returns:
             Tuple of (audio_data as float32 numpy array, sample_rate)
-            
+
         Raises:
             RuntimeError: If decoding fails
         """
         # Try ffmpeg first - it handles MP3 reliably
         try:
-            return self._decode_mp3_audio(audio_data, target_sample_rate)
+            return await self._decode_mp3_audio(audio_data, target_sample_rate)
         except RuntimeError as e:
             # If ffmpeg fails, try soundfile as fallback (for WAV files)
             logger.debug("ffmpeg decode failed, trying soundfile: %s", e)
@@ -471,11 +479,11 @@ class AudioRouter:
                 logger.error("soundfile also failed: %s", sf_error)
                 # Re-raise the original ffmpeg error with context
                 raise RuntimeError(f"Audio decode failed - ffmpeg: {e}; soundfile: {sf_error}")
-    
+
     async def play_audio_to_device(
-        self, 
-        audio_data: bytes, 
-        sample_rate: int = 48000, 
+        self,
+        audio_data: bytes,
+        sample_rate: int = 48000,
         device_index: Optional[int] = None,
         enable_normalization: bool = True,
         normalization_type: str = "Peak",
@@ -484,7 +492,7 @@ class AudioRouter:
 
         """
         Play audio data to a specific output device.
-        
+
         Args:
             audio_data: Raw audio data (MP3/WAV bytes from edge_tts)
             sample_rate: Sample rate of the audio
@@ -492,34 +500,34 @@ class AudioRouter:
             enable_normalization: Whether to apply normalization (overridden by processing_profile)
             normalization_type: Type of normalization (overridden by processing_profile)
             processing_profile: Processing profile ("fast_preview", "balanced", "high_quality")
-            
+
         Returns:
             True if playback succeeded, False otherwise.
         """
         try:
             self._stop_requested.clear()
-            
+
             # Derive processing settings from profile
             profile_settings = self._get_profile_settings(processing_profile)
             target_sr = profile_settings["sample_rate"]
             kaiser_beta = profile_settings["kaiser_beta"]
             stereo_width = profile_settings["stereo_width"]
-            
+
             # Determine normalization type: respect enable_normalization flag
             # If normalization is disabled, use "None"; otherwise use caller-provided type
             if enable_normalization:
                 norm_type = normalization_type
             else:
                 norm_type = "None"
-            
+
             # Decode audio data using ffmpeg (reliable MP3 support) with fallback to soundfile
             # For fast_preview (target_sr is None), decode at native sample rate to avoid resampling
             try:
-                data, sr = self._decode_audio_data(audio_data, target_sr)
+                data, sr = await self._decode_audio_data(audio_data, target_sr)
             except RuntimeError as e:
                 logger.error("Failed to decode audio data: %s", e)
                 return False
-            
+
             # High-quality resampling using scipy (skip for fast_preview when target_sr is None)
             # Do resampling BEFORE normalization so LUFS uses correct sample rate
             if target_sr is not None and sr != target_sr:
@@ -527,25 +535,25 @@ class AudioRouter:
                 effective_sr = target_sr
             else:
                 effective_sr = sr
-            
+
             # Apply normalization after resampling, using the effective sample rate for LUFS
             if norm_type != "None":
                 data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
-            
+
             # Convert mono to stereo with enhancement (skip for fast_preview)
             if len(data.shape) == 1 and stereo_width > 0:
                 data = self._stereo_enhancement(data, width=stereo_width)
-            
+
             # Ensure stereo for consistent output
             if len(data.shape) == 1:
                 data = np.column_stack((data, data))
-            
+
             # Play audio using sounddevice
             def callback(outdata, frames, time, status):
                 # Check if stop was requested
                 if self._stop_requested.is_set():
                     raise sd.CallbackStop()
-                
+
                 # Fill buffer with audio data
                 nonlocal data
                 if len(data) > 0:
@@ -557,7 +565,7 @@ class AudioRouter:
                 else:
                     outdata[:] = 0
                     raise sd.CallbackStop()
-            
+
             # Create output stream
             # Use the effective_sr already computed during resampling
             channels = data.shape[1] if len(data.shape) > 1 else 1
@@ -570,15 +578,15 @@ class AudioRouter:
                 finished_callback=self._stream_finished
             )
 
-            
+
             with self._current_stream:
                 # Wait for playback to complete or stop requested
                 while self._current_stream.active and not self._stop_requested.is_set():
                     await asyncio.sleep(0.1)
-            
+
             # Return False when playback was interrupted by stop request
             return not self._stop_requested.is_set()
-            
+
         except sd.PortAudioError:
             return False
         except Exception as e:
@@ -593,7 +601,7 @@ class AudioRouter:
                         pass
             finally:
                 self._current_stream = None
-    
+
     def _stream_finished(self):
         """Callback when audio stream finishes."""
         # Reset amplitude when stream finishes
@@ -603,61 +611,61 @@ class AudioRouter:
                 self._amplitude_callback(0.0)
             except Exception:
                 pass
-    
+
     def set_amplitude_callback(self, callback):
         """
         Set a callback function to receive amplitude updates during playback.
-        
+
         Args:
             callback: Function that takes a float (0.0-1.0) amplitude value
         """
         self._amplitude_callback = callback
-    
+
     def _calculate_chunk_amplitude(self, chunk: np.ndarray) -> float:
         """
         Calculate RMS amplitude for an audio chunk.
-        
+
         Args:
             chunk: Audio data chunk
-            
+
         Returns:
             Normalized amplitude value (0.0-1.0)
         """
         if chunk.size == 0:
             return 0.0
-        
+
         # Calculate RMS
         rms = np.sqrt(np.mean(chunk ** 2))
-        
+
         # Normalize to 0.0-1.0 range (typical speech RMS is 0.1-0.3)
         normalized = min(1.0, rms * 3.0)
-        
+
         return float(normalized)
-    
+
     def get_current_amplitude(self) -> float:
         """Get the current amplitude value."""
         return self._current_amplitude
-    
-    def get_audio_duration(self, audio_data: bytes) -> float:
+
+    async def get_audio_duration(self, audio_data: bytes) -> float:
         """
         Calculate the duration of audio data in seconds.
-        
+
         Args:
             audio_data: Raw audio data bytes (MP3/WAV)
-            
+
         Returns:
             Duration in seconds as a float, or 0.0 on error.
         """
         try:
             # Try to decode the audio and calculate duration from samples
-            data, sr = self._decode_audio_data(audio_data, 48000)
+            data, sr = await self._decode_audio_data(audio_data, 48000)
             if data.size > 0:
                 # Duration = number of samples / sample rate
                 return len(data) / sr
             return 0.0
         except Exception:
             return 0.0
-    
+
     def stop_playback(self):
         """Stop current audio playback."""
         self._stop_requested.set()
@@ -668,34 +676,34 @@ class AudioRouter:
                 stream.stop()
             except Exception:
                 pass
-    
+
     def is_playing(self) -> bool:
         """Check if audio is currently playing."""
         stream = self._current_stream
         return stream is not None and stream.active
-    
+
     def is_vbcable_installed(self) -> bool:
         """
         Check if VB-Cable or similar virtual audio cable is installed.
-        
+
         Returns:
             True if a virtual audio cable device is found, False otherwise.
         """
         # Keywords that identify VB-Cable and similar virtual audio devices
         vbcable_keywords = ["cable", "vb-audio", "vbaudio", "vb cable"]
-        
+
         devices = self.get_audio_devices()
         for device in devices:
             device_name_lower = device['name'].lower()
             if any(keyword in device_name_lower for keyword in vbcable_keywords):
                 return True
-        
+
         return False
-    
+
     async def play_audio_with_amplitude(
-        self, 
-        audio_data: bytes, 
-        sample_rate: int = 48000, 
+        self,
+        audio_data: bytes,
+        sample_rate: int = 48000,
         device_index: Optional[int] = None,
         enable_normalization: bool = True,
         normalization_type: str = "Peak",
@@ -704,7 +712,7 @@ class AudioRouter:
     ) -> bool:
         """
         Play audio data with real-time amplitude analysis.
-        
+
         Args:
             audio_data: Raw audio data (MP3/WAV bytes from edge_tts)
             sample_rate: Sample rate of the audio
@@ -713,62 +721,62 @@ class AudioRouter:
             normalization_type: Type of normalization
             amplitude_callback: Callback function for amplitude updates
             processing_profile: Processing profile ("fast_preview", "balanced", "high_quality")
-            
+
         Returns:
             True if playback succeeded, False otherwise.
         """
         try:
             self._stop_requested.clear()
             self._amplitude_callback = amplitude_callback
-            
+
             # Derive processing settings from profile
             profile_settings = self._get_profile_settings(processing_profile)
             target_sr = profile_settings["sample_rate"]
             kaiser_beta = profile_settings["kaiser_beta"]
             stereo_width = profile_settings["stereo_width"]
-            
+
             # Determine normalization type: respect enable_normalization flag
             if enable_normalization:
                 norm_type = normalization_type
             else:
                 norm_type = "None"
-            
+
             # Decode audio data using ffmpeg (reliable MP3 support) with fallback to soundfile
             # For fast_preview (target_sr is None), decode at native sample rate to avoid resampling
             try:
-                data, sr = self._decode_audio_data(audio_data, target_sr)
+                data, sr = await self._decode_audio_data(audio_data, target_sr)
             except RuntimeError as e:
                 logger.error("Failed to decode audio data: %s", e)
                 return False
-            
+
             # High-quality resampling using scipy (skip for fast_preview when target_sr is None)
             if target_sr is not None and sr != target_sr:
                 data = self._resample_high_quality(data, sr, target_sr, kaiser_beta)
                 effective_sr = target_sr
             else:
                 effective_sr = sr
-            
+
             # Apply normalization after resampling
             if norm_type != "None":
                 data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
-            
+
             # Convert mono to stereo with enhancement (skip for fast_preview)
             if len(data.shape) == 1 and stereo_width > 0:
                 data = self._stereo_enhancement(data, width=stereo_width)
-            
+
             # Ensure stereo for consistent output
             if len(data.shape) == 1:
                 data = np.column_stack((data, data))
-            
+
             # Store original data for amplitude calculation
             original_data = data.copy()
-            
+
             # Play audio using sounddevice
             def callback(outdata, frames, time, status):
                 # Check if stop was requested
                 if self._stop_requested.is_set():
                     raise sd.CallbackStop()
-                
+
                 # Fill buffer with audio data
                 nonlocal data, original_data
                 if len(data) > 0:
@@ -776,7 +784,7 @@ class AudioRouter:
                     outdata[:chunksize] = data[:chunksize]
                     if chunksize < frames:
                         outdata[chunksize:] = 0
-                    
+
                     # Calculate amplitude for this chunk
                     if self._amplitude_callback:
                         chunk_for_amp = original_data[:chunksize]
@@ -786,7 +794,7 @@ class AudioRouter:
                             self._amplitude_callback(amp)
                         except Exception:
                             pass
-                    
+
                     data = data[chunksize:]
                     original_data = original_data[chunksize:]
                 else:
@@ -798,7 +806,7 @@ class AudioRouter:
                         except Exception:
                             pass
                     raise sd.CallbackStop()
-            
+
             # Create output stream - use effective_sr from processing
             channels = data.shape[1] if len(data.shape) > 1 else 1
 
@@ -810,15 +818,15 @@ class AudioRouter:
                 finished_callback=self._stream_finished
             )
 
-            
+
             with self._current_stream:
                 # Wait for playback to complete or stop requested
                 while self._current_stream.active and not self._stop_requested.is_set():
                     await asyncio.sleep(0.05)  # Faster updates for amplitude
-            
+
             # Return False when playback was interrupted by stop request
             return not self._stop_requested.is_set()
-            
+
         except sd.PortAudioError:
             return False
         except Exception as e:
@@ -834,7 +842,7 @@ class AudioRouter:
             finally:
                 self._current_stream = None
                 self._current_amplitude = 0.0
-    
+
     async def play_audio_streaming(
         self,
         audio_chunk_generator,
@@ -848,11 +856,11 @@ class AudioRouter:
     ) -> bool:
         """
         Play streaming audio data to a specific output device.
-        
+
         This method receives audio chunks from an async generator and plays them
         in real-time, enabling low-latency playback where audio starts before
         the entire TTS generation is complete.
-        
+
         Args:
             audio_chunk_generator: Async generator yielding MP3 audio chunks
             sample_rate: Target sample rate for playback
@@ -862,29 +870,29 @@ class AudioRouter:
             enable_normalization: Whether to apply normalization
             normalization_type: Type of normalization ("Peak", "RMS", "LUFS", or "None")
             amplitude_callback: Optional callback for real-time amplitude updates
-            
+
         Returns:
             True if playback succeeded, False otherwise.
         """
         import queue
         import threading as th
-        
+
         try:
             self._stop_requested.clear()
-            
+
             # Get profile settings
             profile_settings = self._get_profile_settings(processing_profile)
             target_sr = profile_settings["sample_rate"]  # None for fast_preview means no resampling
             kaiser_beta = profile_settings["kaiser_beta"]
             stereo_width = profile_settings["stereo_width"]
-            
+
             # Determine normalization type: respect enable_normalization flag
             # If normalization is disabled, use "None"; otherwise use caller-provided type
             if enable_normalization:
                 norm_type = normalization_type
             else:
                 norm_type = "None"
-            
+
             # Queue for decoded audio chunks - bounded to provide backpressure
             # Limits memory growth when decode outruns playback on long streams
             audio_queue = queue.Queue(maxsize=5)
@@ -893,7 +901,7 @@ class AudioRouter:
             decode_error = [None]
             stream_ended = [False]  # Track when generator is exhausted
             stream_sample_rate = [None]  # Track actual sample rate for fast_preview mode
-            
+
             # Accumulated MP3 data for decoding - need enough for valid MP3 frames
             mp3_buffer = bytearray()
             # Minimum buffer size before attempting decode (MP3 frames need ~100-500 bytes minimum)
@@ -902,20 +910,20 @@ class AudioRouter:
             MAX_BUFFER_SIZE = 10 * 1024 * 1024  # 10 MB limit for MP3 buffer
             MAX_CONSECUTIVE_DECODE_FAILURES = 10  # Max consecutive decode failures before giving up
             consecutive_decode_failures = [0]  # Use list for closure mutability
-            
+
             async def decode_chunks():
                 """Decode incoming MP3 chunks incrementally and add to playback queue."""
                 nonlocal mp3_buffer
-                
+
                 try:
                     async for chunk in audio_chunk_generator:
                         # Check for stop
                         if self._stop_requested.is_set() or (stop_event and stop_event.is_set()):
                             break
-                        
+
                         # Add chunk to buffer
                         mp3_buffer.extend(chunk)
-                        
+
                         # Guard: Check if buffer exceeds maximum size
                         if len(mp3_buffer) > MAX_BUFFER_SIZE:
                             logger.error("MP3 buffer exceeded maximum size (%d bytes), aborting decode", MAX_BUFFER_SIZE)
@@ -923,13 +931,13 @@ class AudioRouter:
                             stream_ended[0] = True
                             audio_queue.put(None)
                             return
-                        
+
                         # Try to decode incrementally when we have enough data
                         while len(mp3_buffer) >= MIN_DECODE_BUFFER:
                             try:
                                 # Use ffmpeg for reliable MP3 decoding
                                 try:
-                                    data, sr = self._decode_mp3_audio(bytes(mp3_buffer), target_sr)
+                                    data, sr = await self._decode_mp3_audio(bytes(mp3_buffer), target_sr)
                                     # ffmpeg decodes all available data, so we clear the buffer
                                     consumed = len(mp3_buffer)
                                 except RuntimeError as decode_err:
@@ -949,21 +957,21 @@ class AudioRouter:
                                         # Decoding failed, increment failure counter
                                         consecutive_decode_failures[0] += 1
                                         if consecutive_decode_failures[0] >= MAX_CONSECUTIVE_DECODE_FAILURES:
-                                            logger.error("Too many consecutive decode failures (%d), aborting decode", 
+                                            logger.error("Too many consecutive decode failures (%d), aborting decode",
                                                        consecutive_decode_failures[0])
                                             decode_error[0] = RuntimeError(f"Too many consecutive decode failures ({MAX_CONSECUTIVE_DECODE_FAILURES})")
                                             stream_ended[0] = True
                                             audio_queue.put(None)
                                             return
                                         break
-                                
+
                                 if data.size > 0:
                                     # Reset consecutive decode failures on success
                                     consecutive_decode_failures[0] = 0
-                                    
+
                                     # Remove consumed bytes from buffer
                                     mp3_buffer = mp3_buffer[consumed:]
-                                    
+
                                     # Resample if needed (before normalization for correct LUFS)
                                     # Skip resampling when target_sr is None (fast_preview profile)
                                     if target_sr is not None and sr != target_sr:
@@ -971,26 +979,26 @@ class AudioRouter:
                                         effective_sr = target_sr
                                     else:
                                         effective_sr = sr
-                                    
+
                                     # Apply normalization
                                     if norm_type != "None":
                                         data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
-                                    
+
                                     # Apply stereo enhancement for mono data before converting to stereo
                                     if len(data.shape) == 1 and stereo_width > 0:
                                         data = self._stereo_enhancement(data, width=stereo_width)
-                                    
+
                                     # Ensure stereo for consistent output
                                     if len(data.shape) == 1:
                                         data = np.column_stack((data, data))
-                                    
+
                                     # Queue for playback with backpressure handling
                                     # Block with timeout to allow checking stop_event
                                     while True:
                                         # Check for stop before attempting to queue
                                         if self._stop_requested.is_set() or (stop_event and stop_event.is_set()):
                                             return
-                                        
+
                                         try:
                                             # Try to put with a short timeout to allow stop checking
                                             audio_queue.put(data, block=True, timeout=0.1)
@@ -999,39 +1007,39 @@ class AudioRouter:
                                             # Queue is full, loop back and check stop_event
                                             # This provides backpressure - decoder waits for playback to catch up
                                             continue
-                                    
+
                                     # Track the sample rate for stream creation (needed for fast_preview)
                                     if stream_sample_rate[0] is None:
                                         stream_sample_rate[0] = effective_sr
-                                    
+
                                     # Signal that playback can start
                                     if not playback_started.is_set():
                                         playback_started.set()
                                 else:
                                     # Couldn't decode yet, wait for more data
                                     break
-                                    
+
                             except Exception as e:
                                 # Decoding failed, increment failure counter
                                 consecutive_decode_failures[0] += 1
-                                
+
                                 # Guard: Check if too many consecutive failures
                                 if consecutive_decode_failures[0] >= MAX_CONSECUTIVE_DECODE_FAILURES:
-                                    logger.error("Too many consecutive decode failures (%d), aborting decode", 
+                                    logger.error("Too many consecutive decode failures (%d), aborting decode",
                                                consecutive_decode_failures[0])
                                     decode_error[0] = RuntimeError(f"Too many consecutive decode failures ({MAX_CONSECUTIVE_DECODE_FAILURES})")
                                     stream_ended[0] = True
                                     audio_queue.put(None)
                                     return
-                                
+
                                 # Keep the buffer and continue accumulating
                                 break
-                    
+
                     # Decode any remaining data in the buffer
                     if len(mp3_buffer) > 0:
                         try:
-                            data, sr = self._decode_audio_data(bytes(mp3_buffer), target_sr)
-                            
+                            data, sr = await self._decode_audio_data(bytes(mp3_buffer), target_sr)
+
                             if data.size > 0:
                                 # Resample if needed
                                 # Skip resampling when target_sr is None (fast_preview profile)
@@ -1040,44 +1048,44 @@ class AudioRouter:
                                     effective_sr = target_sr
                                 else:
                                     effective_sr = sr
-                                
+
                                 # Apply normalization
                                 if norm_type != "None":
                                     data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
-                                
+
                                 # Apply stereo enhancement for mono data before converting to stereo
                                 if len(data.shape) == 1 and stereo_width > 0:
                                     data = self._stereo_enhancement(data, width=stereo_width)
-                                
+
                                 # Ensure stereo for consistent output
                                 if len(data.shape) == 1:
                                     data = np.column_stack((data, data))
-                                
+
                                 # Queue for playback
                                 audio_queue.put(data)
-                                
+
                                 if not playback_started.is_set():
                                     playback_started.set()
                         except Exception as e:
                             decode_error[0] = e
-                    
+
                     # Signal end of stream
                     stream_ended[0] = True
                     audio_queue.put(None)
-                    
+
                 except Exception as e:
                     decode_error[0] = e
                     stream_ended[0] = True
                     audio_queue.put(None)
-            
+
             # Closure variable to hold leftover samples between callbacks
             leftover = [None]
-            
+
             def audio_callback(outdata, frames, time, status):
                 """Sounddevice callback for streaming playback."""
                 if self._stop_requested.is_set():
                     raise sd.CallbackStop()
-                
+
                 # Check leftover first (guarantees ordering)
                 if leftover[0] is not None:
                     chunk = leftover[0]
@@ -1099,7 +1107,7 @@ class AudioRouter:
                         # No data available yet, output silence
                         outdata[:] = 0
                         return
-                
+
                 # Fill output buffer
                 if len(chunk) >= frames:
                     outdata[:] = chunk[:frames]
@@ -1126,10 +1134,10 @@ class AudioRouter:
                             amplitude_callback(amp)
                         except Exception:
                             pass
-            
+
             # Start decode task
             decode_task = asyncio.create_task(decode_chunks())
-            
+
             # Wait for first chunk or timeout
             try:
                 await asyncio.wait_for(playback_started.wait(), timeout=5.0)
@@ -1137,20 +1145,20 @@ class AudioRouter:
                 # No audio received within timeout
                 decode_task.cancel()
                 return False
-            
+
             # Check for decode errors
             if decode_error[0]:
                 return False
-            
+
             # Determine the sample rate for the output stream
             # For fast_preview (target_sr is None), use the tracked native sample rate
             # For other profiles, use the target sample rate from profile settings
             output_sr = target_sr if target_sr is not None else stream_sample_rate[0]
-            
+
             if output_sr is None:
                 logger.error("Could not determine sample rate for playback stream")
                 return False
-            
+
             # Start playback stream
             self._current_stream = sd.OutputStream(
                 device=device_index,
@@ -1159,7 +1167,7 @@ class AudioRouter:
                 callback=audio_callback,
                 finished_callback=lambda: playback_finished.set()
             )
-            
+
             with self._current_stream:
                 # Wait for playback to complete or stop
                 while self._current_stream.active and not self._stop_requested.is_set():
@@ -1167,15 +1175,15 @@ class AudioRouter:
                         self._stop_requested.set()
                         break
                     await asyncio.sleep(0.05)
-            
+
             # Wait for decode task to complete
             try:
                 await asyncio.wait_for(decode_task, timeout=1.0)
             except asyncio.TimeoutError:
                 decode_task.cancel()
-            
+
             return not self._stop_requested.is_set()
-            
+
         except sd.PortAudioError:
             return False
         except Exception:
@@ -1187,7 +1195,7 @@ class AudioRouter:
                 except Exception:
                     pass
                 self._current_stream = None
-    
+
     def start_mic_passthrough(
         self,
         input_device_index: Optional[int],
@@ -1197,19 +1205,19 @@ class AudioRouter:
     ) -> Tuple[bool, Optional[str]]:
         """
         Start continuous microphone passthrough to an output device.
-        
+
         Creates an input stream from the microphone and an output stream to the
         target device, with audio flowing through a queue in real-time.
-        
+
         For same-device (input == output), uses a single full-duplex stream
         for glitch-free passthrough without queue overhead.
-        
+
         Args:
             input_device_index: Input device index (None for system default)
             output_device_index: Output device index (None for system default)
             volume: Volume multiplier (0.0 to 2.0, where 1.0 is normal)
             sample_rate: Sample rate for both streams (will be negotiated if unsupported)
-            
+
         Returns:
             Tuple of (success: bool, error_message: Optional[str]).
             If successful, error_message will be None.
@@ -1217,33 +1225,33 @@ class AudioRouter:
         with self._passthrough_lock:
             # Stop any existing passthrough first (without re-acquiring lock)
             self._stop_mic_passthrough_unlocked()
-            
+
             try:
                 # Query native sample rates from devices for negotiation
                 input_native_sr = None
                 output_native_sr = None
-                
+
                 if input_device_index is not None:
                     try:
                         input_device_info = sd.query_devices(input_device_index)
                         input_native_sr = int(input_device_info.get('default_samplerate', sample_rate))
                     except Exception as e:
                         logger.warning("Could not query input device sample rate: %s", e)
-                
+
                 if output_device_index is not None:
                     try:
                         output_device_info = sd.query_devices(output_device_index)
                         output_native_sr = int(output_device_info.get('default_samplerate', sample_rate))
                     except Exception as e:
                         logger.warning("Could not query output device sample rate: %s", e)
-                
+
                 # Determine the best sample rate to use
                 # Priority: caller's preference > input native > output native > default
                 chosen_sr = sample_rate
-                
+
                 # Check if same device (treat None == None as equal)
                 same_device = (input_device_index == output_device_index)
-                
+
                 # ========== SAME-DEVICE PATH: Full-duplex stream ==========
                 if same_device:
                     # Duplex callback: handles both input and output atomically
@@ -1254,7 +1262,7 @@ class AudioRouter:
                         except Exception as e:
                             logger.warning("Passthrough duplex callback error: %s", e)
                             outdata[:] = 0
-                    
+
                     # Try to open duplex stream with negotiated sample rate
                     # Attempt 1: Use caller-provided sample rate
                     try:
@@ -1267,14 +1275,14 @@ class AudioRouter:
                             callback=duplex_callback
                         )
                         self._passthrough_duplex_stream.start()
-                        
+
                     except sd.PortAudioError as e:
                         # Attempt 2: Use input device's native sample rate
                         if input_native_sr is not None and input_native_sr != chosen_sr:
                             logger.info("Retrying passthrough with input device native sample rate: %d", input_native_sr)
                             self._stop_mic_passthrough_unlocked()
                             chosen_sr = input_native_sr
-                            
+
                             try:
                                 self._passthrough_duplex_stream = sd.Stream(
                                     device=input_device_index,
@@ -1285,14 +1293,14 @@ class AudioRouter:
                                     callback=duplex_callback
                                 )
                                 self._passthrough_duplex_stream.start()
-                                
+
                             except sd.PortAudioError as e2:
                                 # Attempt 3: Use output device's native sample rate
                                 if output_native_sr is not None and output_native_sr != chosen_sr:
                                     logger.info("Retrying passthrough with output device native sample rate: %d", output_native_sr)
                                     self._stop_mic_passthrough_unlocked()
                                     chosen_sr = output_native_sr
-                                    
+
                                     self._passthrough_duplex_stream = sd.Stream(
                                         device=input_device_index,
                                         samplerate=chosen_sr,
@@ -1306,18 +1314,18 @@ class AudioRouter:
                                     raise e2
                         else:
                             raise
-                    
+
                     self._passthrough_active = True
-                    
+
                     logger.info("Microphone passthrough started (duplex mode, device=%s, sample_rate=%d, volume=%.2f)",
                                input_device_index, chosen_sr, volume)
                     return (True, None)
-                
+
                 # ========== DIFFERENT-DEVICE PATH: Two streams with synchronized blocksize ==========
-                
+
                 # Create bounded queue (smaller for tighter latency)
                 self._passthrough_queue = queue.Queue(maxsize=10)
-                
+
                 # Input callback: puts audio data into the queue
                 def input_callback(indata, frames, time, status):
                     try:
@@ -1332,7 +1340,7 @@ class AudioRouter:
                         self._passthrough_queue.put(audio_chunk)
                     except Exception as e:
                         logger.warning("Passthrough input callback error: %s", e)
-                
+
                 # Output callback: gets audio data from the queue
                 def output_callback(outdata, frames, time, status):
                     try:
@@ -1349,10 +1357,10 @@ class AudioRouter:
                     except Exception as e:
                         logger.warning("Passthrough output callback error: %s", e)
                         outdata[:] = 0
-                
+
                 # Pre-fill silence chunks for startup buffer
                 silence_chunk = np.zeros((self._PASSTHROUGH_BLOCKSIZE, 1), dtype='float32')
-                
+
                 # Helper function to clean up partially created streams
                 def cleanup_partial_streams():
                     """Clean up any partially created streams on error."""
@@ -1370,7 +1378,7 @@ class AudioRouter:
                         except Exception:
                             pass
                         self._passthrough_output_stream = None
-                
+
                 # Try to open streams with negotiated sample rate
                 # Attempt 1: Use caller-provided sample rate
                 stream_opened = False
@@ -1384,7 +1392,7 @@ class AudioRouter:
                         blocksize=self._PASSTHROUGH_BLOCKSIZE,
                         callback=input_callback
                     )
-                    
+
                     # Open output stream (mono) with fixed blocksize
                     self._passthrough_output_stream = sd.OutputStream(
                         device=output_device_index,
@@ -1394,25 +1402,25 @@ class AudioRouter:
                         blocksize=self._PASSTHROUGH_BLOCKSIZE,
                         callback=output_callback
                     )
-                    
+
                     # Start input stream first
                     self._passthrough_input_stream.start()
-                    
+
                     # Pre-fill queue with 2 silence chunks before starting output
                     self._passthrough_queue.put(silence_chunk)
                     self._passthrough_queue.put(silence_chunk)
-                    
+
                     # Now start output stream
                     self._passthrough_output_stream.start()
                     stream_opened = True
-                    
+
                 except sd.PortAudioError as e:
                     # Attempt 2: Use input device's native sample rate
                     if input_native_sr is not None and input_native_sr != chosen_sr:
                         logger.info("Retrying passthrough with input device native sample rate: %d", input_native_sr)
                         cleanup_partial_streams()
                         chosen_sr = input_native_sr
-                        
+
                         try:
                             self._passthrough_input_stream = sd.InputStream(
                                 device=input_device_index,
@@ -1422,7 +1430,7 @@ class AudioRouter:
                                 blocksize=self._PASSTHROUGH_BLOCKSIZE,
                                 callback=input_callback
                             )
-                            
+
                             self._passthrough_output_stream = sd.OutputStream(
                                 device=output_device_index,
                                 samplerate=chosen_sr,
@@ -1431,23 +1439,23 @@ class AudioRouter:
                                 blocksize=self._PASSTHROUGH_BLOCKSIZE,
                                 callback=output_callback
                             )
-                            
+
                             self._passthrough_input_stream.start()
-                            
+
                             # Pre-fill queue with 2 silence chunks
                             self._passthrough_queue.put(silence_chunk)
                             self._passthrough_queue.put(silence_chunk)
-                            
+
                             self._passthrough_output_stream.start()
                             stream_opened = True
-                            
+
                         except sd.PortAudioError as e2:
                             # Attempt 3: Use output device's native sample rate
                             if output_native_sr is not None and output_native_sr != chosen_sr:
                                 logger.info("Retrying passthrough with output device native sample rate: %d", output_native_sr)
                                 cleanup_partial_streams()
                                 chosen_sr = output_native_sr
-                                
+
                                 try:
                                     self._passthrough_input_stream = sd.InputStream(
                                         device=input_device_index,
@@ -1457,7 +1465,7 @@ class AudioRouter:
                                         blocksize=self._PASSTHROUGH_BLOCKSIZE,
                                         callback=input_callback
                                     )
-                                    
+
                                     self._passthrough_output_stream = sd.OutputStream(
                                         device=output_device_index,
                                         samplerate=chosen_sr,
@@ -1466,29 +1474,29 @@ class AudioRouter:
                                         blocksize=self._PASSTHROUGH_BLOCKSIZE,
                                         callback=output_callback
                                     )
-                                    
+
                                     self._passthrough_input_stream.start()
-                                    
+
                                     # Pre-fill queue with 2 silence chunks
                                     self._passthrough_queue.put(silence_chunk)
                                     self._passthrough_queue.put(silence_chunk)
-                                    
+
                                     self._passthrough_output_stream.start()
                                     stream_opened = True
-                                    
+
                                 except sd.PortAudioError as e3:
                                     # Attempt 4: Use each device's native rate with resampling
                                     # This handles the case where input and output only support different rates
-                                    if (input_native_sr is not None and output_native_sr is not None and 
+                                    if (input_native_sr is not None and output_native_sr is not None and
                                         input_native_sr != output_native_sr):
                                         logger.info("Retrying passthrough with native rates (input=%d, output=%d) and resampling",
                                                    input_native_sr, output_native_sr)
                                         cleanup_partial_streams()
-                                        
+
                                         # Store sample rates for resampling in callbacks
                                         input_sr_for_resample = input_native_sr
                                         output_sr_for_resample = output_native_sr
-                                        
+
                                         # Resampling input callback: captures at input native rate
                                         def resampling_input_callback(indata, frames, time, status):
                                             try:
@@ -1496,8 +1504,8 @@ class AudioRouter:
                                                 audio_chunk = indata.copy() * volume
                                                 # Resample from input rate to output rate
                                                 resampled = self._resample_high_quality(
-                                                    audio_chunk.flatten(), 
-                                                    input_sr_for_resample, 
+                                                    audio_chunk.flatten(),
+                                                    input_sr_for_resample,
                                                     output_sr_for_resample,
                                                     kaiser_beta=5.0
                                                 )
@@ -1512,7 +1520,7 @@ class AudioRouter:
                                                 self._passthrough_queue.put(resampled)
                                             except Exception as e:
                                                 logger.warning("Passthrough resampling input callback error: %s", e)
-                                        
+
                                         # Resampling output callback: plays at output native rate
                                         def resampling_output_callback(outdata, frames, time, status):
                                             try:
@@ -1529,11 +1537,11 @@ class AudioRouter:
                                             except Exception as e:
                                                 logger.warning("Passthrough resampling output callback error: %s", e)
                                                 outdata[:] = 0
-                                        
+
                                         # Calculate appropriate blocksize for output based on resampling ratio
                                         ratio = output_sr_for_resample / input_sr_for_resample
                                         output_blocksize = int(self._PASSTHROUGH_BLOCKSIZE * ratio)
-                                        
+
                                         self._passthrough_input_stream = sd.InputStream(
                                             device=input_device_index,
                                             samplerate=input_native_sr,
@@ -1542,7 +1550,7 @@ class AudioRouter:
                                             blocksize=self._PASSTHROUGH_BLOCKSIZE,
                                             callback=resampling_input_callback
                                         )
-                                        
+
                                         self._passthrough_output_stream = sd.OutputStream(
                                             device=output_device_index,
                                             samplerate=output_native_sr,
@@ -1551,16 +1559,16 @@ class AudioRouter:
                                             blocksize=output_blocksize,
                                             callback=resampling_output_callback
                                         )
-                                        
+
                                         self._passthrough_input_stream.start()
-                                        
+
                                         # Pre-fill queue with silence chunks (at output rate)
                                         output_silence_chunk = np.zeros((output_blocksize, 1), dtype='float32')
                                         self._passthrough_queue.put(output_silence_chunk)
                                         self._passthrough_queue.put(output_silence_chunk)
-                                        
+
                                         self._passthrough_output_stream.start()
-                                        
+
                                         # Update chosen_sr for logging
                                         chosen_sr = f"{input_native_sr}->{output_native_sr}"
                                         stream_opened = True
@@ -1570,16 +1578,16 @@ class AudioRouter:
                                 raise e2
                     else:
                         raise
-                
+
                 if stream_opened:
                     self._passthrough_active = True
-                    
+
                     logger.info("Microphone passthrough started (input=%s, output=%s, sample_rate=%s, volume=%.2f, blocksize=%d)",
                                input_device_index, output_device_index, chosen_sr, volume, self._PASSTHROUGH_BLOCKSIZE)
                     return (True, None)
                 else:
                     return (False, "Failed to open audio streams")
-                    
+
             except sd.PortAudioError as e:
                 logger.error("PortAudio error starting mic passthrough: %s", e)
                 self.stop_mic_passthrough()
@@ -1588,16 +1596,16 @@ class AudioRouter:
                 logger.error("Error starting mic passthrough: %s", e)
                 self.stop_mic_passthrough()
                 return (False, str(e))
-    
+
     def _stop_mic_passthrough_unlocked(self):
         """
         Internal method to stop microphone passthrough without acquiring lock.
-        
+
         This must only be called while holding _passthrough_lock to avoid race conditions.
         Used internally by start_mic_passthrough to restart with different devices.
         """
         self._passthrough_active = False
-        
+
         # Stop and close duplex stream (same-device mode)
         if self._passthrough_duplex_stream is not None:
             try:
@@ -1607,7 +1615,7 @@ class AudioRouter:
                 logger.warning("Error closing passthrough duplex stream: %s", e)
             finally:
                 self._passthrough_duplex_stream = None
-        
+
         # Stop and close input stream
         if self._passthrough_input_stream is not None:
             try:
@@ -1617,7 +1625,7 @@ class AudioRouter:
                 logger.warning("Error closing passthrough input stream: %s", e)
             finally:
                 self._passthrough_input_stream = None
-        
+
         # Stop and close output stream
         if self._passthrough_output_stream is not None:
             try:
@@ -1627,7 +1635,7 @@ class AudioRouter:
                 logger.warning("Error closing passthrough output stream: %s", e)
             finally:
                 self._passthrough_output_stream = None
-        
+
         # Clear the queue by draining it
         if self._passthrough_queue is not None:
             try:
@@ -1635,16 +1643,16 @@ class AudioRouter:
                     self._passthrough_queue.get_nowait()
             except queue.Empty:
                 pass
-    
+
     def stop_mic_passthrough(self):
         """Stop microphone passthrough and clean up resources."""
         self._stop_mic_passthrough_unlocked()
         logger.info("Microphone passthrough stopped")
-    
+
     def is_mic_passthrough_active(self) -> bool:
         """
         Check if microphone passthrough is currently active.
-        
+
         Returns:
             True if passthrough is active, False otherwise.
         """
