@@ -337,6 +337,9 @@ class LanguageDetector:
         self._word_pattern = re.compile(r'\b\w+\b', re.UNICODE)
         self._sentence_pattern = re.compile(r'[.!?。！？\n]+')
         
+        # Pre-calculate common words as sets for O(1) lookups
+        self._common_words_sets = {lang: set(words) for lang, words in self.COMMON_WORDS.items()}
+
         logger.info(f"LanguageDetector initialized (langid available: {_LANGID_AVAILABLE})")
     
     def detect(self, text: str, use_cache: bool = True) -> LanguageDetectionResult:
@@ -435,10 +438,10 @@ class LanguageDetector:
         if not words:
             return None
         
-        # Check each word against common words lists
+        # Check each word against common words sets
         for word in words:
-            for lang, common_words in self.COMMON_WORDS.items():
-                if word in common_words:
+            for lang, common_words_set in self._common_words_sets.items():
+                if word in common_words_set:
                     # Found an exact match - return with high confidence
                     return LanguageDetectionResult(
                         language=lang,
@@ -580,8 +583,8 @@ class LanguageDetector:
         # Word-based scoring - always apply, not just for longer texts
         words = set(self._word_pattern.findall(text_lower))
         
-        for lang, common_words in self.COMMON_WORDS.items():
-            matches = words.intersection(set(common_words))
+        for lang, common_words_set in self._common_words_sets.items():
+            matches = words.intersection(common_words_set)
             # Give higher weight to word matches for short texts
             weight = 3.0 if len(words) <= 3 else 2.0
             scores[lang] = scores.get(lang, 0) + len(matches) * weight
