@@ -1033,7 +1033,9 @@ class MainWindow:
                         if voice_amplitude_enabled and self._amplitude_analyzer is not None:
                             amplitude_callback = self._amplitude_analyzer.get_amplitude
                         # Get audio duration to synchronize viseme animation with playback
-                        audio_duration = self.audio_router.get_audio_duration(audio_data)
+                        audio_duration = loop.run_until_complete(
+                            self.audio_router.get_audio_duration(audio_data)
+                        )
                         self._viseme_mapper.start_viseme_animation(
                             text, 
                             self.osc_client.send_viseme, 
