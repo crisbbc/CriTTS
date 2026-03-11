@@ -17,8 +17,52 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Check for Git and Auto-Update
+echo "[1/4] Checking for Git and updating scripts..."
+if ! command_exists git; then
+    echo "[WARN] Git is not installed. Attempting to install Git..."
+    if command_exists apt; then
+        sudo apt update && sudo apt install -y git
+    elif command_exists dnf; then
+        sudo dnf install -y git
+    elif command_exists pacman; then
+        sudo pacman -S --noconfirm git
+    else
+        echo "[WARN] Unsupported package manager. Could not install Git automatically."
+    fi
+fi
+
+if command_exists git; then
+    echo "[INFO] Checking for updates from remote repository..."
+    # Ensure we are tracking a remote branch
+    git fetch origin main >/dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        LOCAL=$(git rev-parse HEAD 2>/dev/null)
+        REMOTE=$(git rev-parse origin/main 2>/dev/null)
+
+        if [ "$LOCAL" != "$REMOTE" ]; then
+            echo "[INFO] Updates found. Applying updates and replacing local changes..."
+            git reset --hard origin/main >/dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                echo "[OK] Successfully updated to the latest main branch."
+                # Re-run the script to ensure we are using the updated version
+                exec bash "$0" "$@"
+            else
+                echo "[WARN] Failed to apply updates."
+            fi
+        else
+            echo "[OK] Scripts are up to date."
+        fi
+    else
+        echo "[WARN] Failed to fetch updates from remote repository."
+    fi
+else
+    echo "[WARN] Git could not be found or installed. Skipping update check."
+fi
+
 # Check if Python 3 is installed
-echo "[1/3] Checking Python installation..."
+echo ""
+echo "[2/4] Checking Python installation..."
 if command_exists python3; then
     PYTHON_CMD="python3"
 elif command_exists python; then
@@ -40,7 +84,7 @@ echo "[OK] Python $PYTHON_VERSION found."
 
 # Check if pip is available
 echo ""
-echo "[2/3] Checking pip..."
+echo "[3/4] Checking pip..."
 if ! $PYTHON_CMD -m pip --version >/dev/null 2>&1; then
     echo "[ERROR] pip is not available."
     echo "Please install pip for Python 3."
@@ -59,7 +103,7 @@ check_requirements() {
 
 # Check if virtual environment exists, if not check if requirements are installed
 echo ""
-echo "[3/3] Checking dependencies..."
+echo "[4/4] Checking dependencies..."
 
 # Check if venv exists
 if [ -f "$SCRIPT_DIR/venv/bin/activate" ]; then
