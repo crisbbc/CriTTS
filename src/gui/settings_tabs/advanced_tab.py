@@ -21,8 +21,7 @@ class AdvancedTab(BaseTab):
     
     def _create_content(self):
         """Create the advanced tab content."""
-        self.scroll = ctk.CTkScrollableFrame(self.tab)
-        self.scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        self.setup_layout()
         
         # Main title
         ctk.CTkLabel(
@@ -55,11 +54,7 @@ class AdvancedTab(BaseTab):
     
     def _create_network_privacy_section(self):
         """Create the network privacy settings section."""
-        ctk.CTkLabel(
-            self.scroll,
-            text="Network Privacy",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Network Privacy").pack(anchor="w", pady=(10, 5))
 
         privacy_desc_label = ctk.CTkLabel(
             self.scroll,
@@ -187,11 +182,7 @@ class AdvancedTab(BaseTab):
 
     def _create_cache_section(self):
         """Create the cache management section."""
-        ctk.CTkLabel(
-            self.scroll,
-            text="Cache Management",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Cache Management").pack(anchor="w", pady=(10, 5))
         
         cache_desc_label = ctk.CTkLabel(
             self.scroll,
@@ -283,11 +274,7 @@ class AdvancedTab(BaseTab):
     
     def _create_performance_section(self):
         """Create the performance settings section."""
-        ctk.CTkLabel(
-            self.scroll,
-            text="Performance Settings",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Performance Settings").pack(anchor="w", pady=(10, 5))
         
         # Processing profile dropdown
         ctk.CTkLabel(
@@ -344,11 +331,7 @@ class AdvancedTab(BaseTab):
     
     def _create_experimental_section(self):
         """Create the experimental features section."""
-        ctk.CTkLabel(
-            self.scroll,
-            text="Experimental Features",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Experimental Features").pack(anchor="w", pady=(10, 5))
         
         experimental_warning_label = ctk.CTkLabel(
             self.scroll,

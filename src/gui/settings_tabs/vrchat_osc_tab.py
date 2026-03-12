@@ -37,15 +37,10 @@ class VRChatOSCTab(BaseTab):
     
     def _create_content(self):
         """Create the VRChat OSC tab content."""
-        self.scroll = ctk.CTkScrollableFrame(self.tab)
-        self.scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        self.setup_layout()
         
         # OSC Chatbox Section
-        ctk.CTkLabel(
-            self.scroll, 
-            text="VRChat OSC Chatbox", 
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("VRChat OSC Chatbox").pack(anchor="w", pady=(10, 5))
         
         self.osc_enabled_var = ctk.BooleanVar(value=self.settings.get("vrchat_osc_enabled", False))
         self.osc_enabled_check = ctk.CTkCheckBox(
@@ -135,11 +130,7 @@ class VRChatOSCTab(BaseTab):
     
     def _create_viseme_section(self):
         """Create the viseme lip-sync section."""
-        ctk.CTkLabel(
-            self.scroll, 
-            text="VRChat Viseme Lip-Sync", 
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("VRChat Viseme Lip-Sync").pack(anchor="w", pady=(10, 5))
         
         osc_viseme_info_label = ctk.CTkLabel(
             self.scroll,
@@ -210,11 +201,7 @@ class VRChatOSCTab(BaseTab):
     
     def _create_typing_indicator_section(self):
         """Create the typing indicator section."""
-        ctk.CTkLabel(
-            self.scroll, 
-            text="Typing Indicator", 
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Typing Indicator").pack(anchor="w", pady=(10, 5))
         
         typing_indicator_info_label = ctk.CTkLabel(
             self.scroll,

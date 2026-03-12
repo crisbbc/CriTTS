@@ -50,6 +50,7 @@ class BaseTab(ABC):
         
         # Track labels that need dynamic wraplength
         self._wraplength_labels: List[ctk.CTkLabel] = []
+        self._sections: List[Dict] = []
         
         # Create the tab content
         self._create_content()
@@ -93,12 +94,74 @@ class BaseTab(ABC):
         pass
     
     def create_section_header(self, text: str, parent: ctk.CTkFrame = None) -> ctk.CTkLabel:
-        """Create a section header label."""
-        return ctk.CTkLabel(
-            parent or self.tab,
+        """Create a section header label and add a sidebar button for it."""
+        parent_widget = parent or getattr(self, "scroll", self.tab)
+        label = ctk.CTkLabel(
+            parent_widget,
             text=text,
             font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
         )
+
+        # Add to sections tracking
+        self._sections.append({"title": text, "label": label})
+
+        # If sidebar exists, add a button
+        if hasattr(self, "sidebar"):
+            btn = ctk.CTkButton(
+                self.sidebar,
+                text=text,
+                fg_color="transparent",
+                text_color=("gray10", "gray90"),
+                hover_color=("gray70", "gray30"),
+                anchor="w",
+                font=ctk.CTkFont(size=FONT_SM),
+                command=lambda l=label: self._scroll_to_section(l)
+            )
+            btn.pack(fill="x", padx=5, pady=2)
+
+        return label
+
+    def _scroll_to_section(self, label: ctk.CTkLabel):
+        """Scroll the main scrollable frame to the given label."""
+        if not hasattr(self, "scroll"):
+            return
+
+        # Ensure UI is updated so we get correct coordinates
+        self.scroll.update_idletasks()
+
+        try:
+            # We use parent canvas to scroll
+            canvas = self.scroll._parent_canvas
+            # Get label's Y position relative to the scrollable frame
+            target_y = label.winfo_y()
+
+            # The canvas bounding box tells us the total scrollable height
+            bbox = canvas.bbox("all")
+            if bbox:
+                total_height = bbox[3]
+                if total_height > 0:
+                    # The fraction to scroll to is exactly the element's Y position divided by total height
+                    fraction = target_y / total_height
+                    # Use slightly less to give a tiny bit of padding
+                    fraction = max(0.0, fraction - 0.01)
+                    canvas.yview_moveto(fraction)
+        except Exception as e:
+            print(f"Error scrolling: {e}")
+            pass
+
+    def setup_layout(self):
+        """Setup the two-pane layout with a sidebar on the left and scrollable content on the right."""
+        # Main layout container
+        self.layout_frame = ctk.CTkFrame(self.tab, fg_color="transparent")
+        self.layout_frame.pack(fill="both", expand=True, padx=0, pady=0)
+
+        # Left sidebar for navigation
+        self.sidebar = ctk.CTkScrollableFrame(self.layout_frame, width=150, corner_radius=0, fg_color="transparent")
+        self.sidebar.pack(side="left", fill="y", padx=(10, 0), pady=10)
+
+        # Right content area
+        self.scroll = ctk.CTkScrollableFrame(self.layout_frame, corner_radius=0, fg_color="transparent")
+        self.scroll.pack(side="right", fill="both", expand=True, padx=10, pady=10)
     
     def create_description(self, text: str, parent: ctk.CTkFrame = None) -> ctk.CTkLabel:
         """Create a description label with gray text."""

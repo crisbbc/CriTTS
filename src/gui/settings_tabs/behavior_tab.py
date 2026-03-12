@@ -16,15 +16,10 @@ class BehaviorTab(BaseTab):
     
     def _create_content(self):
         """Create the behavior tab content."""
-        self.scroll = ctk.CTkScrollableFrame(self.tab)
-        self.scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        self.setup_layout()
         
         # Behavior Section
-        ctk.CTkLabel(
-            self.scroll,
-            text="Behavior",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Behavior").pack(anchor="w", pady=(10, 5))
         
         self.behavior_desc_label = ctk.CTkLabel(
             self.scroll,
@@ -89,11 +84,7 @@ class BehaviorTab(BaseTab):
     
     def _create_transcription_section(self):
         """Create the text transcription section."""
-        ctk.CTkLabel(
-            self.scroll,
-            text="Text Transcription",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Text Transcription").pack(anchor="w", pady=(10, 5))
         
         self.transcription_desc_label = ctk.CTkLabel(
             self.scroll,
@@ -204,11 +195,7 @@ class BehaviorTab(BaseTab):
         self.create_separator(self.scroll).pack(fill="x", pady=15)
         
         # Transcription Refinement
-        ctk.CTkLabel(
-            self.scroll,
-            text="Transcription Refinement",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Transcription Refinement").pack(anchor="w", pady=(10, 5))
         
         self.refinement_desc_label = ctk.CTkLabel(
             self.scroll,
@@ -261,11 +248,7 @@ class BehaviorTab(BaseTab):
         """Create the audio pre-processing section."""
         self.create_separator(self.scroll).pack(fill="x", pady=15)
         
-        ctk.CTkLabel(
-            self.scroll,
-            text="Audio Pre-processing",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Audio Pre-processing").pack(anchor="w", pady=(10, 5))
         
         self.preprocessing_desc_label = ctk.CTkLabel(
             self.scroll,
@@ -422,11 +405,7 @@ class BehaviorTab(BaseTab):
         """Create the word corrections section."""
         self.create_separator(self.scroll).pack(fill="x", pady=15)
         
-        ctk.CTkLabel(
-            self.scroll,
-            text="Word Corrections",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Word Corrections").pack(anchor="w", pady=(10, 5))
         
         self.corrections_desc_label = ctk.CTkLabel(
             self.scroll,

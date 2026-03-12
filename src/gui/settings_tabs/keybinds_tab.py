@@ -36,14 +36,9 @@ class KeybindsTab(BaseTab):
     
     def _create_content(self):
         """Create the keybinds tab content."""
-        self.scroll = ctk.CTkScrollableFrame(self.tab)
-        self.scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        self.setup_layout()
         
-        ctk.CTkLabel(
-            self.scroll,
-            text="Keybinds",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Keybinds").pack(anchor="w", pady=(10, 5))
         
         self.info_label = ctk.CTkLabel(
             self.scroll,

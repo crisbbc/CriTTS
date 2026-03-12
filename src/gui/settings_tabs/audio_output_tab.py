@@ -16,15 +16,10 @@ class AudioOutputTab(BaseTab):
     
     def _create_content(self):
         """Create the audio output tab content."""
-        self.scroll = ctk.CTkScrollableFrame(self.tab)
-        self.scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        self.setup_layout()
         
         # Device selection
-        ctk.CTkLabel(
-            self.scroll,
-            text="Output Device:",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Output Device:").pack(anchor="w", pady=(10, 5))
         
         ctk.CTkLabel(
             self.scroll,
@@ -70,11 +65,7 @@ class AudioOutputTab(BaseTab):
         self.create_separator(self.scroll).pack(fill="x", pady=10)
         
         # Device info
-        ctk.CTkLabel(
-            self.scroll,
-            text="Device Information",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Device Information").pack(anchor="w", pady=(10, 5))
         
         self.device_info_text = ctk.CTkTextbox(
             self.scroll,
@@ -100,11 +91,7 @@ class AudioOutputTab(BaseTab):
     
     def _create_normalization_section(self):
         """Create the audio normalization section."""
-        ctk.CTkLabel(
-            self.scroll,
-            text="Audio Normalization",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Audio Normalization").pack(anchor="w", pady=(10, 5))
         
         norm_info = ctk.CTkLabel(
             self.scroll,
@@ -153,11 +140,7 @@ class AudioOutputTab(BaseTab):
     
     def _create_passthrough_section(self):
         """Create the microphone passthrough section."""
-        ctk.CTkLabel(
-            self.scroll,
-            text="🎙 Microphone Passthrough",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_section_header("🎙 Microphone Passthrough").pack(anchor="w", pady=(10, 5))
         
         passthrough_info = ctk.CTkLabel(
             self.scroll,
