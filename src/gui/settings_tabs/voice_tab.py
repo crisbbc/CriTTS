@@ -664,7 +664,7 @@ class VoiceTab(BaseTab):
     
     def _refresh_favorites_ui(self):
         """Refresh favorites UI."""
-        for c in list(self.favorites_frame.winfo_children()):
+        for c in self.favorites_frame.winfo_children():
             c.destroy()
         
         favs = self.settings.get("favorite_voices", [])
@@ -696,7 +696,7 @@ class VoiceTab(BaseTab):
     
     def _refresh_recent_ui(self):
         """Refresh recent voices UI."""
-        for c in list(self.recent_frame.winfo_children()):
+        for c in self.recent_frame.winfo_children():
             c.destroy()
         
         recents = self.settings.get("recent_voices", [])
