@@ -44,12 +44,147 @@ class AdvancedTab(BaseTab):
         # Cache Management Section
         self._create_cache_section()
         
+        # Network Privacy Section
+        self._create_network_privacy_section()
+
         # Performance Settings Section
         self._create_performance_section()
         
         # Experimental Features Section
         self._create_experimental_section()
     
+    def _create_network_privacy_section(self):
+        """Create the network privacy settings section."""
+        ctk.CTkLabel(
+            self.scroll,
+            text="Network Privacy",
+            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
+        ).pack(anchor="w", pady=(10, 5))
+
+        privacy_desc_label = ctk.CTkLabel(
+            self.scroll,
+            text="Route Text-to-Speech requests through a proxy to obfuscate your IP address from Microsoft servers.",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color="gray",
+            wraplength=550
+        )
+        privacy_desc_label.pack(anchor="w", pady=(0, 10))
+        self.add_wraplength_label(privacy_desc_label)
+
+        # Enable proxy checkbox
+        self.proxy_enabled_var = ctk.BooleanVar(value=self.settings.get("proxy_enabled", False))
+        self.proxy_enabled_check = ctk.CTkCheckBox(
+            self.scroll,
+            text="Enable Proxy for TTS requests",
+            variable=self.proxy_enabled_var,
+            font=ctk.CTkFont(size=FONT_MD),
+            command=self._on_proxy_toggle
+        )
+        self.proxy_enabled_check.pack(anchor="w", pady=5)
+
+        # Proxy settings frame (to be toggled)
+        self.proxy_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.proxy_frame.pack(fill="x", pady=5)
+
+        # Proxy Type
+        type_frame = ctk.CTkFrame(self.proxy_frame, fg_color="transparent")
+        type_frame.pack(fill="x", pady=2)
+        ctk.CTkLabel(
+            type_frame,
+            text="Proxy Type:",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=120,
+            anchor="w"
+        ).pack(side="left")
+
+        self.proxy_type_var = ctk.StringVar(value=self.settings.get("proxy_type", "http"))
+        self.proxy_type_dropdown = ctk.CTkComboBox(
+            type_frame,
+            variable=self.proxy_type_var,
+            values=["http", "socks4", "socks5"],
+            font=ctk.CTkFont(size=FONT_SM),
+            state="readonly",
+            width=150
+        )
+        self.proxy_type_dropdown.pack(side="left", padx=5)
+
+        # Proxy Server
+        server_frame = ctk.CTkFrame(self.proxy_frame, fg_color="transparent")
+        server_frame.pack(fill="x", pady=2)
+        ctk.CTkLabel(
+            server_frame,
+            text="Server (IP:Port):",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=120,
+            anchor="w"
+        ).pack(side="left")
+
+        self.proxy_server_var = ctk.StringVar(value=self.settings.get("proxy_server", ""))
+        self.proxy_server_entry = ctk.CTkEntry(
+            server_frame,
+            textvariable=self.proxy_server_var,
+            font=ctk.CTkFont(size=FONT_MD),
+            placeholder_text="e.g. 127.0.0.1:8080",
+            width=250
+        )
+        self.proxy_server_entry.pack(side="left", padx=5)
+
+        # Proxy Username
+        user_frame = ctk.CTkFrame(self.proxy_frame, fg_color="transparent")
+        user_frame.pack(fill="x", pady=2)
+        ctk.CTkLabel(
+            user_frame,
+            text="Username (opt):",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=120,
+            anchor="w"
+        ).pack(side="left")
+
+        self.proxy_username_var = ctk.StringVar(value=self.settings.get("proxy_username", ""))
+        self.proxy_username_entry = ctk.CTkEntry(
+            user_frame,
+            textvariable=self.proxy_username_var,
+            font=ctk.CTkFont(size=FONT_MD),
+            placeholder_text="Optional",
+            width=250
+        )
+        self.proxy_username_entry.pack(side="left", padx=5)
+
+        # Proxy Password
+        pass_frame = ctk.CTkFrame(self.proxy_frame, fg_color="transparent")
+        pass_frame.pack(fill="x", pady=2)
+        ctk.CTkLabel(
+            pass_frame,
+            text="Password (opt):",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=120,
+            anchor="w"
+        ).pack(side="left")
+
+        self.proxy_password_var = ctk.StringVar(value=self.settings.get("proxy_password", ""))
+        self.proxy_password_entry = ctk.CTkEntry(
+            pass_frame,
+            textvariable=self.proxy_password_var,
+            font=ctk.CTkFont(size=FONT_MD),
+            show="*",
+            placeholder_text="Optional",
+            width=250
+        )
+        self.proxy_password_entry.pack(side="left", padx=5)
+
+        self.create_separator(self.scroll).pack(fill="x", pady=15)
+
+        # Initial state update
+        self._on_proxy_toggle()
+
+    def _on_proxy_toggle(self):
+        """Enable or disable proxy input fields based on checkbox."""
+        state = "normal" if self.proxy_enabled_var.get() else "disabled"
+        self.proxy_type_dropdown.configure(state="readonly" if self.proxy_enabled_var.get() else "disabled")
+        self.proxy_server_entry.configure(state=state)
+        self.proxy_username_entry.configure(state=state)
+        self.proxy_password_entry.configure(state=state)
+
     def _create_cache_section(self):
         """Create the cache management section."""
         ctk.CTkLabel(
@@ -306,6 +441,11 @@ class AdvancedTab(BaseTab):
             "processing_profile": self.processing_profile_var.get(),
             "text_cache_size": text_cache_size_value,
             "enable_streaming_playback": self.streaming_playback_var.get(),
+            "proxy_enabled": self.proxy_enabled_var.get(),
+            "proxy_type": self.proxy_type_var.get(),
+            "proxy_server": self.proxy_server_var.get().strip(),
+            "proxy_username": self.proxy_username_var.get().strip(),
+            "proxy_password": self.proxy_password_var.get(),
         }
     
     def validate(self) -> List[str]:
@@ -323,5 +463,23 @@ class AdvancedTab(BaseTab):
         # Validate processing profile
         if self.processing_profile_var.get() not in ["fast_preview", "balanced", "high_quality"]:
             errors.append(f"Invalid processing profile: {self.processing_profile_var.get()}")
+
+        # Validate proxy settings
+        if self.proxy_enabled_var.get():
+            server = self.proxy_server_var.get().strip()
+            if not server:
+                errors.append("Proxy server cannot be empty when proxy is enabled.")
+            elif ":" not in server:
+                errors.append("Proxy server must include a port (e.g. 127.0.0.1:8080).")
+            else:
+                # Basic port validation
+                parts = server.rsplit(":", 1)
+                if len(parts) == 2:
+                    try:
+                        port = int(parts[1])
+                        if not (1 <= port <= 65535):
+                            errors.append("Proxy port must be between 1 and 65535.")
+                    except ValueError:
+                        errors.append("Proxy port must be a valid number.")
         
         return errors
