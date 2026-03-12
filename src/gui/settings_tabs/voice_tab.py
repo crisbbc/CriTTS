@@ -366,7 +366,7 @@ class VoiceTab(BaseTab):
     
     def _create_recent_section(self):
         """Create the recent voices section."""
-        self.recent_label = self.create_section_header("• Recent Voices")
+        self.recent_label = self.create_section_header("Recent Voices")
         self.recent_label.pack(anchor="w", pady=(15, 5))
         
         self.recent_frame = ctk.CTkScrollableFrame(self.scroll, height=80)
@@ -386,7 +386,7 @@ class VoiceTab(BaseTab):
         self.create_separator(self.scroll).pack(fill="x", pady=15)
         
         # Rate slider
-        self.rate_label = self.create_section_header("Speech Rate (Speed):")
+        self.rate_label = self.create_section_header("Speech Rate (Speed)")
         self.rate_label.pack(anchor="w", pady=(10, 5))
         
         self.rate_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
@@ -413,7 +413,7 @@ class VoiceTab(BaseTab):
         self.rate_value_label.pack(side="right", padx=5)
         
         # Volume slider
-        self.volume_label = self.create_section_header("Volume:")
+        self.volume_label = self.create_section_header("Volume")
         self.volume_label.pack(anchor="w", pady=(10, 5))
         
         self.volume_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
@@ -440,7 +440,7 @@ class VoiceTab(BaseTab):
         self.volume_value_label.pack(side="right", padx=5)
         
         # Pitch slider
-        self.pitch_label = self.create_section_header("Pitch:")
+        self.pitch_label = self.create_section_header("Pitch")
         self.pitch_label.pack(anchor="w", pady=(10, 5))
         
         self.pitch_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")

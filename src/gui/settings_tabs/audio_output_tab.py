@@ -19,7 +19,7 @@ class AudioOutputTab(BaseTab):
         self.setup_layout()
         
         # Device selection
-        self.create_section_header("Output Device:").pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Output Device").pack(anchor="w", pady=(10, 5))
         
         ctk.CTkLabel(
             self.scroll,
@@ -140,7 +140,7 @@ class AudioOutputTab(BaseTab):
     
     def _create_passthrough_section(self):
         """Create the microphone passthrough section."""
-        self.create_section_header("🎙 Microphone Passthrough").pack(anchor="w", pady=(10, 5))
+        self.create_section_header("Microphone Passthrough").pack(anchor="w", pady=(10, 5))
         
         passthrough_info = ctk.CTkLabel(
             self.scroll,
