@@ -2783,7 +2783,7 @@ Examples:
     
     def _refresh_favorites_ui(self):
         """Populate Favorite Voices section with clickable buttons."""
-        for c in list(self.favorites_frame.winfo_children()):
+        for c in self.favorites_frame.winfo_children():
             c.destroy()
         favs = self.settings.get("favorite_voices", [])
         if not favs:
@@ -2814,7 +2814,7 @@ Examples:
     
     def _refresh_recent_ui(self):
         """Populate Recent Voices section with clickable buttons."""
-        for c in list(self.recent_frame.winfo_children()):
+        for c in self.recent_frame.winfo_children():
             c.destroy()
         recents = self.settings.get("recent_voices", [])
         if not recents:
