@@ -374,7 +374,8 @@ class AudioRouter:
             ]
 
             if target_sample_rate is not None:
-                ffmpeg_cmd.extend(['-ar', str(target_sample_rate)])
+                # Cast target_sample_rate to int to prevent command injection
+                ffmpeg_cmd.extend(['-ar', str(int(target_sample_rate))])
 
             ffmpeg_cmd.extend([
                 '-ac', '2',               # Stereo output for consistency
