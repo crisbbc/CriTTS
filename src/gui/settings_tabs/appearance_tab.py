@@ -16,16 +16,10 @@ class AppearanceTab(BaseTab):
     
     def _create_content(self):
         """Create the appearance tab content."""
-        # Create scrollable frame
-        self.scroll = ctk.CTkScrollableFrame(self.tab)
-        self.scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        self.setup_layout()
         
         # Appearance mode
-        self.appearance_label = ctk.CTkLabel(
-            self.scroll,
-            text="Appearance Mode:",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        )
+        self.appearance_label = self.create_section_header("Appearance Mode:")
         self.appearance_label.pack(anchor="w", pady=(10, 5))
         
         self.appearance_var = ctk.StringVar(value=self.settings.get("appearance_mode", "Dark"))
@@ -52,11 +46,7 @@ class AppearanceTab(BaseTab):
         self.create_separator(self.scroll).pack(fill="x", pady=15)
         
         # Visible Buttons Section
-        self.visible_buttons_label = ctk.CTkLabel(
-            self.scroll,
-            text="Visible Buttons:",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        )
+        self.visible_buttons_label = self.create_section_header("Visible Buttons:")
         self.visible_buttons_label.pack(anchor="w", pady=(10, 5))
         
         self.visible_buttons_hint = ctk.CTkLabel(

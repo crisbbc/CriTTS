@@ -16,14 +16,9 @@ class AbbreviationsTab(BaseTab):
     
     def _create_content(self):
         """Create the abbreviations tab content."""
-        self.scroll = ctk.CTkScrollableFrame(self.tab)
-        self.scroll.pack(fill="both", expand=True, padx=10, pady=10)
+        self.setup_layout()
         
-        self.title_label = ctk.CTkLabel(
-            self.scroll,
-            text="Abbreviations",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        )
+        self.title_label = self.create_section_header("Abbreviations")
         self.title_label.pack(anchor="w", pady=(10, 5))
         
         self.info_label = ctk.CTkLabel(
@@ -81,11 +76,7 @@ class AbbreviationsTab(BaseTab):
         
         self.create_separator(self.scroll).pack(fill="x", pady=15)
         
-        self.usage_label = ctk.CTkLabel(
-            self.scroll,
-            text="Usage Tips",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        )
+        self.usage_label = self.create_section_header("Usage Tips")
         self.usage_label.pack(anchor="w", pady=(10, 5))
         
         self.usage_text = ctk.CTkTextbox(
