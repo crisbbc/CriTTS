@@ -2,11 +2,11 @@
 TTS Provider Abstraction Layer
 
 This module defines the abstract base class for TTS providers and provides
-a common interface for TTS services like Edge TTS.
+a common interface for TTS services like Edge TTS and Piper TTS.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 
 class TTSProvider(ABC):
@@ -54,4 +54,10 @@ class TTSProvider(ABC):
         """Clear any cached data (voices, etc.)."""
         pass
 
+    def get_default_voice(self) -> Optional[str]:
+        """Return the default voice identifier for this provider.
 
+        Override in subclasses to provide a sensible provider-specific default.
+        Returns None if no default is defined.
+        """
+        return None

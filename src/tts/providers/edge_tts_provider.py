@@ -294,3 +294,7 @@ class EdgeTTSProvider(TTSProvider):
         """Clear the voice cache."""
         self._voice_cache = None
         self._cache_time = 0
+
+    def get_default_voice(self) -> str:
+        """Return the default Edge TTS voice."""
+        return "en-US-AriaNeural"

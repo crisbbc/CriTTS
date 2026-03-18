@@ -1,6 +1,6 @@
 """
 TTS Engine Module
-Async wrapper around edge_tts library for text-to-speech generation.
+Manages text-to-speech generation, supporting multiple providers.
 """
 import asyncio
 import threading
@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from .providers.edge_tts_provider import EdgeTTSProvider
+from .providers.piper_tts_provider import PiperTTSProvider
 from .audio_cache import AudioCache, PhraseTracker
 from ..config.settings_manager import SettingsManager
 
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class TTSEngine:
-    """Manages text-to-speech generation using edge_tts."""
+    """Manages text-to-speech generation using the configured TTS provider."""
 
     # Class-level constants for number-to-word conversion (avoids recreating on every call)
     _NUMBER_WORDS = {
@@ -142,6 +143,7 @@ class TTSEngine:
         
         # Initialize providers - pass settings_manager to avoid per-call SettingsManager instantiation
         self._edge_tts_provider = EdgeTTSProvider(settings_manager=self._settings_manager)
+        self._piper_tts_provider = PiperTTSProvider(settings_manager=self._settings_manager)
         
         # Initialize audio cache and phrase tracker
         self._audio_cache: Optional[AudioCache] = None
@@ -312,7 +314,12 @@ class TTSEngine:
             return []
     
     def _get_current_provider(self):
-        """Get the currently active TTS provider."""
+        """Get the currently active TTS provider based on settings."""
+        provider_name = "edge"
+        if self._settings_manager:
+            provider_name = self._settings_manager.get("tts_provider", "edge")
+        if provider_name == "piper":
+            return self._piper_tts_provider
         return self._edge_tts_provider
     
     def clear_voices_cache(self):
@@ -326,6 +333,11 @@ class TTSEngine:
             self._edge_tts_provider.clear_cache()
         except Exception as e:
             logger.warning(f"Failed to clear Edge TTS cache: {e}")
+
+        try:
+            self._piper_tts_provider.clear_cache()
+        except Exception as e:
+            logger.warning(f"Failed to clear Piper TTS cache: {e}")
     
     async def generate_speech_batch(self, texts: List[str], **kwargs) -> List[Tuple[Optional[bytes], Optional[str]]]:
         """
@@ -368,23 +380,11 @@ class TTSEngine:
         if not text:
             return None
         
-        # Get current provider
-        provider = self._get_current_provider()
+        # Language-based voice selection is supported when a voices cache is available
+        if self._voices_cache:
+            return self._detect_language_voice(text)
         
-        # For Edge TTS, use existing language detection logic
-        if hasattr(provider, '_voice_cache') or str(type(provider)) == "<class 'src.tts.providers.edge_tts_provider.EdgeTTSProvider'>":
-            return self._get_edge_tts_optimal_voice(text)
-        
-        # Only Edge TTS supports language-based selection
         return None
-    
-    def _get_edge_tts_optimal_voice(self, text: str) -> Optional[str]:
-        """Get optimal Edge TTS voice based on language detection."""
-        if not self._voices_cache:
-            return None
-        
-        # Use the robust weighted-scoring language detection method
-        return self._detect_language_voice(text)
     
     async def validate_voice(self, voice_short_name: str) -> bool:
         """
@@ -711,9 +711,25 @@ class TTSEngine:
         except Exception:
             pass
         
-        # Validate voice before generation (cached)
+        # Validate voice before generation (cached); fall back to provider default if mismatched
         if not await self.validate_voice(actual_voice):
-            return None, f"Invalid voice: {actual_voice}. Please select a valid voice in settings."
+            fallback = provider.get_default_voice()
+            if fallback and await self.validate_voice(fallback):
+                logger.info(
+                    "Voice '%s' is not valid for the current provider; "
+                    "falling back to '%s'", actual_voice, fallback
+                )
+                invalid_voice = actual_voice
+                actual_voice = fallback
+                # Invalidate the validation cache entry for the incompatible voice
+                # so it is re-checked if the provider changes later.
+                with self._voice_cache_lock:
+                    self._voice_cache.pop(invalid_voice, None)
+            else:
+                return None, (
+                    f"Voice '{actual_voice}' is not available with the current TTS provider. "
+                    "Please select a compatible voice in Settings."
+                )
         
         # Preprocess text for better quality and speed, passing actual_voice for language-aware number formatting
         processed_text = await self.preprocess_text(text, actual_voice)

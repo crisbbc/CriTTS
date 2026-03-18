@@ -34,6 +34,7 @@ from .keybinds_tab import KeybindsTab
 from .behavior_tab import BehaviorTab
 from .vrchat_osc_tab import VRChatOSCTab
 from .advanced_tab import AdvancedTab
+from .tts_provider_tab import TTSProviderTab
 
 __all__ = [
     'BaseTab',
@@ -45,4 +46,5 @@ __all__ = [
     'BehaviorTab',
     'VRChatOSCTab',
     'AdvancedTab',
+    'TTSProviderTab',
 ]
