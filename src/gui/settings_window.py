@@ -283,9 +283,6 @@ class SettingsWindow:
 
     def _on_cancel(self):
         self.window.destroy()
-
-    def _on_cancel(self):
-        self.window.destroy()
     
     def _on_reset_to_defaults(self):
         """Reset all settings to their default values."""

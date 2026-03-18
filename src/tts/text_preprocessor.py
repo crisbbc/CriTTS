@@ -70,7 +70,7 @@ class TextPreprocessor:
                     return expansion.upper()
                 elif matched_text.islower():
                     return expansion.lower()
-                elif matched_text[0].isupper():
+                elif matched_text and matched_text[0].isupper():
                     return expansion.capitalize()
                 else:
                     return expansion
