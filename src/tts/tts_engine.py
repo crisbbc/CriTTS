@@ -136,6 +136,7 @@ class TTSEngine:
         self._voices_cache: Optional[List[Dict]] = None
         self._cache_timestamp: float = 0
         self._cache_duration: float = 300  # Cache voices for 5 minutes
+        self._cached_provider: str = ""  # Track which provider the cache belongs to
         self._voice_cache = {}  # Cache for voice validation
         self._voice_cache_lock = threading.Lock()  # Lock for thread-safe voice cache access
         self._text_cache = {}  # Cache for text processing
@@ -280,6 +281,12 @@ class TTSEngine:
         
         return generated
     
+    def _get_active_provider_name(self) -> str:
+        """Return the configured TTS provider name ('edge' or 'piper')."""
+        if self._settings_manager:
+            return self._settings_manager.get("tts_provider", "edge")
+        return "edge"
+
     async def get_available_voices(self) -> List[Dict]:
         """
         Get list of available voices from the current provider.
@@ -287,11 +294,17 @@ class TTSEngine:
         Returns:
             List of voice dictionaries with 'name', 'id', 'provider', and provider-specific metadata.
         """
-        # Return cached voices if still fresh
-        if self._voices_cache is not None:
-            current_time = time.time()
-            if current_time - self._cache_timestamp < self._cache_duration:
-                return self._voices_cache
+        active_provider = self._get_active_provider_name()
+
+        # Return cached voices only when they are still fresh AND belong to the active provider.
+        # If the provider has changed since the cache was populated we must refetch, otherwise
+        # the Voice tab would display the previous provider's voices.
+        if (
+            self._voices_cache is not None
+            and self._cached_provider == active_provider
+            and time.time() - self._cache_timestamp < self._cache_duration
+        ):
+            return self._voices_cache
         
         try:
             # Get current provider
@@ -303,9 +316,10 @@ class TTSEngine:
             # Sort voices for better UX
             voices.sort(key=lambda x: x.get('name', ''))
             
-            # Populate cache for downstream helpers and language detection
+            # Populate cache together with the provider it belongs to
             self._voices_cache = voices
             self._cache_timestamp = time.time()
+            self._cached_provider = active_provider
             
             return voices
             
@@ -315,16 +329,14 @@ class TTSEngine:
     
     def _get_current_provider(self):
         """Get the currently active TTS provider based on settings."""
-        provider_name = "edge"
-        if self._settings_manager:
-            provider_name = self._settings_manager.get("tts_provider", "edge")
-        if provider_name == "piper":
+        if self._get_active_provider_name() == "piper":
             return self._piper_tts_provider
         return self._edge_tts_provider
     
     def clear_voices_cache(self):
         """Clear the voices cache to force refresh on next call."""
         self._voices_cache = None
+        self._cached_provider = ""
         with self._voice_cache_lock:
             self._voice_cache.clear()
         

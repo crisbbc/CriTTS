@@ -133,7 +133,7 @@ class SettingsWindow:
 
         # Voice Settings Tab
         voice_frame = self.tabview.add("Voice")
-        self.voice_tab_obj = VoiceTab(voice_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
+        self.voice_tab_obj = VoiceTab(voice_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder, parent_window=self.window)
         self.tabs.append(self.voice_tab_obj)
         
         # Audio Output Tab
