@@ -158,6 +158,7 @@ class MainWindow:
         self._update_status()
         self._setup_osc_client()
         self._setup_recording_overlay()
+        self._setup_piper_status_callback()
 
 
 
@@ -1942,6 +1943,20 @@ class MainWindow:
             self._recording_overlay.show_overlay()
         else:
             self._recording_overlay.hide_overlay()
+
+    def _setup_piper_status_callback(self):
+        """Register a status callback on the Piper TTS provider.
+
+        The callback is invoked from a background thread whenever a Piper voice
+        model is being downloaded or loaded, allowing the status bar to surface
+        progress information to the user.
+        """
+        if hasattr(self.tts_engine, "set_piper_status_callback"):
+            self.tts_engine.set_piper_status_callback(self._on_piper_status)
+
+    def _on_piper_status(self, message: str) -> None:
+        """Called (from a background thread) with a Piper model status message."""
+        self.root.after(0, lambda msg=message: self._set_status(msg, "⬇️", "info"))
     
     def shutdown(self):
         """Gracefully shutdown the main window and wait for worker threads."""

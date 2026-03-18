@@ -2,13 +2,14 @@
 
 # CriTTS Recoded
 
-A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS uses Microsoft Edge's TTS engine (via edge-tts) to generate high-quality speech and can route audio to any output device, including virtual cables for Discord/VRChat integration.
+A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS supports both **online** and **offline** TTS — it integrates Microsoft Edge's TTS engine (via edge-tts) for high-quality online speech and Piper TTS for fully offline, privacy-friendly synthesis. Audio can be routed to any output device, including virtual cables for Discord/VRChat integration.
 
 ## Features
 
 ### Core TTS
-- **Free TTS Engine**: Uses Microsoft Edge's online TTS service (no API key required)
-- **100+ Voices**: Access to all Microsoft Edge voices in multiple languages
+- **Free Online TTS Engine**: Uses Microsoft Edge's online TTS service (no API key required)
+- **Offline TTS Engine**: Uses [Piper TTS](https://github.com/rhasspy/piper) for fully local, privacy-friendly speech synthesis (no internet required after model download)
+- **100+ Voices**: Access to all Microsoft Edge voices plus a curated set of Piper voices in multiple languages
 - **Voice Customization**: Adjust speech rate (-100 to +100), volume (0-100), and pitch (-100 to +100)
 - **Auto Language Detection**: Automatically detects text language and selects appropriate voice
 - **Custom Language Mappings**: Set preferred voices for each language
@@ -87,6 +88,7 @@ python main.py
 ```
 customtkinter
 edge-tts>=7.2.3
+piper-tts>=1.2.0
 langid>=1.1.6
 sounddevice
 soundfile>=0.12.0
@@ -124,6 +126,7 @@ Access settings by clicking the "Settings" button or pressing `Ctrl+,`
 - Adjust rate, volume, and pitch
 - Preview voices before selecting
 - Manage favorite voices
+- Switch between **Edge TTS** (online) and **Piper TTS** (offline) in Settings → Voice → TTS Provider
 
 #### Audio Output Tab
 - Select output device
@@ -158,6 +161,48 @@ Access settings by clicking the "Settings" button or pressing `Ctrl+,`
 - Manage audio cache settings
 - Select processing profile
 - Enable streaming playback (experimental)
+
+## Offline TTS with Piper
+
+CriTTS includes built-in support for [Piper TTS](https://github.com/rhasspy/piper), a fast, local neural text-to-speech engine. Unlike Edge TTS, Piper runs entirely on your machine — no internet connection is needed once the voice model has been downloaded.
+
+### Switching to Piper
+
+1. Open **Settings → Voice**
+2. Change **TTS Provider** to **Piper**
+3. Choose a voice from the Piper voice list
+
+### First-Use Model Download
+
+Piper voice models are downloaded automatically the first time they are used and cached in `~/.critts/piper_voices/`. Model files range from a few MB (x-low quality) to ~100 MB (high quality).
+
+While the model is downloading or loading, the **status bar** at the bottom of the main window shows a live indicator (e.g. `⬇️ Downloading Piper model: en_US-lessac-medium.onnx …`). Subsequent uses of the same voice are instant.
+
+### Available Piper Voices
+
+| Voice | Locale | Gender | Quality |
+|-------|--------|--------|---------|
+| English (US) – Lessac | en-US | Male | Medium |
+| English (US) – Ryan | en-US | Male | High |
+| English (US) – Amy | en-US | Female | Low |
+| English (US) – Ljspeech | en-US | Female | High |
+| English (GB) – Alan | en-GB | Male | Medium |
+| English (GB) – Jenny Dioco | en-GB | Female | Medium |
+| German – Thorsten | de-DE | Male | Medium |
+| Spanish (ES) – Carlfm | es-ES | Male | x-low |
+| Spanish (MX) – Claude | es-MX | Male | High |
+| French – Siwis | fr-FR | Female | Medium |
+| Italian – Riccardo | it-IT | Male | x-low |
+| Portuguese (BR) – Faber | pt-BR | Male | Medium |
+| Russian – Ruslan | ru-RU | Male | Medium |
+| Dutch – Mls | nl-NL | Female | Medium |
+| Polish – Mls 6892 | pl-PL | Female | Low |
+| Ukrainian – Lada | uk-UA | Female | x-low |
+| Vietnamese – Vivos | vi-VN | Female | x-low |
+| Turkish – Dfki | tr-TR | Male | Medium |
+| Romanian – Mihai | ro-RO | Male | Medium |
+
+> **Note**: Piper does not support pitch adjustment. Rate and volume controls work normally.
 
 ## VB-Cable Setup (Discord Integration)
 
@@ -266,7 +311,8 @@ CriTTS/
     │   ├── text_preprocessor.py   # Text cleaning & abbreviation expansion
     │   ├── audio_cache.py         # Persistent LRU audio cache
     │   └── providers/
-    │       └── edge_tts_provider.py   # edge-tts integration
+    │       ├── edge_tts_provider.py   # edge-tts integration (online)
+    │       └── piper_tts_provider.py  # Piper TTS integration (offline)
     ├── audio/
     │   └── audio_router.py        # Audio device routing & processing
     ├── stt/
@@ -323,6 +369,11 @@ All shortcuts are customizable in Settings > Keybinds.
 1. Check internet connection (edge-tts requires internet)
 2. Verify firewall is not blocking Python
 3. Try refreshing voices in Settings
+
+### Piper Model Download Stuck / Failed
+1. Ensure you have an internet connection for the **first** use of a Piper voice (models are downloaded once from Hugging Face and cached locally)
+2. The status bar shows download progress — wait for "Loading Piper model…" to complete before speaking
+3. Cached models are stored in `~/.critts/piper_voices/` — delete the folder to force a fresh download
 
 ### VRChat Integration Issues
 1. Ensure OSC is enabled in VRChat settings

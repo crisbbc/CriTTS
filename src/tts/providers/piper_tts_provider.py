@@ -9,7 +9,7 @@ import logging
 import shutil
 import wave
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.request import urlopen
 from urllib.error import URLError
 
@@ -246,9 +246,15 @@ def _build_model_url(short_name: str, extension: str) -> str:
     )
 
 
-def _download_file(url: str, dest: Path) -> None:
+def _download_file(
+    url: str,
+    dest: Path,
+    status_callback: Optional[Callable[[str], None]] = None,
+) -> None:
     """Download *url* to *dest*, replacing any partial file on failure."""
     logger.info("Downloading %s …", url)
+    if status_callback:
+        status_callback(f"Downloading Piper model: {dest.name} …")
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     try:
         with urlopen(url, timeout=120) as resp, open(tmp, "wb") as fh:
@@ -261,16 +267,20 @@ def _download_file(url: str, dest: Path) -> None:
         raise
 
 
-def _ensure_model(short_name: str, models_dir: Path) -> Path:
+def _ensure_model(
+    short_name: str,
+    models_dir: Path,
+    status_callback: Optional[Callable[[str], None]] = None,
+) -> Path:
     """Return path to the .onnx model, downloading it if necessary."""
     onnx_path = models_dir / f"{short_name}.onnx"
     json_path = models_dir / f"{short_name}.onnx.json"
 
     if not onnx_path.exists() or onnx_path.stat().st_size == 0:
-        _download_file(_build_model_url(short_name, ".onnx"), onnx_path)
+        _download_file(_build_model_url(short_name, ".onnx"), onnx_path, status_callback)
 
     if not json_path.exists() or json_path.stat().st_size == 0:
-        _download_file(_build_model_url(short_name, ".onnx.json"), json_path)
+        _download_file(_build_model_url(short_name, ".onnx.json"), json_path, status_callback)
 
     return onnx_path
 
@@ -297,12 +307,23 @@ class PiperTTSProvider(TTSProvider):
     # Default model storage directory
     _DEFAULT_MODELS_DIR = Path.home() / ".critts" / "piper_voices"
 
-    def __init__(self, settings_manager=None, models_dir: Optional[Path] = None):
+    def __init__(self, settings_manager=None, models_dir: Optional[Path] = None,
+                 status_callback: Optional[Callable[[str], None]] = None):
         self._settings_manager = settings_manager
         self._models_dir: Path = models_dir or self._DEFAULT_MODELS_DIR
         self._models_dir.mkdir(parents=True, exist_ok=True)
+        self._status_callback: Optional[Callable[[str], None]] = status_callback
         # In-memory cache of loaded PiperVoice objects
         self._loaded_models: Dict[str, PiperVoice] = {}
+
+    def set_status_callback(self, callback: Optional[Callable[[str], None]]) -> None:
+        """Register a callback that receives human-readable status messages.
+
+        The callback is invoked (synchronously, from a background thread) when a
+        model file is being downloaded or loaded for the first time so that the
+        caller can surface progress information to the user.
+        """
+        self._status_callback = callback
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -311,8 +332,10 @@ class PiperTTSProvider(TTSProvider):
     def _load_voice(self, short_name: str) -> PiperVoice:
         """Return a cached (or freshly loaded) PiperVoice for *short_name*."""
         if short_name not in self._loaded_models:
-            model_path = _ensure_model(short_name, self._models_dir)
+            model_path = _ensure_model(short_name, self._models_dir, self._status_callback)
             logger.debug("Loading Piper model %s", model_path)
+            if self._status_callback:
+                self._status_callback(f"Loading Piper model: {short_name} …")
             self._loaded_models[short_name] = PiperVoice.load(str(model_path))
         return self._loaded_models[short_name]
 
