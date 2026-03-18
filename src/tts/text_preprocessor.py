@@ -10,7 +10,29 @@ logger = logging.getLogger(__name__)
 
 class TextPreprocessor:
     """Preprocesses text for TTS generation with abbreviation expansion."""
-    
+
+    def __init__(self):
+        # Cache for compiled regex patterns keyed by abbreviations content.
+        # Avoids recompiling patterns on every call when abbreviations are unchanged.
+        self._compiled_pattern_cache_key = None
+        self._compiled_patterns = []  # List of (compiled_pattern, abbrev, expansion)
+
+    def _get_compiled_patterns(self, abbreviations: dict):
+        """Return cached compiled patterns, rebuilding only when abbreviations change.
+
+        Each entry is a 3-tuple: (compiled_pattern, abbrev, expansion).
+        """
+        cache_key = frozenset(abbreviations.items())
+        if self._compiled_pattern_cache_key != cache_key:
+            self._compiled_pattern_cache_key = cache_key
+            sorted_abbrevs = sorted(abbreviations.items(), key=lambda x: len(x[0]), reverse=True)
+            self._compiled_patterns = [
+                (re.compile(r'\b' + re.escape(abbrev) + r'\b', re.IGNORECASE), abbrev, expansion)
+                for abbrev, expansion in sorted_abbrevs
+                if abbrev
+            ]
+        return self._compiled_patterns
+
     def preprocess_text(self, text: str, abbreviations: dict = None) -> str:
         """
         Preprocess text for TTS generation with abbreviation expansion.
@@ -50,19 +72,9 @@ class TextPreprocessor:
         if not abbreviations or not text:
             return text
         
-        # Sort abbreviations by length (longest first) to handle overlapping matches
-        sorted_abbrevs = sorted(abbreviations.items(), key=lambda x: len(x[0]), reverse=True)
-        
         result = text
         
-        for abbrev, expansion in sorted_abbrevs:
-            if not abbrev:
-                continue
-            
-            # Use word boundaries for whole-word matching
-            # Handle case-insensitive matching while preserving original casing style
-            pattern = r'\b' + re.escape(abbrev) + r'\b'
-            
+        for pattern, _abbrev, expansion in self._get_compiled_patterns(abbreviations):
             def replace_match(match):
                 matched_text = match.group(0)
                 # Preserve casing style
@@ -75,7 +87,7 @@ class TextPreprocessor:
                 else:
                     return expansion
             
-            result = re.sub(pattern, replace_match, result, flags=re.IGNORECASE)
+            result = pattern.sub(replace_match, result)
         
         return result
     
@@ -94,14 +106,9 @@ class TextPreprocessor:
             return []
         
         matches = []
-        sorted_abbrevs = sorted(abbreviations.items(), key=lambda x: len(x[0]), reverse=True)
         
-        for abbrev, expansion in sorted_abbrevs:
-            if not abbrev:
-                continue
-            
-            pattern = r'\b' + re.escape(abbrev) + r'\b'
-            for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+        for pattern, abbrev, expansion in self._get_compiled_patterns(abbreviations):
+            for match in pattern.finditer(text):
                 matches.append((abbrev, expansion, match.start()))
         
         # Sort by position
