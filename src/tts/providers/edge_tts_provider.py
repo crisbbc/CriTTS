@@ -20,6 +20,9 @@ class EdgeTTSProvider(TTSProvider):
         self._cache_duration = 300  # 5 minutes
         self._settings_manager = settings_manager
 
+    # Allowlist of proxy scheme values that may appear in the config.
+    _ALLOWED_PROXY_TYPES = frozenset({"http", "https", "socks4", "socks5"})
+
     def _get_proxy_url(self) -> Optional[str]:
         """Get the formatted proxy URL from settings if enabled, else None."""
         if not self._settings_manager:
@@ -30,32 +33,54 @@ class EdgeTTSProvider(TTSProvider):
             return None
 
         proxy_type = self._settings_manager.get("proxy_type", "http")
+
+        # Validate proxy_type against the allowlist to prevent scheme injection
+        # (e.g. "file" or "javascript" leading to file:// or javascript:// URLs).
+        if proxy_type not in self._ALLOWED_PROXY_TYPES:
+            logger.warning(
+                "Invalid proxy type '%s'; must be one of %s — ignoring proxy",
+                proxy_type, sorted(self._ALLOWED_PROXY_TYPES),
+            )
+            return None
+
         proxy_server = self._settings_manager.get("proxy_server", "")
         if not proxy_server:
+            return None
+
+        # Strip any existing protocol prefix so callers can paste a full URL.
+        # We loop to handle edge cases like "http://https://host" in the config.
+        while "://" in proxy_server:
+            proxy_server = proxy_server.split("://", 1)[1]
+
+        proxy_server = proxy_server.strip()
+
+        # Reject proxy_server values that contain characters which could be used
+        # for host-confusion / credential-injection / path-injection attacks:
+        #   '@' — splits username from host in URL authority; a value like
+        #          "attacker.com@real-host.com" would confuse URL parsers.
+        #   '/', '?', '#' — introduce a path, query, or fragment component that
+        #          should not appear in a bare host[:port] string.
+        if any(ch in proxy_server for ch in ('@', '/', '?', '#')):
+            logger.warning(
+                "Proxy server value '%s' contains invalid characters "
+                "(@, /, ?, or #); ignoring proxy",
+                proxy_server,
+            )
             return None
 
         proxy_username = self._settings_manager.get("proxy_username", "")
         proxy_password = self._settings_manager.get("proxy_password", "")
 
         # Build proxy URL
+        import urllib.parse
         auth = ""
         if proxy_username:
+            safe_user = urllib.parse.quote(proxy_username, safe='')
             if proxy_password:
-                import urllib.parse
                 safe_pass = urllib.parse.quote(proxy_password, safe='')
-                safe_user = urllib.parse.quote(proxy_username, safe='')
                 auth = f"{safe_user}:{safe_pass}@"
             else:
-                import urllib.parse
-                safe_user = urllib.parse.quote(proxy_username, safe='')
                 auth = f"{safe_user}@"
-
-        # Ensure proxy_server doesn't already start with the protocol
-        if proxy_server.startswith(f"{proxy_type}://"):
-            proxy_server = proxy_server[len(f"{proxy_type}://"):]
-        elif "://" in proxy_server:
-            # Strip whatever protocol is there to ensure we use the selected proxy_type
-            proxy_server = proxy_server.split("://", 1)[1]
 
         return f"{proxy_type}://{auth}{proxy_server}"
 
