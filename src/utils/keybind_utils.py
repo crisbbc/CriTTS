@@ -83,6 +83,10 @@ KEY_TO_TKINTER = {
 }
 
 
+# Compiled validation pattern for keybind format (avoids recompiling on every call)
+_KEYBIND_FORMAT_PATTERN = re.compile(r'^[A-Za-z0-9+\-_=,\.\/;\'\[\]\\`~!@#$%^&*(){}|:<>? ]+$')
+
+
 def validate_keybind_format(keybind_string: str) -> bool:
     """
     Validate keybind format with comprehensive validation.
@@ -105,8 +109,7 @@ def validate_keybind_format(keybind_string: str) -> bool:
         return False
     
     # Basic format check - should contain only valid characters
-    pattern = r'^[A-Za-z0-9+\-_=,\.\/;\'\[\]\\`~!@#$%^&*(){}|:<>? ]+$'
-    if not re.match(pattern, keybind_string):
+    if not _KEYBIND_FORMAT_PATTERN.match(keybind_string):
         return False
     
     # Check for critical system shortcuts

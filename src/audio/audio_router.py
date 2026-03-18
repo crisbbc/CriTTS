@@ -101,22 +101,20 @@ class AudioRouter:
         devices_sorted = sorted(base_name_to_device.values(), key=lambda d: len(d['name']), reverse=True)
 
         final_devices = []
+        final_devices_lower = []  # Cache lowercase versions to avoid repeated .lower() calls
         for device in devices_sorted:
-            name = device['name']
+            name_lower = device['name'].lower()
             is_duplicate = False
 
             # Check if this device's name is a prefix of or is prefixed by any existing device
-            for existing in final_devices:
-                existing_name = existing['name']
-                name_lower = name.lower()
-                existing_lower = existing_name.lower()
-
+            for existing_lower in final_devices_lower:
                 if name_lower.startswith(existing_lower) or existing_lower.startswith(name_lower):
                     is_duplicate = True
                     break
 
             if not is_duplicate:
                 final_devices.append(device)
+                final_devices_lower.append(name_lower)
 
         # Sort by name for consistent display
         final_devices.sort(key=lambda d: d['name'].lower())

@@ -98,6 +98,32 @@ class TTSEngine:
         'ko': ['', '천', '이천', '삼천', '사천', '오천', '육천', '칠천', '팔천', '구천'],
     }
 
+    # Common abbreviations and their expansions (class-level constant, built once)
+    _COMMON_ABBREVIATIONS = {
+        'mr.': 'mister',
+        'mrs.': 'missus',
+        'ms.': 'miss',
+        'dr.': 'doctor',
+        'vs.': 'versus',
+        'etc.': 'et cetera',
+        'i.e.': 'that is',
+        'e.g.': 'for example',
+        'u.s.': 'united states',
+        'u.k.': 'united kingdom',
+        'a.m.': 'am',
+        'p.m.': 'pm',
+        'ft.': 'foot',
+        'in.': 'inch',
+        'oz.': 'ounce',
+        'lb.': 'pound',
+    }
+
+    # Compiled regex for all common abbreviations (longest match first, case-insensitive)
+    _COMMON_ABBREV_PATTERN = re.compile(
+        '|'.join(re.escape(k) for k in sorted(_COMMON_ABBREVIATIONS, key=len, reverse=True)),
+        re.IGNORECASE
+    )
+
     def __init__(self, settings_manager: Optional['SettingsManager'] = None):
         """Initialize the TTS engine.
         
@@ -436,29 +462,10 @@ class TTSEngine:
     
     def _expand_common_abbreviations(self, text: str) -> str:
         """Expand common abbreviations for better pronunciation."""
-        abbreviations = {
-            'mr.': 'mister',
-            'mrs.': 'missus',
-            'ms.': 'miss',
-            'dr.': 'doctor',
-            'vs.': 'versus',
-            'etc.': 'et cetera',
-            'i.e.': 'that is',
-            'e.g.': 'for example',
-            'u.s.': 'united states',
-            'u.k.': 'united kingdom',
-            'a.m.': 'am',
-            'p.m.': 'pm',
-            'ft.': 'foot',
-            'in.': 'inch',
-            'oz.': 'ounce',
-            'lb.': 'pound',
-        }
-        
-        for abbr, full in abbreviations.items():
-            text = text.replace(abbr, full)
-        
-        return text
+        abbrev_map = self._COMMON_ABBREVIATIONS
+        return self._COMMON_ABBREV_PATTERN.sub(
+            lambda m: abbrev_map.get(m.group(0).lower(), m.group(0)), text
+        )
     
     def _format_numbers(self, text: str, voice: Optional[str] = None) -> str:
         """Format numbers for better TTS pronunciation with language-aware conversion.

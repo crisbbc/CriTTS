@@ -38,7 +38,7 @@ def _apply_word_corrections(text: str, corrections: dict) -> str:
             correction = corrections[word_lower]
             if word.isupper():
                 correction = correction.upper()
-            elif word[0].isupper():
+            elif word and word[0].isupper():
                 correction = correction.capitalize()
             corrected_words.append(correction)
         else:

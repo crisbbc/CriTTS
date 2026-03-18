@@ -53,7 +53,8 @@ class AudioCache:
         # Batching state for index persistence
         self._store_count = 0  # Counter for batch flushing
         self._last_flush_time = time.time()  # Timestamp for timer-based flushing
-        self._flush_timer: Optional[threading.Timer] = None  # Background timer for periodic flush
+        self._flush_stop_event = threading.Event()  # Signals the flush thread to stop
+        self._flush_thread: Optional[threading.Thread] = None  # Single persistent flush thread
         
         # Statistics
         self._hits = 0
@@ -69,32 +70,35 @@ class AudioCache:
         # Initialize cache directory and load index
         self._initialize_cache()
 
-        # Start periodic flush timer
+        # Start persistent background flush thread
         self._start_flush_timer()
     
     def _start_flush_timer(self):
-        """Start the background timer for periodic index flushing."""
+        """Start a single persistent background thread for periodic index flushing."""
         if not self.enabled:
             return
-        
-        def timer_callback():
-            """Callback for the flush timer."""
-            try:
-                self._flush_if_dirty()
-            finally:
-                # Restart timer if still enabled
-                if self.enabled:
-                    self._start_flush_timer()
-        
-        self._flush_timer = threading.Timer(self.FLUSH_INTERVAL_SECONDS, timer_callback)
-        self._flush_timer.daemon = True
-        self._flush_timer.start()
+
+        self._flush_stop_event.clear()
+
+        def _flush_loop():
+            """Run until the stop event is set, flushing on each interval."""
+            while not self._flush_stop_event.wait(timeout=self.FLUSH_INTERVAL_SECONDS):
+                try:
+                    self._flush_if_dirty()
+                except Exception:
+                    pass
+
+        self._flush_thread = threading.Thread(
+            target=_flush_loop, daemon=True, name="AudioCacheFlush"
+        )
+        self._flush_thread.start()
     
     def _stop_flush_timer(self):
-        """Stop the background flush timer."""
-        if self._flush_timer:
-            self._flush_timer.cancel()
-            self._flush_timer = None
+        """Stop the background flush thread."""
+        self._flush_stop_event.set()
+        if self._flush_thread and self._flush_thread.is_alive():
+            self._flush_thread.join(timeout=1)
+        self._flush_thread = None
     
     def _flush_if_dirty(self):
         """
