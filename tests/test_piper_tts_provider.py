@@ -220,3 +220,71 @@ class TestGenerateSpeech:
 
         result = await provider.generate_speech("Hello", "en_US-lessac-medium", stop_event=stop)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# status_callback
+# ---------------------------------------------------------------------------
+
+class TestStatusCallback:
+    def test_set_status_callback_stores_callable(self, provider):
+        cb = MagicMock()
+        provider.set_status_callback(cb)
+        assert provider._status_callback is cb
+
+    def test_set_status_callback_accepts_none(self, provider):
+        provider.set_status_callback(None)
+        assert provider._status_callback is None
+
+    def test_download_file_calls_callback(self, tmp_path):
+        """_download_file should invoke the status_callback before downloading."""
+        received = []
+
+        def cb(msg):
+            received.append(msg)
+
+        dest = tmp_path / "model.onnx"
+        fake_content = b"fake onnx data"
+
+        with patch("src.tts.providers.piper_tts_provider.urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_resp.read = MagicMock(return_value=b"")
+            mock_open.return_value = mock_resp
+
+            import shutil as _shutil
+            with patch("src.tts.providers.piper_tts_provider.shutil.copyfileobj"):
+                # Actually write something so rename succeeds
+                tmp_file = dest.with_suffix(dest.suffix + ".tmp")
+                tmp_file.write_bytes(fake_content)
+
+                from src.tts.providers.piper_tts_provider import _download_file
+                _download_file("https://example.com/model.onnx", dest, status_callback=cb)
+
+        assert len(received) == 1
+        assert "model.onnx" in received[0]
+
+    def test_load_voice_calls_callback_on_first_load(self, tmp_path):
+        """_load_voice should invoke the status_callback when loading a new model."""
+        cb = MagicMock()
+        provider = PiperTTSProvider(models_dir=tmp_path, status_callback=cb)
+
+        fake_voice = MagicMock()
+        with patch("src.tts.providers.piper_tts_provider._ensure_model", return_value=tmp_path / "x.onnx"):
+            with patch("src.tts.providers.piper_tts_provider.PiperVoice.load", return_value=fake_voice):
+                provider._load_voice("en_US-lessac-medium")
+
+        cb.assert_called()
+        messages = [call.args[0] for call in cb.call_args_list]
+        assert any("Loading Piper model" in m for m in messages)
+
+    def test_load_voice_no_callback_on_cached_voice(self, tmp_path):
+        """_load_voice should NOT invoke the callback when the model is already cached."""
+        cb = MagicMock()
+        provider = PiperTTSProvider(models_dir=tmp_path, status_callback=cb)
+        provider._loaded_models["en_US-lessac-medium"] = MagicMock()
+
+        provider._load_voice("en_US-lessac-medium")
+
+        cb.assert_not_called()

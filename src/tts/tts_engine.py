@@ -332,6 +332,15 @@ class TTSEngine:
         if self._get_active_provider_name() == "piper":
             return self._piper_tts_provider
         return self._edge_tts_provider
+
+    def set_piper_status_callback(self, callback) -> None:
+        """Register a status callback on the Piper TTS provider.
+
+        The callback is called (from a background thread) with a human-readable
+        string whenever a Piper voice model is being downloaded or loaded for
+        the first time.  Pass *None* to remove the callback.
+        """
+        self._piper_tts_provider.set_status_callback(callback)
     
     def clear_voices_cache(self):
         """Clear the voices cache to force refresh on next call."""
