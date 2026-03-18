@@ -118,7 +118,10 @@ class SettingsManager:
         "visible_buttons": ["speak", "stop", "clear", "voice", "overlay"],  # Toggleable buttons to show (settings is always visible)
         
         # Overlay Settings
-        "overlay_visible": True  # Whether the recording overlay is visible
+        "overlay_visible": True,  # Whether the recording overlay is visible
+
+        # TTS Provider Selection
+        "tts_provider": "edge",  # "edge" (Edge TTS, online) or "piper" (Piper TTS, offline)
     }
 
 
@@ -315,6 +318,11 @@ class SettingsManager:
                 logger.warning("Invalid appearance mode: %s, using default", value)
                 value = self.DEFAULT_SETTINGS["appearance_mode"]
             
+            # Validate TTS provider
+            if key == "tts_provider" and value not in ["edge", "piper"]:
+                logger.warning("Invalid TTS provider: %s, using default", value)
+                value = self.DEFAULT_SETTINGS["tts_provider"]
+            
             self._settings[key] = value
     
     def get_all(self):
@@ -377,6 +385,11 @@ class SettingsManager:
             appearance = self._settings.get("appearance_mode")
             if appearance not in ["Dark", "Light", "System"]:
                 issues.append(f"Invalid appearance mode: {appearance}")
+            
+            # Check TTS provider
+            tts_provider = self._settings.get("tts_provider")
+            if tts_provider not in ["edge", "piper"]:
+                issues.append(f"Invalid TTS provider: {tts_provider}")
             
             # Check numeric range settings
             rate = self._settings.get("rate")

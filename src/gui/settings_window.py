@@ -20,7 +20,7 @@ except Exception:
 from .keybind_manager import KeybindManager
 from .settings_tabs import (
     VoiceTab, AudioOutputTab, AppearanceTab, AbbreviationsTab,
-    KeybindsTab, BehaviorTab, VRChatOSCTab, AdvancedTab
+    KeybindsTab, BehaviorTab, VRChatOSCTab, AdvancedTab, TTSProviderTab
 )
 from .utils.scroll_utils import prevent_scroll_propagation
 from .theme_constants import (
@@ -133,7 +133,7 @@ class SettingsWindow:
 
         # Voice Settings Tab
         voice_frame = self.tabview.add("Voice")
-        self.voice_tab_obj = VoiceTab(voice_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
+        self.voice_tab_obj = VoiceTab(voice_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder, parent_window=self.window)
         self.tabs.append(self.voice_tab_obj)
         
         # Audio Output Tab
@@ -170,6 +170,11 @@ class SettingsWindow:
         advanced_frame = self.tabview.add("Advanced")
         self.advanced_tab_obj = AdvancedTab(advanced_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
         self.tabs.append(self.advanced_tab_obj)
+        
+        # TTS Provider Tab
+        provider_frame = self.tabview.add("TTS Provider")
+        self.provider_tab_obj = TTSProviderTab(provider_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
+        self.tabs.append(self.provider_tab_obj)
         
         # Buttons frame - fixed at bottom with standardized padding
         self.buttons_frame = ctk.CTkFrame(self.window, fg_color="transparent")
