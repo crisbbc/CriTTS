@@ -359,6 +359,26 @@ class PiperTTSProvider(TTSProvider):
         """Convert 0-100 integer volume to a 0.0-1.0 float scale."""
         return max(0.0, min(1.0, volume / 100.0))
 
+    def _get_noise_scale(self) -> float:
+        """Return the noise_scale setting (controls expressiveness/phoneme variability)."""
+        if self._settings_manager is not None:
+            val = self._settings_manager.get("piper_noise_scale", 0.667)
+            try:
+                return float(max(0.0, min(2.0, val)))
+            except (TypeError, ValueError):
+                pass
+        return 0.667
+
+    def _get_noise_w_scale(self) -> float:
+        """Return the noise_w_scale setting (controls phoneme duration variability)."""
+        if self._settings_manager is not None:
+            val = self._settings_manager.get("piper_noise_w_scale", 0.8)
+            try:
+                return float(max(0.0, min(2.0, val)))
+            except (TypeError, ValueError):
+                pass
+        return 0.8
+
     # ------------------------------------------------------------------
     # TTSProvider interface
     # ------------------------------------------------------------------
@@ -428,6 +448,8 @@ class PiperTTSProvider(TTSProvider):
         syn_cfg = SynthesisConfig(
             length_scale=self._rate_to_length_scale(rate),
             volume=self._volume_to_scale(volume),
+            noise_scale=self._get_noise_scale(),
+            noise_w_scale=self._get_noise_w_scale(),
         )
 
         buf = io.BytesIO()
@@ -461,6 +483,8 @@ class PiperTTSProvider(TTSProvider):
         syn_cfg = SynthesisConfig(
             length_scale=self._rate_to_length_scale(rate),
             volume=self._volume_to_scale(volume),
+            noise_scale=self._get_noise_scale(),
+            noise_w_scale=self._get_noise_w_scale(),
         )
 
         # synthesize() returns an iterable of AudioChunk (one per sentence)

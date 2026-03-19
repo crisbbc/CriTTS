@@ -11,10 +11,16 @@ from ..theme_constants import (
     COLOR_INFO,
 )
 
+# Default Piper noise values (match piper library defaults)
+_PIPER_NOISE_SCALE_DEFAULT = 0.667
+_PIPER_NOISE_W_SCALE_DEFAULT = 0.8
+
+# Internal key for the Piper provider (used for visibility checks)
+_PIPER_PROVIDER_KEY = "piper"
 
 _PROVIDER_OPTIONS = [
     "edge",
-    "piper",
+    _PIPER_PROVIDER_KEY,
 ]
 
 _PROVIDER_LABELS = {
@@ -104,6 +110,14 @@ class TTSProviderTab(BaseTab):
 
         self.create_separator(self.scroll).pack(fill="x", pady=(5, 10))
 
+        # --- Piper naturalness settings ---
+        self._piper_settings_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self._piper_settings_frame.pack(fill="x", pady=(0, 5))
+        self._create_piper_naturalness_section(self._piper_settings_frame)
+
+        # Show/hide Piper settings depending on current provider
+        self._update_piper_settings_visibility(current)
+
         # --- Informational note about voices ---
         note_label = ctk.CTkLabel(
             self.scroll,
@@ -120,11 +134,131 @@ class TTSProviderTab(BaseTab):
         self.add_wraplength_label(note_label)
 
     # ------------------------------------------------------------------
+    # Piper naturalness sliders
+    # ------------------------------------------------------------------
+
+    def _create_piper_naturalness_section(self, parent: ctk.CTkFrame):
+        """Create the Piper-specific naturalness sliders."""
+        self.create_section_header("Piper Naturalness Settings", parent).pack(
+            anchor="w", pady=(5, 5)
+        )
+
+        desc = ctk.CTkLabel(
+            parent,
+            text=(
+                "Adjust phoneme variability to improve speech naturalness. "
+                "Higher values add more variation; lower values produce more monotone output."
+            ),
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color="gray",
+            wraplength=500,
+            justify="left",
+        )
+        desc.pack(anchor="w", pady=(0, 10))
+        self.add_wraplength_label(desc)
+
+        # Noise Scale slider (expressiveness)
+        ctk.CTkLabel(
+            parent,
+            text="Expressiveness (noise_scale)",
+            font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
+        ).pack(anchor="w", pady=(5, 2))
+
+        noise_desc = ctk.CTkLabel(
+            parent,
+            text="Controls generator noise / expressiveness. Default: 0.667",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color="gray",
+        )
+        noise_desc.pack(anchor="w", pady=(0, 5))
+
+        noise_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        noise_frame.pack(fill="x", pady=(0, 10))
+
+        saved_noise = self.settings.get("piper_noise_scale", _PIPER_NOISE_SCALE_DEFAULT)
+        self._noise_scale_var = ctk.DoubleVar(value=float(saved_noise))
+
+        self._noise_scale_slider = ctk.CTkSlider(
+            noise_frame,
+            from_=0.0,
+            to=2.0,
+            number_of_steps=200,
+            variable=self._noise_scale_var,
+            command=self._on_noise_scale_change,
+            width=400,
+        )
+        self._noise_scale_slider.pack(side="left", fill="x", expand=True, padx=5)
+
+        self._noise_scale_label = ctk.CTkLabel(
+            noise_frame,
+            text=f"{float(saved_noise):.3f}",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=55,
+        )
+        self._noise_scale_label.pack(side="right", padx=5)
+
+        # Noise W Scale slider (duration variability)
+        ctk.CTkLabel(
+            parent,
+            text="Duration Variability (noise_w_scale)",
+            font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
+        ).pack(anchor="w", pady=(5, 2))
+
+        noise_w_desc = ctk.CTkLabel(
+            parent,
+            text="Controls phoneme duration variability. Default: 0.800",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color="gray",
+        )
+        noise_w_desc.pack(anchor="w", pady=(0, 5))
+
+        noise_w_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        noise_w_frame.pack(fill="x", pady=(0, 10))
+
+        saved_noise_w = self.settings.get("piper_noise_w_scale", _PIPER_NOISE_W_SCALE_DEFAULT)
+        self._noise_w_scale_var = ctk.DoubleVar(value=float(saved_noise_w))
+
+        self._noise_w_scale_slider = ctk.CTkSlider(
+            noise_w_frame,
+            from_=0.0,
+            to=2.0,
+            number_of_steps=200,
+            variable=self._noise_w_scale_var,
+            command=self._on_noise_w_scale_change,
+            width=400,
+        )
+        self._noise_w_scale_slider.pack(side="left", fill="x", expand=True, padx=5)
+
+        self._noise_w_scale_label = ctk.CTkLabel(
+            noise_w_frame,
+            text=f"{float(saved_noise_w):.3f}",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=55,
+        )
+        self._noise_w_scale_label.pack(side="right", padx=5)
+
+        self.create_separator(parent).pack(fill="x", pady=(5, 10))
+
+    def _on_noise_scale_change(self, value):
+        self._noise_scale_label.configure(text=f"{float(value):.3f}")
+
+    def _on_noise_w_scale_change(self, value):
+        self._noise_w_scale_label.configure(text=f"{float(value):.3f}")
+
+    def _update_piper_settings_visibility(self, provider_key: str):
+        """Show Piper naturalness settings only when Piper is selected."""
+        if provider_key == _PIPER_PROVIDER_KEY:
+            self._piper_settings_frame.pack(fill="x", pady=(0, 5))
+        else:
+            self._piper_settings_frame.pack_forget()
+
+    # ------------------------------------------------------------------
 
     def _on_provider_changed(self, selected_label: str):
-        """Update the description box when a new provider is selected."""
+        """Update the description box and Piper settings visibility when a new provider is selected."""
         key = self._label_to_key(selected_label)
         self._desc_label.configure(text=_PROVIDER_DESCRIPTIONS.get(key, ""))
+        self._update_piper_settings_visibility(key)
 
     @staticmethod
     def _label_to_key(label: str) -> str:
@@ -139,7 +273,12 @@ class TTSProviderTab(BaseTab):
     # ------------------------------------------------------------------
 
     def get_settings(self) -> Dict[str, Any]:
-        return {"tts_provider": self._label_to_key(self._provider_var.get())}
+        return {
+            "tts_provider": self._label_to_key(self._provider_var.get()),
+            # Rounded to 3 decimal places (slider step is 0.01, extra precision is harmless)
+            "piper_noise_scale": round(self._noise_scale_var.get(), 3),
+            "piper_noise_w_scale": round(self._noise_w_scale_var.get(), 3),
+        }
 
     def validate(self) -> List[str]:
         key = self._label_to_key(self._provider_var.get())
