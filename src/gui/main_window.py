@@ -1886,6 +1886,13 @@ class MainWindow:
         
         # Always re-pack settings button last
         self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+
+        # Enforce a minimum width wide enough to always show every visible button.
+        # Each button occupies BUTTON_WIDTH_DEFAULT + 2 * SPACING_SM horizontal space.
+        # Add 2 visible fixed buttons (controls_toggle + settings) to the count.
+        n_visible = sum(1 for name, _ in toggleable_buttons if name in visible_buttons) + 2
+        required = n_visible * (BUTTON_WIDTH_DEFAULT + 2 * SPACING_SM) + 2 * SPACING_MD
+        self.root.minsize(max(required, WINDOW_MAIN_MIN_WIDTH), WINDOW_MAIN_MIN_HEIGHT)
     
     # =========================================================================
     # QUICK CONTROLS PANEL
