@@ -122,7 +122,13 @@ class BaseTab(ABC):
         return label
 
     def _scroll_to_section(self, label: ctk.CTkLabel):
-        """Scroll the main scrollable frame to the given label."""
+        """Scroll the main scrollable frame to the given label.
+
+        Walks up the widget hierarchy from *label* to ``self.scroll`` accumulating
+        Y offsets at each level.  This correctly handles labels that live inside
+        nested intermediate frames (e.g. _pitch_section_frame, _piper_sliders_frame)
+        rather than being direct children of the scroll frame.
+        """
         if not hasattr(self, "scroll"):
             return
 
@@ -130,20 +136,21 @@ class BaseTab(ABC):
         self.scroll.update_idletasks()
 
         try:
-            # We use parent canvas to scroll
             canvas = self.scroll._parent_canvas
-            # Get label's Y position relative to the scrollable frame
-            target_y = label.winfo_y()
 
-            # The canvas bounding box tells us the total scrollable height
+            # Accumulate Y by walking from label up to self.scroll
+            target_y = 0
+            widget = label
+            while widget is not None and widget is not self.scroll:
+                target_y += widget.winfo_y()
+                widget = widget.master
+
             bbox = canvas.bbox("all")
             if bbox:
                 total_height = bbox[3]
                 if total_height > 0:
-                    # The fraction to scroll to is exactly the element's Y position divided by total height
-                    fraction = target_y / total_height
-                    # Use slightly less to give a tiny bit of padding
-                    fraction = max(0.0, fraction - 0.01)
+                    # Small offset so the header isn't flush with the top
+                    fraction = max(0.0, target_y / total_height - 0.01)
                     canvas.yview_moveto(fraction)
         except Exception as e:
             print(f"Error scrolling: {e}")

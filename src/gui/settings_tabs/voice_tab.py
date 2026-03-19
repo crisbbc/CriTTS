@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 # Default preview text constant
 DEFAULT_PREVIEW_TEXT = "Hello, this is a voice preview."
 
+# Default Piper noise values (match piper library defaults)
+_PIPER_NOISE_SCALE_DEFAULT = 0.667
+_PIPER_NOISE_W_SCALE_DEFAULT = 0.8
+_PIPER_PROVIDER_KEY = "piper"
+
 
 class VoiceTab(BaseTab):
     """Tab for voice settings."""
@@ -382,89 +387,42 @@ class VoiceTab(BaseTab):
         self.recent_empty_label.pack(pady=20)
     
     def _create_parameter_sliders(self):
-        """Create the rate/volume/pitch sliders."""
-        self.create_separator(self.scroll).pack(fill="x", pady=15)
-        
-        # Rate slider
-        self.rate_label = self.create_section_header("Speech Rate (Speed)")
-        self.rate_label.pack(anchor="w", pady=(10, 5))
-        
-        self.rate_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        self.rate_frame.pack(fill="x", pady=5)
-        
+        """Initialise parameter variables; the actual sliders live in Quick Controls."""
+        # Keep IntVar/DoubleVar members so voice preview and get_settings() still work.
+        # Quick Controls (main window) saves these values to settings on every change,
+        # so the vars below always reflect the most-recently saved values.
         self.rate_var = ctk.IntVar(value=self.settings.get("rate", 0))
-        self.rate_slider = ctk.CTkSlider(
-            self.rate_frame,
-            from_=-100,
-            to=100,
-            number_of_steps=200,
-            variable=self.rate_var,
-            command=self._on_rate_change,
-            width=400
-        )
-        self.rate_slider.pack(side="left", fill="x", expand=True, padx=5)
-        
-        self.rate_value_label = ctk.CTkLabel(
-            self.rate_frame,
-            text=f"{self.rate_var.get()}%",
-            font=ctk.CTkFont(size=FONT_MD),
-            width=50
-        )
-        self.rate_value_label.pack(side="right", padx=5)
-        
-        # Volume slider
-        self.volume_label = self.create_section_header("Volume")
-        self.volume_label.pack(anchor="w", pady=(10, 5))
-        
-        self.volume_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        self.volume_frame.pack(fill="x", pady=5)
-        
         self.volume_var = ctk.IntVar(value=self.settings.get("volume", 100))
-        self.volume_slider = ctk.CTkSlider(
-            self.volume_frame,
-            from_=0,
-            to=100,
-            number_of_steps=100,
-            variable=self.volume_var,
-            command=self._on_volume_change,
-            width=400
-        )
-        self.volume_slider.pack(side="left", fill="x", expand=True, padx=5)
-        
-        self.volume_value_label = ctk.CTkLabel(
-            self.volume_frame,
-            text=f"{self.volume_var.get()}%",
-            font=ctk.CTkFont(size=FONT_MD),
-            width=50
-        )
-        self.volume_value_label.pack(side="right", padx=5)
-        
-        # Pitch slider
-        self.pitch_label = self.create_section_header("Pitch")
-        self.pitch_label.pack(anchor="w", pady=(10, 5))
-        
-        self.pitch_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        self.pitch_frame.pack(fill="x", pady=5)
-        
         self.pitch_var = ctk.IntVar(value=self.settings.get("pitch", 0))
-        self.pitch_slider = ctk.CTkSlider(
-            self.pitch_frame,
-            from_=-100,
-            to=100,
-            number_of_steps=200,
-            variable=self.pitch_var,
-            command=self._on_pitch_change,
-            width=400
+        self._noise_scale_var = ctk.DoubleVar(
+            value=float(self.settings.get("piper_noise_scale", _PIPER_NOISE_SCALE_DEFAULT))
         )
-        self.pitch_slider.pack(side="left", fill="x", expand=True, padx=5)
-        
-        self.pitch_value_label = ctk.CTkLabel(
-            self.pitch_frame,
-            text=f"{self.pitch_var.get()}%",
+        self._noise_w_scale_var = ctk.DoubleVar(
+            value=float(self.settings.get("piper_noise_w_scale", _PIPER_NOISE_W_SCALE_DEFAULT))
+        )
+
+        self.create_separator(self.scroll).pack(fill="x", pady=15)
+        ctk.CTkLabel(
+            self.scroll,
+            text=(
+                "🎚  Speed, Volume, Pitch, and Expressiveness sliders are available in the\n"
+                "Quick Controls panel — click the  🎚 Controls  button in the main window."
+            ),
             font=ctk.CTkFont(size=FONT_MD),
-            width=50
-        )
-        self.pitch_value_label.pack(side="right", padx=5)
+            text_color="gray",
+            justify="left",
+        ).pack(anchor="w", pady=(10, 5), padx=5)
+
+    def _apply_provider_slider_visibility(self, provider_key: str):
+        """No-op: provider-specific sliders live in the Quick Controls panel."""
+
+    def update_provider_sliders(self, provider_key: str):
+        """No-op: provider-specific sliders live in the Quick Controls panel.
+
+        Called by TTSProviderTab (via SettingsWindow) whenever the user
+        switches providers.
+        """
+
     
     def _load_voices(self):
         """Load available voices asynchronously."""
@@ -868,16 +826,19 @@ class VoiceTab(BaseTab):
             self.audio_router.stop_playback()
     
     def _on_rate_change(self, value):
-        """Update rate label."""
-        self.rate_value_label.configure(text=f"{int(value)}%")
-    
+        """No-op: sliders moved to Quick Controls panel."""
+
     def _on_volume_change(self, value):
-        """Update volume label."""
-        self.volume_value_label.configure(text=f"{int(value)}%")
-    
+        """No-op: sliders moved to Quick Controls panel."""
+
     def _on_pitch_change(self, value):
-        """Update pitch label."""
-        self.pitch_value_label.configure(text=f"{int(value)}%")
+        """No-op: sliders moved to Quick Controls panel."""
+
+    def _on_noise_scale_change(self, value):
+        """No-op: sliders moved to Quick Controls panel."""
+
+    def _on_noise_w_scale_change(self, value):
+        """No-op: sliders moved to Quick Controls panel."""
     
     def get_settings(self) -> Dict[str, Any]:
         """Get current settings from the tab UI."""
@@ -889,6 +850,11 @@ class VoiceTab(BaseTab):
             "voice_filter_language": self.language_filter_var.get(),
             "voice_filter_gender": self.gender_filter_var.get(),
             "voice_filter_region": self.region_filter_var.get(),
+            # Piper naturalness values are always persisted so they survive provider
+            # round-trips and are available immediately if the user switches to Piper.
+            # They are ignored by Edge TTS and other non-Piper providers.
+            "piper_noise_scale": round(self._noise_scale_var.get(), 3),
+            "piper_noise_w_scale": round(self._noise_w_scale_var.get(), 3),
         }
         
         short = self._voice_name_to_short_name.get(self.voice_var.get())

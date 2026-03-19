@@ -6,6 +6,7 @@ Covers:
 - get_default_voice
 - _rate_to_length_scale conversions
 - _volume_to_scale conversions
+- _get_noise_scale / _get_noise_w_scale helpers
 - validate_voice (sync logic)
 - clear_cache
 - _build_model_url correctness
@@ -288,3 +289,135 @@ class TestStatusCallback:
         provider._load_voice("en_US-lessac-medium")
 
         cb.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Naturalness helpers: _get_noise_scale / _get_noise_w_scale
+# ---------------------------------------------------------------------------
+
+class TestNoiseScaleHelpers:
+    """Tests for the noise_scale and noise_w_scale naturalness helpers."""
+
+    def test_default_noise_scale_without_settings_manager(self, tmp_path):
+        """Without a settings manager, noise_scale should fall back to 0.667."""
+        p = PiperTTSProvider(settings_manager=None, models_dir=tmp_path)
+        assert p._get_noise_scale() == pytest.approx(0.667)
+
+    def test_default_noise_w_scale_without_settings_manager(self, tmp_path):
+        """Without a settings manager, noise_w_scale should fall back to 0.8."""
+        p = PiperTTSProvider(settings_manager=None, models_dir=tmp_path)
+        assert p._get_noise_w_scale() == pytest.approx(0.8)
+
+    def test_noise_scale_reads_from_settings_manager(self, tmp_path):
+        """noise_scale should be read from the settings manager when present."""
+        sm = MagicMock()
+        sm.get.side_effect = lambda key, default=None: {
+            "piper_noise_scale": 1.2,
+            "piper_noise_w_scale": 0.5,
+        }.get(key, default)
+        p = PiperTTSProvider(settings_manager=sm, models_dir=tmp_path)
+        assert p._get_noise_scale() == pytest.approx(1.2)
+
+    def test_noise_w_scale_reads_from_settings_manager(self, tmp_path):
+        """noise_w_scale should be read from the settings manager when present."""
+        sm = MagicMock()
+        sm.get.side_effect = lambda key, default=None: {
+            "piper_noise_scale": 0.667,
+            "piper_noise_w_scale": 0.5,
+        }.get(key, default)
+        p = PiperTTSProvider(settings_manager=sm, models_dir=tmp_path)
+        assert p._get_noise_w_scale() == pytest.approx(0.5)
+
+    def test_noise_scale_clamped_to_zero(self, tmp_path):
+        """Negative noise_scale values should be clamped to 0.0."""
+        sm = MagicMock()
+        sm.get.side_effect = lambda key, default=None: {"piper_noise_scale": -1.0}.get(key, default)
+        p = PiperTTSProvider(settings_manager=sm, models_dir=tmp_path)
+        assert p._get_noise_scale() == pytest.approx(0.0)
+
+    def test_noise_scale_clamped_to_max(self, tmp_path):
+        """noise_scale values above 2.0 should be clamped to 2.0."""
+        sm = MagicMock()
+        sm.get.side_effect = lambda key, default=None: {"piper_noise_scale": 99.0}.get(key, default)
+        p = PiperTTSProvider(settings_manager=sm, models_dir=tmp_path)
+        assert p._get_noise_scale() == pytest.approx(2.0)
+
+    def test_noise_w_scale_clamped_to_max(self, tmp_path):
+        """noise_w_scale values above 2.0 should be clamped to 2.0."""
+        sm = MagicMock()
+        sm.get.side_effect = lambda key, default=None: {"piper_noise_w_scale": 5.0}.get(key, default)
+        p = PiperTTSProvider(settings_manager=sm, models_dir=tmp_path)
+        assert p._get_noise_w_scale() == pytest.approx(2.0)
+
+    def test_invalid_noise_scale_falls_back_to_default(self, tmp_path):
+        """A non-numeric noise_scale should fall back to the 0.667 default."""
+        sm = MagicMock()
+        sm.get.side_effect = lambda key, default=None: {"piper_noise_scale": "bad"}.get(key, default)
+        p = PiperTTSProvider(settings_manager=sm, models_dir=tmp_path)
+        assert p._get_noise_scale() == pytest.approx(0.667)
+
+    def test_invalid_noise_w_scale_falls_back_to_default(self, tmp_path):
+        """A non-numeric noise_w_scale (None) should fall back to the 0.8 default."""
+        sm = MagicMock()
+        sm.get.side_effect = lambda key, default=None: {"piper_noise_w_scale": None}.get(key, default)
+        p = PiperTTSProvider(settings_manager=sm, models_dir=tmp_path)
+        assert p._get_noise_w_scale() == pytest.approx(0.8)
+
+    def test_noise_w_scale_missing_key_returns_default(self, tmp_path):
+        """When piper_noise_w_scale is absent, get() should return the caller's default (0.8)."""
+        sm = MagicMock()
+        # Key is not in the dict at all, so the passed-in default is returned
+        sm.get.side_effect = lambda key, default=None: default
+        p = PiperTTSProvider(settings_manager=sm, models_dir=tmp_path)
+        assert p._get_noise_w_scale() == pytest.approx(0.8)
+
+    def test_noise_scale_missing_key_returns_default(self, tmp_path):
+        """When piper_noise_scale is absent, get() should return the caller's default (0.667)."""
+        sm = MagicMock()
+        sm.get.side_effect = lambda key, default=None: default
+        p = PiperTTSProvider(settings_manager=sm, models_dir=tmp_path)
+        assert p._get_noise_scale() == pytest.approx(0.667)
+
+    def test_synthesize_blocking_passes_noise_params(self, tmp_path):
+        """_synthesize_blocking should forward noise_scale and noise_w_scale to SynthesisConfig."""
+        import wave as _wave
+        from unittest.mock import call as _call
+
+        sm = MagicMock()
+        sm.get.side_effect = lambda key, default=None: {
+            "piper_noise_scale": 0.9,
+            "piper_noise_w_scale": 0.6,
+        }.get(key, default)
+
+        p = PiperTTSProvider(settings_manager=sm, models_dir=tmp_path)
+
+        # Create a minimal WAV buffer to return from synthesize_wav
+        wav_buf = io.BytesIO()
+        with _wave.open(wav_buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(22050)
+            wf.writeframes(b"\x00\x00")
+        wav_bytes = wav_buf.getvalue()
+
+        captured_cfg = []
+
+        def fake_synthesize_wav(text, wav_file, syn_config=None):
+            captured_cfg.append(syn_config)
+            # Write the pre-built WAV frames into the file
+            with _wave.open(io.BytesIO(wav_bytes), "rb") as src:
+                wav_file.setnchannels(src.getnchannels())
+                wav_file.setsampwidth(src.getsampwidth())
+                wav_file.setframerate(src.getframerate())
+                wav_file.writeframes(src.readframes(src.getnframes()))
+
+        fake_voice = MagicMock()
+        fake_voice.synthesize_wav.side_effect = fake_synthesize_wav
+        p._loaded_models["en_US-lessac-medium"] = fake_voice
+
+        p._synthesize_blocking("hello", "en_US-lessac-medium", 0, 100, None)
+
+        assert len(captured_cfg) == 1
+        cfg = captured_cfg[0]
+        assert cfg.noise_scale == pytest.approx(0.9)
+        assert cfg.noise_w_scale == pytest.approx(0.6)

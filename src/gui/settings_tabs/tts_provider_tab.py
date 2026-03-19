@@ -3,18 +3,20 @@ TTS Provider Tab
 Settings for choosing between available TTS providers (online / offline).
 """
 import customtkinter as ctk
-from typing import Any, List, Dict
+from typing import Any, Callable, List, Dict, Optional
 
 from .base_tab import BaseTab
 from ..theme_constants import (
-    FONT_SM, FONT_MD, FONT_LG, FONT_XL, FONT_WEIGHT_BOLD,
+    FONT_SM, FONT_MD, FONT_XL, FONT_WEIGHT_BOLD,
     COLOR_INFO,
 )
 
+# Internal key for the Piper provider (used for visibility checks)
+_PIPER_PROVIDER_KEY = "piper"
 
 _PROVIDER_OPTIONS = [
     "edge",
-    "piper",
+    _PIPER_PROVIDER_KEY,
 ]
 
 _PROVIDER_LABELS = {
@@ -44,6 +46,16 @@ _PROVIDER_DESCRIPTIONS = {
 
 class TTSProviderTab(BaseTab):
     """Tab for selecting the active TTS provider."""
+
+    def __init__(self, *args, **kwargs):
+        # Callback invoked with the new provider key whenever the user changes provider.
+        # Wired up by SettingsWindow after both tabs are created.
+        self._voice_tab_callback: Optional[Callable[[str], None]] = None
+        super().__init__(*args, **kwargs)
+
+    def set_voice_tab_callback(self, callback: Optional[Callable[[str], None]]) -> None:
+        """Register a callback that is called with the new provider key on change."""
+        self._voice_tab_callback = callback
 
     def _create_content(self):
         """Build the TTS Provider tab UI."""
@@ -119,12 +131,29 @@ class TTSProviderTab(BaseTab):
         note_label.pack(anchor="w", pady=(0, 10))
         self.add_wraplength_label(note_label)
 
+        # --- Note directing users to the Voice tab for provider-specific sliders ---
+        sliders_note = ctk.CTkLabel(
+            self.scroll,
+            text=(
+                "ℹ  Provider-specific audio controls (e.g. Piper naturalness sliders) "
+                "are available in the Voice tab and update automatically when you change provider."
+            ),
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color=COLOR_INFO,
+            wraplength=500,
+            justify="left",
+        )
+        sliders_note.pack(anchor="w", pady=(0, 10))
+        self.add_wraplength_label(sliders_note)
+
     # ------------------------------------------------------------------
 
     def _on_provider_changed(self, selected_label: str):
-        """Update the description box when a new provider is selected."""
+        """Update the description box and notify the Voice tab when a new provider is selected."""
         key = self._label_to_key(selected_label)
         self._desc_label.configure(text=_PROVIDER_DESCRIPTIONS.get(key, ""))
+        if self._voice_tab_callback is not None:
+            self._voice_tab_callback(key)
 
     @staticmethod
     def _label_to_key(label: str) -> str:
@@ -139,7 +168,9 @@ class TTSProviderTab(BaseTab):
     # ------------------------------------------------------------------
 
     def get_settings(self) -> Dict[str, Any]:
-        return {"tts_provider": self._label_to_key(self._provider_var.get())}
+        return {
+            "tts_provider": self._label_to_key(self._provider_var.get()),
+        }
 
     def validate(self) -> List[str]:
         key = self._label_to_key(self._provider_var.get())
