@@ -195,7 +195,8 @@ class MainWindow:
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(1, weight=1)  # Text area expands
         self.main_frame.grid_rowconfigure(2, weight=0)  # Controls fixed
-        self.main_frame.grid_rowconfigure(3, weight=0)  # Status fixed
+        self.main_frame.grid_rowconfigure(3, weight=0)  # Quick controls (collapsible)
+        self.main_frame.grid_rowconfigure(4, weight=0)  # Status fixed
         
         # Header with voice indicator
         self.header_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
@@ -355,13 +356,33 @@ class MainWindow:
         )
         self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
         
+        # Quick controls toggle button - always visible, toggles the slider panel
+        self._quick_controls_visible = self.settings.get("quick_controls_visible", False)
+        qc_color = COLOR_PRIMARY if self._quick_controls_visible else COLOR_NEUTRAL_MEDIUM
+        qc_hover = COLOR_PRIMARY_HOVER if self._quick_controls_visible else COLOR_NEUTRAL
+        self.controls_toggle_button = ctk.CTkButton(
+            self.controls_frame,
+            text="🎚  Controls",
+            font=ctk.CTkFont(size=FONT_MD),
+            command=self._toggle_quick_controls,
+            height=BUTTON_HEIGHT_LG,
+            width=BUTTON_WIDTH_DEFAULT,
+            fg_color=qc_color,
+            hover_color=qc_hover,
+            corner_radius=RADIUS_MD
+        )
+        self.controls_toggle_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        
+        # Quick controls panel (collapsible) - row 3
+        self._create_quick_controls()
+        
         # Status frame with modern styling
         self.status_frame = ctk.CTkFrame(
             self.main_frame, 
             fg_color=COLOR_BG_SECONDARY,
             corner_radius=RADIUS_MD
         )
-        self.status_frame.grid(row=3, column=0, padx=SPACING_MD, pady=(0, SPACING_MD), sticky="ew")
+        self.status_frame.grid(row=4, column=0, padx=SPACING_MD, pady=(0, SPACING_MD), sticky="ew")
         self.status_frame.grid_propagate(False)
         self.status_frame.configure(height=FRAME_STATUS_HEIGHT)
         
@@ -1826,6 +1847,7 @@ class MainWindow:
         self._abbreviation_cache.clear()
         self._update_status()
         self._setup_viseme_mapper()
+        self.refresh_quick_controls()
         self._set_status("Settings updated", "✅")
     
     def apply_button_visibility(self):
@@ -1847,9 +1869,10 @@ class MainWindow:
             ("overlay", self.overlay_button),
         ]
         
-        # Unpack all toggleable buttons AND settings button
+        # Unpack all toggleable buttons AND always-visible buttons
         for _, button in toggleable_buttons:
             button.pack_forget()
+        self.controls_toggle_button.pack_forget()
         self.settings_button.pack_forget()
         
         # Re-pack only visible toggleable buttons in fixed order
@@ -1857,9 +1880,215 @@ class MainWindow:
             if name in visible_buttons:
                 button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
         
+        # Always re-pack controls toggle button before settings button
+        self.controls_toggle_button.pack_forget()
+        self.controls_toggle_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        
         # Always re-pack settings button last
         self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
     
+    # =========================================================================
+    # QUICK CONTROLS PANEL
+    # =========================================================================
+
+    def _create_quick_controls(self):
+        """Create the collapsible quick controls panel with rate/volume/pitch sliders."""
+        self.quick_controls_frame = ctk.CTkFrame(
+            self.main_frame,
+            fg_color=COLOR_BG_SECONDARY,
+            corner_radius=RADIUS_MD
+        )
+        self.quick_controls_frame.grid(
+            row=3, column=0, padx=SPACING_MD, pady=(0, SPACING_SM), sticky="ew"
+        )
+        self.quick_controls_frame.grid_columnconfigure(0, weight=1)
+
+        # Inner row that holds all slider groups side-by-side
+        self._qc_inner = ctk.CTkFrame(self.quick_controls_frame, fg_color="transparent")
+        self._qc_inner.pack(fill="x", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
+
+        # --- Rate slider (always shown) ---
+        self._qc_rate_group = ctk.CTkFrame(self._qc_inner, fg_color="transparent")
+        self._qc_rate_group.pack(side="left", fill="x", expand=True, padx=(0, SPACING_SM))
+        self._qc_rate_var = ctk.IntVar(value=self.settings.get("rate", 0))
+        self._qc_rate_label = ctk.CTkLabel(
+            self._qc_rate_group,
+            text=f"Speed: {self._qc_rate_var.get():+d}%",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color=COLOR_NEUTRAL_LIGHTER
+        )
+        self._qc_rate_label.pack(anchor="w")
+        ctk.CTkSlider(
+            self._qc_rate_group,
+            from_=-100, to=100, number_of_steps=200,
+            variable=self._qc_rate_var,
+            command=self._on_quick_rate_change
+        ).pack(fill="x")
+
+        # --- Volume slider (always shown) ---
+        self._qc_volume_group = ctk.CTkFrame(self._qc_inner, fg_color="transparent")
+        self._qc_volume_group.pack(side="left", fill="x", expand=True, padx=SPACING_SM)
+        self._qc_volume_var = ctk.IntVar(value=self.settings.get("volume", 100))
+        self._qc_volume_label = ctk.CTkLabel(
+            self._qc_volume_group,
+            text=f"Volume: {self._qc_volume_var.get()}%",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color=COLOR_NEUTRAL_LIGHTER
+        )
+        self._qc_volume_label.pack(anchor="w")
+        ctk.CTkSlider(
+            self._qc_volume_group,
+            from_=0, to=100, number_of_steps=100,
+            variable=self._qc_volume_var,
+            command=self._on_quick_volume_change
+        ).pack(fill="x")
+
+        # --- Pitch slider (Edge TTS only) ---
+        self._qc_pitch_group = ctk.CTkFrame(self._qc_inner, fg_color="transparent")
+        self._qc_pitch_var = ctk.IntVar(value=self.settings.get("pitch", 0))
+        self._qc_pitch_label = ctk.CTkLabel(
+            self._qc_pitch_group,
+            text=f"Pitch: {self._qc_pitch_var.get():+d}%",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color=COLOR_NEUTRAL_LIGHTER
+        )
+        self._qc_pitch_label.pack(anchor="w")
+        ctk.CTkSlider(
+            self._qc_pitch_group,
+            from_=-100, to=100, number_of_steps=200,
+            variable=self._qc_pitch_var,
+            command=self._on_quick_pitch_change
+        ).pack(fill="x")
+
+        # --- Piper Noise Scale slider (Piper TTS only) ---
+        self._qc_noise_scale_group = ctk.CTkFrame(self._qc_inner, fg_color="transparent")
+        _ns = float(self.settings.get("piper_noise_scale", 0.667))
+        self._qc_noise_scale_var = ctk.DoubleVar(value=_ns)
+        self._qc_noise_scale_label = ctk.CTkLabel(
+            self._qc_noise_scale_group,
+            text=f"Expr: {_ns:.3f}",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color=COLOR_NEUTRAL_LIGHTER
+        )
+        self._qc_noise_scale_label.pack(anchor="w")
+        ctk.CTkSlider(
+            self._qc_noise_scale_group,
+            from_=0.0, to=2.0, number_of_steps=200,
+            variable=self._qc_noise_scale_var,
+            command=self._on_quick_noise_scale_change
+        ).pack(fill="x")
+
+        # --- Piper Noise W Scale slider (Piper TTS only) ---
+        self._qc_noise_w_group = ctk.CTkFrame(self._qc_inner, fg_color="transparent")
+        _nw = float(self.settings.get("piper_noise_w_scale", 0.8))
+        self._qc_noise_w_var = ctk.DoubleVar(value=_nw)
+        self._qc_noise_w_label = ctk.CTkLabel(
+            self._qc_noise_w_group,
+            text=f"Dur: {_nw:.3f}",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color=COLOR_NEUTRAL_LIGHTER
+        )
+        self._qc_noise_w_label.pack(anchor="w")
+        ctk.CTkSlider(
+            self._qc_noise_w_group,
+            from_=0.0, to=2.0, number_of_steps=200,
+            variable=self._qc_noise_w_var,
+            command=self._on_quick_noise_w_scale_change
+        ).pack(fill="x")
+
+        # Apply provider-specific slider visibility and show/hide the panel
+        self._update_quick_controls_provider()
+        if not self._quick_controls_visible:
+            self.quick_controls_frame.grid_remove()
+
+    def _toggle_quick_controls(self):
+        """Show or hide the quick controls panel."""
+        self._quick_controls_visible = not self._quick_controls_visible
+        self.settings.set("quick_controls_visible", self._quick_controls_visible)
+        self.settings.save_settings()
+
+        if self._quick_controls_visible:
+            self.quick_controls_frame.grid()
+            self.controls_toggle_button.configure(
+                fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER
+            )
+        else:
+            self.quick_controls_frame.grid_remove()
+            self.controls_toggle_button.configure(
+                fg_color=COLOR_NEUTRAL_MEDIUM, hover_color=COLOR_NEUTRAL
+            )
+
+    def _update_quick_controls_provider(self):
+        """Show pitch or Piper noise sliders based on the active provider."""
+        provider = self.settings.get("tts_provider", "edge")
+        if provider == "piper":
+            self._qc_pitch_group.pack_forget()
+            self._qc_noise_scale_group.pack(side="left", fill="x", expand=True, padx=SPACING_SM)
+            self._qc_noise_w_group.pack(side="left", fill="x", expand=True, padx=(SPACING_SM, 0))
+        else:
+            self._qc_noise_scale_group.pack_forget()
+            self._qc_noise_w_group.pack_forget()
+            self._qc_pitch_group.pack(side="left", fill="x", expand=True, padx=(SPACING_SM, 0))
+
+    def refresh_quick_controls(self):
+        """Sync quick controls sliders from current settings (called after settings save)."""
+        try:
+            self._qc_rate_var.set(self.settings.get("rate", 0))
+            self._qc_rate_label.configure(text=f"Speed: {self._qc_rate_var.get():+d}%")
+
+            self._qc_volume_var.set(self.settings.get("volume", 100))
+            self._qc_volume_label.configure(text=f"Volume: {self._qc_volume_var.get()}%")
+
+            self._qc_pitch_var.set(self.settings.get("pitch", 0))
+            self._qc_pitch_label.configure(text=f"Pitch: {self._qc_pitch_var.get():+d}%")
+
+            ns = float(self.settings.get("piper_noise_scale", 0.667))
+            self._qc_noise_scale_var.set(ns)
+            self._qc_noise_scale_label.configure(text=f"Expr: {ns:.3f}")
+
+            nw = float(self.settings.get("piper_noise_w_scale", 0.8))
+            self._qc_noise_w_var.set(nw)
+            self._qc_noise_w_label.configure(text=f"Dur: {nw:.3f}")
+
+            self._update_quick_controls_provider()
+        except Exception:
+            pass
+
+    def _on_quick_rate_change(self, value):
+        """Handle quick controls rate slider change."""
+        v = int(round(float(value)))
+        self._qc_rate_label.configure(text=f"Speed: {v:+d}%")
+        self.settings.set("rate", v)
+        self.settings.save_settings()
+
+    def _on_quick_volume_change(self, value):
+        """Handle quick controls volume slider change."""
+        v = int(round(float(value)))
+        self._qc_volume_label.configure(text=f"Volume: {v}%")
+        self.settings.set("volume", v)
+        self.settings.save_settings()
+
+    def _on_quick_pitch_change(self, value):
+        """Handle quick controls pitch slider change."""
+        v = int(round(float(value)))
+        self._qc_pitch_label.configure(text=f"Pitch: {v:+d}%")
+        self.settings.set("pitch", v)
+        self.settings.save_settings()
+
+    def _on_quick_noise_scale_change(self, value):
+        """Handle quick controls Piper noise scale slider change."""
+        v = round(float(value), 3)
+        self._qc_noise_scale_label.configure(text=f"Expr: {v:.3f}")
+        self.settings.set("piper_noise_scale", v)
+        self.settings.save_settings()
+
+    def _on_quick_noise_w_scale_change(self, value):
+        """Handle quick controls Piper noise W scale slider change."""
+        v = round(float(value), 3)
+        self._qc_noise_w_label.configure(text=f"Dur: {v:.3f}")
+        self.settings.set("piper_noise_w_scale", v)
+        self.settings.save_settings()
+
     def set_text(self, text: str):
         """Set text in the input area."""
         self.text_input.delete("1.0", "end")

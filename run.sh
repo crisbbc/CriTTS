@@ -34,24 +34,40 @@ fi
 
 if command_exists git; then
     echo "[INFO] Checking for updates from remote repository..."
-    # Ensure we are tracking a remote branch
-    git fetch origin main >/dev/null 2>&1
+
+    # Detect the current branch
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    CURRENT_BRANCH="${CURRENT_BRANCH:-main}"
+
+    # Try to use the upstream tracking branch; fall back to current branch
+    TRACKING=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
+    if [ -n "$TRACKING" ]; then
+        REMOTE_BRANCH="${TRACKING#origin/}"
+    else
+        REMOTE_BRANCH="$CURRENT_BRANCH"
+    fi
+
+    git fetch origin "$REMOTE_BRANCH" >/dev/null 2>&1
     if [ $? -eq 0 ]; then
         LOCAL=$(git rev-parse HEAD 2>/dev/null)
-        REMOTE=$(git rev-parse origin/main 2>/dev/null)
+        REMOTE=$(git rev-parse "origin/$REMOTE_BRANCH" 2>/dev/null)
 
-        if [ "$LOCAL" != "$REMOTE" ]; then
-            echo "[INFO] Updates found. Applying updates and replacing local changes..."
-            git reset --hard origin/main >/dev/null 2>&1
-            if [ $? -eq 0 ]; then
-                echo "[OK] Successfully updated to the latest main branch."
-                # Re-run the script to ensure we are using the updated version
-                exec bash "$0" "$@"
+        if [ -n "$LOCAL" ] && [ -n "$REMOTE" ]; then
+            if [ "$LOCAL" != "$REMOTE" ]; then
+                echo "[INFO] Updates found. Applying updates and replacing local changes..."
+                git reset --hard "origin/$REMOTE_BRANCH" >/dev/null 2>&1
+                if [ $? -eq 0 ]; then
+                    echo "[OK] Successfully updated to the latest $REMOTE_BRANCH branch."
+                    # Re-run the script to ensure we are using the updated version
+                    exec bash "$0" "$@"
+                else
+                    echo "[WARN] Failed to apply updates."
+                fi
             else
-                echo "[WARN] Failed to apply updates."
+                echo "[OK] Scripts are up to date."
             fi
         else
-            echo "[OK] Scripts are up to date."
+            echo "[WARN] Could not determine local or remote commit. Skipping update."
         fi
     else
         echo "[WARN] Failed to fetch updates from remote repository."
@@ -95,48 +111,22 @@ if ! $PYTHON_CMD -m pip --version >/dev/null 2>&1; then
 fi
 echo "[OK] pip is available."
 
-# Function to check if all requirements are satisfied
-check_requirements() {
-    $PYTHON_CMD -c "import customtkinter, edge_tts, langid, sounddevice, soundfile, numpy, scipy, pyloudnorm, pythonosc, speech_recognition, keyboard" >/dev/null 2>&1
-    return $?
-}
-
-# Check if virtual environment exists, if not check if requirements are installed
+# Install / update dependencies from requirements.txt
 echo ""
-echo "[4/4] Checking dependencies..."
+echo "[4/4] Checking and installing dependencies..."
 
-# Check if venv exists
+# Activate virtual environment if it exists
 if [ -f "$SCRIPT_DIR/venv/bin/activate" ]; then
     echo "[INFO] Virtual environment found. Activating..."
     source "$SCRIPT_DIR/venv/bin/activate"
-    # After activating venv, check if requirements are satisfied
-    if ! check_requirements; then
-        echo "[WARN] Some dependencies are missing or outdated."
-        echo "[INFO] Installing dependencies from requirements.txt..."
-        $PYTHON_CMD -m pip install -r "$SCRIPT_DIR/requirements.txt"
-        if [ $? -ne 0 ]; then
-            echo "[ERROR] Failed to install dependencies."
-            exit 1
-        fi
-        echo "[OK] Dependencies installed successfully."
-    else
-        echo "[OK] All dependencies are satisfied."
-    fi
-else
-    # Check if all required packages are installed with correct versions
-    if ! check_requirements; then
-        echo "[WARN] Some dependencies are missing or outdated."
-        echo "[INFO] Installing dependencies from requirements.txt..."
-        $PYTHON_CMD -m pip install -r "$SCRIPT_DIR/requirements.txt"
-        if [ $? -ne 0 ]; then
-            echo "[ERROR] Failed to install dependencies."
-            exit 1
-        fi
-        echo "[OK] Dependencies installed successfully."
-    else
-        echo "[OK] All dependencies are satisfied."
-    fi
 fi
+
+$PYTHON_CMD -m pip install -r "$SCRIPT_DIR/requirements.txt" --quiet
+if [ $? -ne 0 ]; then
+    echo "[ERROR] Failed to install dependencies."
+    exit 1
+fi
+echo "[OK] Dependencies are satisfied."
 
 # Launch the application
 echo ""
