@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 # Default preview text constant
 DEFAULT_PREVIEW_TEXT = "Hello, this is a voice preview."
 
+# Default Piper noise values (match piper library defaults)
+_PIPER_NOISE_SCALE_DEFAULT = 0.667
+_PIPER_NOISE_W_SCALE_DEFAULT = 0.8
+_PIPER_PROVIDER_KEY = "piper"
+
 
 class VoiceTab(BaseTab):
     """Tab for voice settings."""
@@ -382,16 +387,16 @@ class VoiceTab(BaseTab):
         self.recent_empty_label.pack(pady=20)
     
     def _create_parameter_sliders(self):
-        """Create the rate/volume/pitch sliders."""
+        """Create the rate/volume/pitch (Edge) and Piper noise sliders."""
         self.create_separator(self.scroll).pack(fill="x", pady=15)
-        
-        # Rate slider
+
+        # Rate slider (common to all providers)
         self.rate_label = self.create_section_header("Speech Rate (Speed)")
         self.rate_label.pack(anchor="w", pady=(10, 5))
-        
+
         self.rate_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
         self.rate_frame.pack(fill="x", pady=5)
-        
+
         self.rate_var = ctk.IntVar(value=self.settings.get("rate", 0))
         self.rate_slider = ctk.CTkSlider(
             self.rate_frame,
@@ -403,7 +408,7 @@ class VoiceTab(BaseTab):
             width=400
         )
         self.rate_slider.pack(side="left", fill="x", expand=True, padx=5)
-        
+
         self.rate_value_label = ctk.CTkLabel(
             self.rate_frame,
             text=f"{self.rate_var.get()}%",
@@ -411,14 +416,14 @@ class VoiceTab(BaseTab):
             width=50
         )
         self.rate_value_label.pack(side="right", padx=5)
-        
-        # Volume slider
+
+        # Volume slider (common to all providers)
         self.volume_label = self.create_section_header("Volume")
         self.volume_label.pack(anchor="w", pady=(10, 5))
-        
+
         self.volume_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
         self.volume_frame.pack(fill="x", pady=5)
-        
+
         self.volume_var = ctk.IntVar(value=self.settings.get("volume", 100))
         self.volume_slider = ctk.CTkSlider(
             self.volume_frame,
@@ -430,7 +435,7 @@ class VoiceTab(BaseTab):
             width=400
         )
         self.volume_slider.pack(side="left", fill="x", expand=True, padx=5)
-        
+
         self.volume_value_label = ctk.CTkLabel(
             self.volume_frame,
             text=f"{self.volume_var.get()}%",
@@ -438,14 +443,17 @@ class VoiceTab(BaseTab):
             width=50
         )
         self.volume_value_label.pack(side="right", padx=5)
-        
-        # Pitch slider
-        self.pitch_label = self.create_section_header("Pitch")
+
+        # --- Pitch slider (Edge TTS only) ---
+        self._pitch_section_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self._pitch_section_frame.pack(fill="x")
+
+        self.pitch_label = self.create_section_header("Pitch", self._pitch_section_frame)
         self.pitch_label.pack(anchor="w", pady=(10, 5))
-        
-        self.pitch_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+
+        self.pitch_frame = ctk.CTkFrame(self._pitch_section_frame, fg_color="transparent")
         self.pitch_frame.pack(fill="x", pady=5)
-        
+
         self.pitch_var = ctk.IntVar(value=self.settings.get("pitch", 0))
         self.pitch_slider = ctk.CTkSlider(
             self.pitch_frame,
@@ -457,7 +465,7 @@ class VoiceTab(BaseTab):
             width=400
         )
         self.pitch_slider.pack(side="left", fill="x", expand=True, padx=5)
-        
+
         self.pitch_value_label = ctk.CTkLabel(
             self.pitch_frame,
             text=f"{self.pitch_var.get()}%",
@@ -465,6 +473,124 @@ class VoiceTab(BaseTab):
             width=50
         )
         self.pitch_value_label.pack(side="right", padx=5)
+
+        # --- Piper-specific naturalness sliders ---
+        self._piper_sliders_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self._piper_sliders_frame.pack(fill="x")
+        self._create_piper_naturalness_sliders(self._piper_sliders_frame)
+
+        # Apply initial visibility based on the saved provider
+        current_provider = self.settings.get("tts_provider", "edge")
+        self._apply_provider_slider_visibility(current_provider)
+
+    def _create_piper_naturalness_sliders(self, parent: ctk.CTkFrame):
+        """Build the Piper noise sliders inside *parent*."""
+        desc = ctk.CTkLabel(
+            parent,
+            text=(
+                "Adjust phoneme variability to improve speech naturalness. "
+                "Higher values add more variation; lower values produce more monotone output."
+            ),
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color="gray",
+            wraplength=500,
+            justify="left",
+        )
+        desc.pack(anchor="w", pady=(10, 5))
+        self.add_wraplength_label(desc)
+
+        # Noise Scale slider (expressiveness)
+        self.noise_scale_label = self.create_section_header(
+            "Expressiveness (noise_scale)", parent
+        )
+        self.noise_scale_label.pack(anchor="w", pady=(5, 2))
+
+        ctk.CTkLabel(
+            parent,
+            text="Controls generator noise / expressiveness. Default: 0.667",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color="gray",
+        ).pack(anchor="w", pady=(0, 5))
+
+        noise_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        noise_frame.pack(fill="x", pady=(0, 10))
+
+        saved_noise = self.settings.get("piper_noise_scale", _PIPER_NOISE_SCALE_DEFAULT)
+        self._noise_scale_var = ctk.DoubleVar(value=float(saved_noise))
+        self._noise_scale_slider = ctk.CTkSlider(
+            noise_frame,
+            from_=0.0,
+            to=2.0,
+            number_of_steps=200,
+            variable=self._noise_scale_var,
+            command=self._on_noise_scale_change,
+            width=400,
+        )
+        self._noise_scale_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self._noise_scale_value_label = ctk.CTkLabel(
+            noise_frame,
+            text=f"{float(saved_noise):.3f}",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=55,
+        )
+        self._noise_scale_value_label.pack(side="right", padx=5)
+
+        # Noise W Scale slider (duration variability)
+        self.noise_w_scale_label = self.create_section_header(
+            "Duration Variability (noise_w_scale)", parent
+        )
+        self.noise_w_scale_label.pack(anchor="w", pady=(5, 2))
+
+        ctk.CTkLabel(
+            parent,
+            text="Controls phoneme duration variability. Default: 0.800",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color="gray",
+        ).pack(anchor="w", pady=(0, 5))
+
+        noise_w_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        noise_w_frame.pack(fill="x", pady=(0, 10))
+
+        saved_noise_w = self.settings.get("piper_noise_w_scale", _PIPER_NOISE_W_SCALE_DEFAULT)
+        self._noise_w_scale_var = ctk.DoubleVar(value=float(saved_noise_w))
+        self._noise_w_scale_slider = ctk.CTkSlider(
+            noise_w_frame,
+            from_=0.0,
+            to=2.0,
+            number_of_steps=200,
+            variable=self._noise_w_scale_var,
+            command=self._on_noise_w_scale_change,
+            width=400,
+        )
+        self._noise_w_scale_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self._noise_w_scale_value_label = ctk.CTkLabel(
+            noise_w_frame,
+            text=f"{float(saved_noise_w):.3f}",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=55,
+        )
+        self._noise_w_scale_value_label.pack(side="right", padx=5)
+
+    def _apply_provider_slider_visibility(self, provider_key: str):
+        """Show the correct set of sliders for the given provider.
+
+        Edge TTS: shows Pitch; hides Piper noise sliders.
+        Piper TTS: hides Pitch; shows Piper noise sliders.
+        """
+        if provider_key == _PIPER_PROVIDER_KEY:
+            self._pitch_section_frame.pack_forget()
+            self._piper_sliders_frame.pack(fill="x")
+        else:
+            self._piper_sliders_frame.pack_forget()
+            self._pitch_section_frame.pack(fill="x")
+
+    def update_provider_sliders(self, provider_key: str):
+        """Update slider visibility when the active provider changes.
+
+        Called by TTSProviderTab (via SettingsWindow) whenever the user
+        switches providers so the Voice tab reflects the right controls.
+        """
+        self._apply_provider_slider_visibility(provider_key)
     
     def _load_voices(self):
         """Load available voices asynchronously."""
@@ -878,6 +1004,14 @@ class VoiceTab(BaseTab):
     def _on_pitch_change(self, value):
         """Update pitch label."""
         self.pitch_value_label.configure(text=f"{int(value)}%")
+
+    def _on_noise_scale_change(self, value):
+        """Update noise_scale label."""
+        self._noise_scale_value_label.configure(text=f"{float(value):.3f}")
+
+    def _on_noise_w_scale_change(self, value):
+        """Update noise_w_scale label."""
+        self._noise_w_scale_value_label.configure(text=f"{float(value):.3f}")
     
     def get_settings(self) -> Dict[str, Any]:
         """Get current settings from the tab UI."""
@@ -889,6 +1023,11 @@ class VoiceTab(BaseTab):
             "voice_filter_language": self.language_filter_var.get(),
             "voice_filter_gender": self.gender_filter_var.get(),
             "voice_filter_region": self.region_filter_var.get(),
+            # Piper naturalness values are always persisted so they survive provider
+            # round-trips and are available immediately if the user switches to Piper.
+            # They are ignored by Edge TTS and other non-Piper providers.
+            "piper_noise_scale": round(self._noise_scale_var.get(), 3),
+            "piper_noise_w_scale": round(self._noise_w_scale_var.get(), 3),
         }
         
         short = self._voice_name_to_short_name.get(self.voice_var.get())
