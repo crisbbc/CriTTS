@@ -5,6 +5,7 @@ Primary application window with text input, controls, and status display.
 import customtkinter as ctk
 import asyncio
 import threading
+import tkinter as tk
 from typing import Optional, Callable
 import os
 import time
@@ -147,6 +148,8 @@ class MainWindow:
         
         # Text preprocessor (reused across speak calls)
         self._text_preprocessor = TextPreprocessor()
+        self._text_context_menu: Optional[tk.Menu] = None
+        self._text_sound_token_menu: Optional[tk.Menu] = None
         
         # Recording overlay state
         self._overlay_visible: bool = self.settings.get("overlay_visible", False)
@@ -259,6 +262,7 @@ class MainWindow:
         
         # Add explicit bindings for text editing shortcuts
         self._bind_text_editing_shortcuts()
+        self._setup_text_context_menu()
         
         # Control buttons frame with modern styling
         self.controls_frame = ctk.CTkFrame(
@@ -524,6 +528,83 @@ class MainWindow:
         """Handle Shift+Enter key press - allow line breaks."""
         # Allow default Shift+Enter behavior (new line)
         return "continue"  # Allow default behavior
+
+    def _setup_text_context_menu(self):
+        """Create and bind right-click context menu for text input."""
+        self._text_context_menu = tk.Menu(self.root, tearoff=0)
+        edit_menu = tk.Menu(self._text_context_menu, tearoff=0)
+        edit_menu.add_command(label="Cut", command=self._on_text_cut)
+        edit_menu.add_command(label="Copy", command=self._on_text_copy)
+        edit_menu.add_command(label="Paste", command=self._on_text_paste)
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Select All", command=self._on_text_select_all)
+        self._text_context_menu.add_cascade(label="Edit", menu=edit_menu)
+
+        self._text_sound_token_menu = tk.Menu(self._text_context_menu, tearoff=0)
+        self._text_context_menu.add_cascade(label="Insert Sound Token", menu=self._text_sound_token_menu)
+        self._rebuild_text_token_menu()
+
+        # Windows/Linux right-click is Button-3; include additional bindings for macOS compatibility.
+        self.text_input.bind("<Button-3>", self._show_text_context_menu, add="+")
+        self.text_input.bind("<Button-2>", self._show_text_context_menu, add="+")
+        self.text_input.bind("<Control-Button-1>", self._show_text_context_menu, add="+")
+
+    def _get_soundboard_slots_for_menu(self) -> list:
+        """Return sorted slot numbers for context-menu token insertion."""
+        soundboard_slots = self.settings.get("soundboard_slots", {})
+        if not isinstance(soundboard_slots, dict):
+            return [str(i) for i in range(1, 11)]
+
+        slots = []
+        for key in soundboard_slots.keys():
+            if isinstance(key, str) and key.isdigit():
+                slot_num = int(key)
+                if 1 <= slot_num <= 99:
+                    slots.append(slot_num)
+
+        if not slots:
+            slots = list(range(1, 11))
+
+        return [str(slot) for slot in sorted(set(slots))]
+
+    def _rebuild_text_token_menu(self):
+        """Rebuild token menu so it tracks current soundboard settings."""
+        if self._text_sound_token_menu is None:
+            return
+
+        self._text_sound_token_menu.delete(0, "end")
+        for slot in self._get_soundboard_slots_for_menu():
+            self._text_sound_token_menu.add_command(
+                label=f"Insert [{slot}]",
+                command=lambda s=slot: self._insert_soundboard_token(s),
+            )
+
+    def _show_text_context_menu(self, event):
+        """Show the text context menu at mouse position."""
+        if self._text_context_menu is None:
+            return "break"
+
+        self._rebuild_text_token_menu()
+
+        try:
+            click_index = self.text_input.index(f"@{event.x},{event.y}")
+            self.text_input.mark_set("insert", click_index)
+        except Exception:
+            pass
+
+        self.text_input.focus_set()
+
+        try:
+            self._text_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._text_context_menu.grab_release()
+
+        return "break"
+
+    def _insert_soundboard_token(self, slot: str):
+        """Insert a soundboard token at the current cursor position."""
+        self.text_input.insert("insert", f"[{slot}]")
+        self.text_input.focus_set()
     
     def _bind_shortcuts(self):
         """Bind keyboard shortcuts dynamically from settings."""
@@ -1979,6 +2060,7 @@ class MainWindow:
         """Refresh status display (called after settings change)."""
         self._abbreviation_cache.clear()
         self._update_status()
+        self._rebuild_text_token_menu()
         self._setup_viseme_mapper()
         self.refresh_quick_controls()
         self._set_status("Settings updated", "✅")
