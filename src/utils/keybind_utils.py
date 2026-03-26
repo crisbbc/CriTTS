@@ -24,7 +24,7 @@ VALID_KEYS = {
 }
 
 # Critical system shortcuts that should not be allowed
-CRITICAL_SHORTCUTS = ['alt+f4', 'ctrl+alt+delete', 'win+l', 'win+r', 'win+e', 'ctrl+shift+esc']
+CRITICAL_SHORTCUTS = frozenset({'alt+f4', 'ctrl+alt+delete', 'win+l', 'win+r', 'win+e', 'ctrl+shift+esc'})
 
 # Mapping of special keys to Tkinter format
 KEY_TO_TKINTER = {

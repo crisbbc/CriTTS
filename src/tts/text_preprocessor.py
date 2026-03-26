@@ -16,6 +16,7 @@ class TextPreprocessor:
         # Avoids recompiling patterns on every call when abbreviations are unchanged.
         self._compiled_pattern_cache_key = None
         self._compiled_patterns = []  # List of (compiled_pattern, abbrev, expansion)
+        self._soundboard_token_pattern = re.compile(r'\[([1-9]\d?)\]')
 
     def _get_compiled_patterns(self, abbreviations: dict):
         """Return cached compiled patterns, rebuilding only when abbreviations change.
@@ -114,3 +115,46 @@ class TextPreprocessor:
         # Sort by position
         matches.sort(key=lambda x: x[2])
         return matches
+
+    def split_soundboard_segments(self, text: str) -> list:
+        """Split text into ordered text and soundboard token segments.
+
+        Returns a list of dictionaries in the original order:
+        - {"type": "text", "content": "..."}
+        - {"type": "sound", "slot": "1"}
+
+        Only strict [1]..[99] tokens are recognized. Everything else remains text.
+        Empty/whitespace-only text segments are skipped.
+        """
+        if not text:
+            return []
+
+        segments = []
+        last_end = 0
+
+        for match in self._soundboard_token_pattern.finditer(text):
+            start, end = match.span()
+            if start > last_end:
+                text_segment = text[last_end:start]
+                if text_segment.strip():
+                    segments.append({"type": "text", "content": text_segment})
+
+            slot_num = int(match.group(1))
+            if 1 <= slot_num <= 99:
+                segments.append({"type": "sound", "slot": str(slot_num)})
+            else:
+                token_text = text[start:end]
+                if token_text.strip():
+                    segments.append({"type": "text", "content": token_text})
+
+            last_end = end
+
+        if last_end < len(text):
+            trailing_text = text[last_end:]
+            if trailing_text.strip():
+                segments.append({"type": "text", "content": trailing_text})
+
+        if not segments and text.strip():
+            return [{"type": "text", "content": text}]
+
+        return segments

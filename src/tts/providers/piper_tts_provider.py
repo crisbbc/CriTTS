@@ -5,7 +5,9 @@ Voice models are downloaded on first use and cached locally.
 """
 import asyncio
 import io
+import json
 import logging
+import os
 import shutil
 import wave
 from pathlib import Path
@@ -18,6 +20,59 @@ from piper import PiperVoice, SynthesisConfig
 from . import TTSProvider
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_espeak_path() -> None:
+    """Auto-detect and register the espeak-ng data directory bundled with piper-tts.
+
+    On Windows the bundled espeak-ng data directory is not automatically
+    registered by the C extension.  This function sets ``ESPEAK_DATA_PATH``
+    once at module-import time so that every subsequent ``PiperVoice.load()``
+    call finds the correct language data and produces correct accents.
+    """
+    if os.environ.get("ESPEAK_DATA_PATH"):
+        logger.debug("ESPEAK_DATA_PATH already set: %s", os.environ["ESPEAK_DATA_PATH"])
+        return
+
+    candidates: List[Path] = []
+
+    # Primary: piper-tts bundles espeak-ng-data alongside its own __init__.py
+    try:
+        import piper as _piper_pkg  # type: ignore[import]
+        candidates.append(Path(_piper_pkg.__file__).parent / "espeak-ng-data")
+    except Exception:
+        pass
+
+    # Secondary: piper_phonemize (separate package) also ships it
+    try:
+        import piper_phonemize  # type: ignore[import]
+        candidates.append(Path(piper_phonemize.__file__).parent / "espeak-ng-data")
+    except Exception:
+        pass
+
+    # Tertiary: scan all site-packages roots
+    try:
+        import site
+        roots = site.getsitepackages() + [site.getusersitepackages()]
+        for sp in roots:
+            candidates.append(Path(sp) / "piper" / "espeak-ng-data")
+            candidates.append(Path(sp) / "piper_phonemize" / "espeak-ng-data")
+    except Exception:
+        pass
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            os.environ["ESPEAK_DATA_PATH"] = str(candidate)
+            logger.info("Set ESPEAK_DATA_PATH → %s", candidate)
+            return
+
+    logger.warning(
+        "espeak-ng data directory not found; Piper phonemization may produce "
+        "incorrect accents. Ensure piper-tts is installed correctly."
+    )
+
+
+_configure_espeak_path()
 
 # Hugging Face URL template used by piper's own download_voices tool
 _VOICE_URL = (
@@ -301,6 +356,36 @@ def _make_wav_bytes(
     return buf.getvalue()
 
 
+def _read_voice_config(short_name: str, models_dir: Path) -> Dict[str, Any]:
+    """Read a voice model's JSON config and return its ``inference`` block.
+
+    Piper ships each model with an ``.onnx.json`` sidecar that contains the
+    recommended inference hyper-parameters (``noise_scale``, ``noise_w``,
+    ``length_scale``) tuned specifically for that voice.  Using these instead
+    of generic global defaults produces natural, accent-correct speech.
+
+    Returns an empty dict if the file is missing, unreadable, or malformed so
+    callers can fall back gracefully.
+    """
+    json_path = models_dir / f"{short_name}.onnx.json"
+    if not json_path.is_file():
+        return {}
+    try:
+        with open(json_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        inference = data.get("inference", {})
+        # Validate expected numeric fields; discard any that are non-numeric
+        result: Dict[str, Any] = {}
+        for key in ("noise_scale", "noise_w", "length_scale"):
+            val = inference.get(key)
+            if isinstance(val, (int, float)):
+                result[key] = float(val)
+        return result
+    except Exception as exc:
+        logger.debug("Could not read voice config for %s: %s", short_name, exc)
+        return {}
+
+
 class PiperTTSProvider(TTSProvider):
     """Offline neural TTS provider backed by Piper."""
 
@@ -315,6 +400,8 @@ class PiperTTSProvider(TTSProvider):
         self._status_callback: Optional[Callable[[str], None]] = status_callback
         # In-memory cache of loaded PiperVoice objects
         self._loaded_models: Dict[str, PiperVoice] = {}
+        # Cache of per-voice inference config read from each model's .onnx.json
+        self._voice_configs: Dict[str, Dict[str, Any]] = {}
 
     def set_status_callback(self, callback: Optional[Callable[[str], None]]) -> None:
         """Register a callback that receives human-readable status messages.
@@ -330,54 +417,104 @@ class PiperTTSProvider(TTSProvider):
     # ------------------------------------------------------------------
 
     def _load_voice(self, short_name: str) -> PiperVoice:
-        """Return a cached (or freshly loaded) PiperVoice for *short_name*."""
+        """Return a cached (or freshly loaded) PiperVoice for *short_name*.
+
+        Also populates ``self._voice_configs[short_name]`` from the model's
+        ``.onnx.json`` sidecar so that per-voice inference parameters are
+        available before the first synthesis call.
+        """
         if short_name not in self._loaded_models:
             model_path = _ensure_model(short_name, self._models_dir, self._status_callback)
             logger.debug("Loading Piper model %s", model_path)
             if self._status_callback:
                 self._status_callback(f"Loading Piper model: {short_name} …")
             self._loaded_models[short_name] = PiperVoice.load(str(model_path))
+            # Read and cache the model's own recommended inference parameters
+            cfg = _read_voice_config(short_name, self._models_dir)
+            self._voice_configs[short_name] = cfg
+            if cfg:
+                logger.debug(
+                    "Voice %s inference config: noise_scale=%.3f noise_w=%.3f length_scale=%.3f",
+                    short_name,
+                    cfg.get("noise_scale", 0.667),
+                    cfg.get("noise_w", 0.8),
+                    cfg.get("length_scale", 1.0),
+                )
         return self._loaded_models[short_name]
 
     @staticmethod
-    def _rate_to_length_scale(rate: int) -> float:
+    def _rate_to_length_scale(rate: int, base_length_scale: float = 1.0) -> float:
         """Convert edge-style rate (-100..100) to Piper length_scale.
 
-        A higher length_scale produces slower speech; lower produces faster speech.
-        rate=0  → length_scale=1.0  (normal)
-        rate=100 → length_scale≈0.5  (2× faster)
-        rate=-100 → length_scale=2.0 (2× slower)
+        The adjustment is applied *relative* to *base_length_scale*, which is
+        the value recommended by the voice model's own JSON config.  This
+        ensures that rate=0 always means "the voice's natural tempo" rather
+        than a generic 1.0 that may not match the model's training tempo.
+
+        rate=0   → base_length_scale       (natural tempo for this voice)
+        rate=100 → base_length_scale × 0.5  (2× faster)
+        rate=-100 → base_length_scale × 2.0 (2× slower)
         """
         rate = max(-100, min(100, rate))
         # The 0.1 floor prevents a length_scale of zero (or close to it), which
         # would cause either division-by-zero or an extremely fast, unintelligible
         # output from the ONNX inference engine.
-        return 1.0 / max(0.1, 1.0 + rate / 100.0)
+        speed_multiplier = 1.0 / max(0.1, 1.0 + rate / 100.0)
+        return base_length_scale * speed_multiplier
 
     @staticmethod
     def _volume_to_scale(volume: int) -> float:
         """Convert 0-100 integer volume to a 0.0-1.0 float scale."""
         return max(0.0, min(1.0, volume / 100.0))
 
-    def _get_noise_scale(self) -> float:
-        """Return the noise_scale setting (controls expressiveness/phoneme variability)."""
+    def _get_noise_scale(self, voice: str) -> float:
+        """Return the noise_scale to use for *voice*.
+
+        Priority (highest → lowest):
+        1. Explicit user override stored as ``piper_noise_scale`` in settings
+           (only honoured when the user has actually customised the key, i.e.
+           the stored value differs from the sentinel ``None``).
+        2. Value recommended by the voice model's own ``.onnx.json`` config.
+        3. Hard-coded Piper default (0.667).
+        """
+        _SENTINEL = None
         if self._settings_manager is not None:
-            val = self._settings_manager.get("piper_noise_scale", 0.667)
-            try:
-                return float(max(0.0, min(2.0, val)))
-            except (TypeError, ValueError):
-                pass
+            val = self._settings_manager.get("piper_noise_scale", _SENTINEL)
+            if val is not _SENTINEL:
+                try:
+                    return float(max(0.0, min(2.0, val)))
+                except (TypeError, ValueError):
+                    pass
+        # Use per-voice recommended value if available
+        cfg = self._voice_configs.get(voice, {})
+        if "noise_scale" in cfg:
+            return cfg["noise_scale"]
         return 0.667
 
-    def _get_noise_w_scale(self) -> float:
-        """Return the noise_w_scale setting (controls phoneme duration variability)."""
+    def _get_noise_w_scale(self, voice: str) -> float:
+        """Return the noise_w (phoneme duration variability) scale for *voice*.
+
+        Same priority order as :meth:`_get_noise_scale`.
+        """
+        _SENTINEL = None
         if self._settings_manager is not None:
-            val = self._settings_manager.get("piper_noise_w_scale", 0.8)
-            try:
-                return float(max(0.0, min(2.0, val)))
-            except (TypeError, ValueError):
-                pass
+            val = self._settings_manager.get("piper_noise_w_scale", _SENTINEL)
+            if val is not _SENTINEL:
+                try:
+                    return float(max(0.0, min(2.0, val)))
+                except (TypeError, ValueError):
+                    pass
+        cfg = self._voice_configs.get(voice, {})
+        if "noise_w" in cfg:
+            return cfg["noise_w"]
         return 0.8
+
+    def _get_length_scale_base(self, voice: str) -> float:
+        """Return the natural tempo baseline (length_scale) for *voice*.
+
+        Falls back to 1.0 if the model JSON does not specify one.
+        """
+        return self._voice_configs.get(voice, {}).get("length_scale", 1.0)
 
     # ------------------------------------------------------------------
     # TTSProvider interface
@@ -446,10 +583,10 @@ class PiperTTSProvider(TTSProvider):
 
         piper_voice = self._load_voice(voice)
         syn_cfg = SynthesisConfig(
-            length_scale=self._rate_to_length_scale(rate),
+            length_scale=self._rate_to_length_scale(rate, self._get_length_scale_base(voice)),
             volume=self._volume_to_scale(volume),
-            noise_scale=self._get_noise_scale(),
-            noise_w_scale=self._get_noise_w_scale(),
+            noise_scale=self._get_noise_scale(voice),
+            noise_w_scale=self._get_noise_w_scale(voice),
         )
 
         buf = io.BytesIO()
@@ -481,10 +618,10 @@ class PiperTTSProvider(TTSProvider):
         loop = asyncio.get_event_loop()
         piper_voice = await loop.run_in_executor(None, self._load_voice, voice)
         syn_cfg = SynthesisConfig(
-            length_scale=self._rate_to_length_scale(rate),
+            length_scale=self._rate_to_length_scale(rate, self._get_length_scale_base(voice)),
             volume=self._volume_to_scale(volume),
-            noise_scale=self._get_noise_scale(),
-            noise_w_scale=self._get_noise_w_scale(),
+            noise_scale=self._get_noise_scale(voice),
+            noise_w_scale=self._get_noise_w_scale(voice),
         )
 
         # synthesize() returns an iterable of AudioChunk (one per sentence)
@@ -515,3 +652,4 @@ class PiperTTSProvider(TTSProvider):
     def clear_cache(self) -> None:
         """Unload all cached voice models from memory."""
         self._loaded_models.clear()
+        self._voice_configs.clear()

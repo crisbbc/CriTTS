@@ -4,7 +4,9 @@ Handles JSON-based configuration persistence for user settings.
 """
 import copy
 import json
+import os
 import re
+import sys
 import logging
 import threading
 from pathlib import Path
@@ -32,6 +34,19 @@ class SettingsManager:
             "btw": "by the way",
             "imo": "in my opinion",
             "tbh": "to be honest"
+        },
+        "soundboard_enabled": True,
+        "soundboard_slots": {
+            "1": "",
+            "2": "",
+            "3": "",
+            "4": "",
+            "5": "",
+            "6": "",
+            "7": "",
+            "8": "",
+            "9": "",
+            "10": ""
         },
         "keybinds": {
             "stop": "Escape",
@@ -144,6 +159,9 @@ class SettingsManager:
             # Store config in user's home directory
             config_dir = Path.home() / ".critts"
             config_dir.mkdir(exist_ok=True)
+            # Restrict directory to owner-only on non-Windows to protect settings
+            if sys.platform != "win32":
+                os.chmod(config_dir, 0o700)
             self.config_path = config_dir / "config.json"
         else:
             self.config_path = Path(config_path)
@@ -194,7 +212,20 @@ class SettingsManager:
             else:
                 self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
                 self.save_settings()
-        except (json.JSONDecodeError, IOError) as e:
+        except json.JSONDecodeError as e:
+            # Back up the corrupted file so the user can recover their settings manually
+            backup_path = self.config_path.with_suffix(".corrupted.json")
+            try:
+                self.config_path.rename(backup_path)
+                logger.warning(
+                    "Settings file is corrupted (%s). A backup has been saved to '%s'. "
+                    "Using defaults.",
+                    e, backup_path,
+                )
+            except OSError:
+                logger.warning("Error loading settings: %s. Using defaults.", e)
+            self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
+        except IOError as e:
             logger.warning("Error loading settings: %s. Using defaults.", e)
             self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
     
@@ -272,14 +303,20 @@ class SettingsManager:
             self.save_settings()
     
     def save_settings(self):
-        """Save current settings to JSON file."""
+        """Save current settings to JSON file (atomic write to prevent corruption)."""
         with self._lock:
+            tmp_path = self.config_path.with_suffix(".tmp")
             try:
-                with open(self.config_path, 'w', encoding='utf-8') as f:
+                with open(tmp_path, 'w', encoding='utf-8') as f:
                     json.dump(self._settings, f, indent=4)
+                os.replace(tmp_path, self.config_path)
                 return True
             except IOError as e:
                 logger.warning("Error saving settings: %s", e)
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 return False
     
     def get(self, key, default=None):
@@ -421,5 +458,25 @@ class SettingsManager:
             mic_passthrough_volume = self._settings.get("mic_passthrough_volume")
             if not isinstance(mic_passthrough_volume, (int, float)) or not (0 <= mic_passthrough_volume <= 200):
                 issues.append(f"Mic passthrough volume out of range (0 to 200): {mic_passthrough_volume}")
+
+            soundboard_enabled = self._settings.get("soundboard_enabled")
+            if not isinstance(soundboard_enabled, bool):
+                issues.append(f"soundboard_enabled must be a boolean: {soundboard_enabled}")
+
+            soundboard_slots = self._settings.get("soundboard_slots")
+            if not isinstance(soundboard_slots, dict):
+                issues.append("soundboard_slots must be a dictionary")
+            else:
+                for slot, file_path in soundboard_slots.items():
+                    if not isinstance(slot, str) or not slot.isdigit():
+                        issues.append(f"Invalid soundboard slot key: {slot}")
+                        continue
+
+                    slot_num = int(slot)
+                    if not (1 <= slot_num <= 99):
+                        issues.append(f"Soundboard slot out of range (1-99): {slot}")
+
+                    if file_path is not None and not isinstance(file_path, str):
+                        issues.append(f"Soundboard slot '{slot}' path must be a string or null")
         
         return issues

@@ -32,6 +32,7 @@ from .appearance_tab import AppearanceTab
 from .abbreviations_tab import AbbreviationsTab
 from .keybinds_tab import KeybindsTab
 from .behavior_tab import BehaviorTab
+from .soundboard_tab import SoundboardTab
 from .vrchat_osc_tab import VRChatOSCTab
 from .advanced_tab import AdvancedTab
 from .tts_provider_tab import TTSProviderTab
@@ -44,6 +45,7 @@ __all__ = [
     'AbbreviationsTab',
     'KeybindsTab',
     'BehaviorTab',
+    'SoundboardTab',
     'VRChatOSCTab',
     'AdvancedTab',
     'TTSProviderTab',

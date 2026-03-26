@@ -1012,93 +1012,172 @@ class MainWindow:
             normalization_type = self.settings.get("normalization_type", "Peak")
             processing_profile = self.settings.get("processing_profile", "balanced")
             enable_streaming = self.settings.get("enable_streaming_playback", False)
+            soundboard_enabled = self.settings.get("soundboard_enabled", True)
+            soundboard_slots = self.settings.get("soundboard_slots", {})
+            if not isinstance(soundboard_slots, dict):
+                soundboard_slots = {}
 
             # Check if stop was requested before generation
             if self._stop_event.is_set():
                 return
-            
-            # Check if streaming is enabled
-            if enable_streaming:
+
+            # When soundboard is disabled, keep text untouched so tokens are spoken normally.
+            if soundboard_enabled:
+                segments = self._text_preprocessor.split_soundboard_segments(text)
+            else:
+                segments = [{"type": "text", "content": text}]
+
+            has_sound_tokens = any(segment.get("type") == "sound" for segment in segments)
+
+            # Check if streaming is enabled (only for plain text playback).
+            if enable_streaming and not has_sound_tokens and len(segments) == 1 and segments[0].get("type") == "text":
                 # Use streaming playback for lower latency
                 success = loop.run_until_complete(
                     self._speak_streaming_async(text, voice, rate, volume, pitch, device_idx, processing_profile, enable_normalization, normalization_type)
                 )
             else:
-                # Use traditional non-streaming playback
-                # Update status
-                self.root.after(0, lambda: self._set_status("Generating speech...", "🔊"))
-                
-                # Generate speech with stop event
-                audio_data, error = loop.run_until_complete(
-                    self.tts_engine.generate_speech(text, voice, rate, volume, pitch, self._stop_event)
-                )
+                success = True
 
-                
-                # Check if stop was requested during generation
-                if self._stop_event.is_set():
-                    return
-                
-                if error:
-                    self.root.after(0, lambda: self._show_error(f"TTS Error: {error}"))
-                    return
-                
-                if audio_data:
-                    self.root.after(0, lambda: self._set_status("Playing audio...", "▶️"))
-                    
-                    # Check if voice amplitude feature is enabled for VRChat
-                    voice_amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
-                    
-                    # Start viseme animation if enabled
-                    if self._viseme_mapper is not None and self.osc_client is not None:
-                        amplitude_callback = None
-                        if voice_amplitude_enabled and self._amplitude_analyzer is not None:
-                            amplitude_callback = self._amplitude_analyzer.get_amplitude
-                        # Get audio duration to synchronize viseme animation with playback
-                        audio_duration = loop.run_until_complete(
-                            self.audio_router.get_audio_duration(audio_data)
+                for segment in segments:
+                    if self._stop_event.is_set():
+                        return
+
+                    segment_type = segment.get("type")
+
+                    if segment_type == "text":
+                        segment_text = segment.get("content", "")
+                        if not segment_text.strip():
+                            continue
+
+                        self.root.after(0, lambda: self._set_status("Generating speech...", "🔊", "speaking"))
+
+                        audio_data, error = loop.run_until_complete(
+                            self.tts_engine.generate_speech(segment_text, voice, rate, volume, pitch, self._stop_event)
                         )
-                        self._viseme_mapper.start_viseme_animation(
-                            text, 
-                            self.osc_client.send_viseme, 
-                            duration=audio_duration,
-                            speech_rate=rate, 
-                            amplitude_callback=amplitude_callback
-                        )
-                    
-                    # Play audio - use amplitude playback if VRChat voice amplitude is enabled
-                    if voice_amplitude_enabled and self._amplitude_analyzer is not None and self.osc_client is not None:
-                        # Create amplitude callback that updates analyzer and forwards to VRChat
-                        def amplitude_callback_with_osc(amplitude: float):
-                            """Update amplitude analyzer and forward to VRChat OSC."""
-                            # Update the local amplitude analyzer (for viseme intensity)
-                            self._amplitude_analyzer.update_amplitude(amplitude)
-                            # Forward amplitude to VRChat
-                            if self.osc_client:
-                                self.osc_client.send_voice_amplitude(amplitude)
-                        
+
+                        if self._stop_event.is_set():
+                            return
+
+                        if error:
+                            self.root.after(0, lambda e=error: self._show_error(f"TTS Error: {e}"))
+                            return
+
+                        if not audio_data:
+                            continue
+
+                        self.root.after(0, lambda: self._set_status("Playing audio...", "▶️", "speaking"))
                         success = loop.run_until_complete(
-                            self.audio_router.play_audio_with_amplitude(
-                                audio_data, 
-                                48000, 
+                            self._play_audio_segment(
+                                audio_data,
+                                segment_text,
+                                rate,
                                 device_idx,
                                 enable_normalization,
                                 normalization_type,
-                                amplitude_callback=amplitude_callback_with_osc,
-                                processing_profile=processing_profile
+                                processing_profile,
+                                enable_viseme=True,
                             )
                         )
-                    else:
-                        # Use standard playback without amplitude callback
+
+                        if self._stop_event.is_set():
+                            return
+
+                        if not success:
+                            self.root.after(0, lambda: self._show_error("Failed to play audio to device."))
+                            return
+
+                    elif segment_type == "sound":
+                        slot = str(segment.get("slot", ""))
+                        slot_path = soundboard_slots.get(slot, "")
+
+                        if slot_path is None:
+                            slot_path = ""
+                        if not isinstance(slot_path, str):
+                            slot_path = str(slot_path)
+
+                        slot_path = slot_path.strip()
+
+                        if not slot_path:
+                            self.root.after(
+                                0,
+                                lambda s=slot: self._set_status(
+                                    f"Soundboard slot [{s}] is empty. Skipping.",
+                                    "⚠️",
+                                    "warning"
+                                )
+                            )
+                            continue
+
+                        if not os.path.isfile(slot_path):
+                            self.root.after(
+                                0,
+                                lambda s=slot, p=slot_path: self._set_status(
+                                    f"Soundboard slot [{s}] file not found: {p}",
+                                    "⚠️",
+                                    "warning"
+                                )
+                            )
+                            continue
+
+                        try:
+                            with open(slot_path, "rb") as f:
+                                slot_audio_data = f.read()
+                        except Exception as file_error:
+                            self.root.after(
+                                0,
+                                lambda s=slot, e=str(file_error): self._set_status(
+                                    f"Failed loading soundboard slot [{s}]: {e}",
+                                    "⚠️",
+                                    "warning"
+                                )
+                            )
+                            continue
+
+                        if not slot_audio_data:
+                            self.root.after(
+                                0,
+                                lambda s=slot: self._set_status(
+                                    f"Soundboard slot [{s}] file is empty. Skipping.",
+                                    "⚠️",
+                                    "warning"
+                                )
+                            )
+                            continue
+
+                        self.root.after(
+                            0,
+                            lambda s=slot: self._set_status(
+                                f"Playing sound slot [{s}]...",
+                                "🎵",
+                                "speaking"
+                            )
+                        )
                         success = loop.run_until_complete(
-                            self.audio_router.play_audio_to_device(
-                                audio_data, 
-                                48000, 
+                            self._play_audio_segment(
+                                slot_audio_data,
+                                f"[{slot}]",
+                                rate,
                                 device_idx,
                                 enable_normalization,
                                 normalization_type,
-                                processing_profile
+                                processing_profile,
+                                enable_viseme=False,
                             )
                         )
+
+                        if self._stop_event.is_set():
+                            return
+
+                        if not success:
+                            self.root.after(
+                                0,
+                                lambda s=slot: self._set_status(
+                                    f"Failed to play soundboard slot [{s}].",
+                                    "⚠️",
+                                    "warning"
+                                )
+                            )
+                            continue
 
             # Do not show Finished or success UI when user stopped or playback was interrupted
             if self._stop_event.is_set():
@@ -1117,6 +1196,60 @@ class MainWindow:
                 self._speaking = False
             self._worker_thread = None
             self.root.after(0, lambda: self._update_ui_speaking(False))
+
+    async def _play_audio_segment(
+        self,
+        audio_data: bytes,
+        segment_text: str,
+        speech_rate: int,
+        device_idx,
+        enable_normalization: bool,
+        normalization_type: str,
+        processing_profile: str,
+        enable_viseme: bool,
+    ) -> bool:
+        """Play a single prepared audio segment using existing routing settings."""
+        voice_amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
+
+        if enable_viseme and self._viseme_mapper is not None and self.osc_client is not None:
+            amplitude_callback = None
+            if voice_amplitude_enabled and self._amplitude_analyzer is not None:
+                amplitude_callback = self._amplitude_analyzer.get_amplitude
+
+            audio_duration = await self.audio_router.get_audio_duration(audio_data)
+            self._viseme_mapper.start_viseme_animation(
+                segment_text,
+                self.osc_client.send_viseme,
+                duration=audio_duration,
+                speech_rate=speech_rate,
+                amplitude_callback=amplitude_callback,
+            )
+
+        if voice_amplitude_enabled and self._amplitude_analyzer is not None and self.osc_client is not None:
+            def amplitude_callback_with_osc(amplitude: float):
+                """Update amplitude analyzer and forward to VRChat OSC."""
+                self._amplitude_analyzer.update_amplitude(amplitude)
+                if self.osc_client:
+                    self.osc_client.send_voice_amplitude(amplitude)
+
+            return await self.audio_router.play_audio_with_amplitude(
+                audio_data,
+                48000,
+                device_idx,
+                enable_normalization,
+                normalization_type,
+                amplitude_callback=amplitude_callback_with_osc,
+                processing_profile=processing_profile,
+            )
+
+        return await self.audio_router.play_audio_to_device(
+            audio_data,
+            48000,
+            device_idx,
+            enable_normalization,
+            normalization_type,
+            processing_profile,
+        )
     
     async def _speak_streaming_async(self, text: str, voice: str, rate: int, volume: int, pitch: int, device_idx, processing_profile: str, enable_normalization: bool = True, normalization_type: str = "Peak") -> bool:
         """

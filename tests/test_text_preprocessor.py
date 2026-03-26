@@ -127,3 +127,38 @@ class TestTextPreprocessor:
 
         assert len(previews) == 1
         assert previews[0][0] == "atm"
+
+    def test_split_soundboard_segments_mixed_text_and_token(self, preprocessor):
+        text = "hello [1] world"
+        segments = preprocessor.split_soundboard_segments(text)
+
+        assert segments == [
+            {"type": "text", "content": "hello "},
+            {"type": "sound", "slot": "1"},
+            {"type": "text", "content": " world"},
+        ]
+
+    def test_split_soundboard_segments_adjacent_tokens(self, preprocessor):
+        text = "[1][2]"
+        segments = preprocessor.split_soundboard_segments(text)
+
+        assert segments == [
+            {"type": "sound", "slot": "1"},
+            {"type": "sound", "slot": "2"},
+        ]
+
+    def test_split_soundboard_segments_invalid_tokens_stay_text(self, preprocessor):
+        text = "play [abc] [] [100] and [0]"
+        segments = preprocessor.split_soundboard_segments(text)
+
+        assert segments == [
+            {"type": "text", "content": "play [abc] [] [100] and [0]"},
+        ]
+
+    def test_split_soundboard_segments_whitespace_only_around_token(self, preprocessor):
+        text = "   [3]   "
+        segments = preprocessor.split_soundboard_segments(text)
+
+        assert segments == [
+            {"type": "sound", "slot": "3"},
+        ]

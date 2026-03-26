@@ -4,6 +4,7 @@ Manages text-to-speech generation, supporting multiple providers.
 """
 import asyncio
 import threading
+from collections import OrderedDict
 from typing import List, Dict, Optional, Tuple
 import time
 import logging
@@ -137,9 +138,9 @@ class TTSEngine:
         self._cache_timestamp: float = 0
         self._cache_duration: float = 300  # Cache voices for 5 minutes
         self._cached_provider: str = ""  # Track which provider the cache belongs to
-        self._voice_cache = {}  # Cache for voice validation
+        self._voice_cache: OrderedDict = OrderedDict()  # Cache for voice validation (LRU)
         self._voice_cache_lock = threading.Lock()  # Lock for thread-safe voice cache access
-        self._text_cache = {}  # Cache for text processing
+        self._text_cache: OrderedDict = OrderedDict()  # Cache for text processing (LRU)
         self._text_cache_lock = threading.Lock()  # Lock for thread-safe text cache access
         
         # Initialize providers - pass settings_manager to avoid per-call SettingsManager instantiation
@@ -415,6 +416,7 @@ class TTSEngine:
         # Thread-safe cache lookup
         with self._voice_cache_lock:
             if voice_short_name in self._voice_cache:
+                self._voice_cache.move_to_end(voice_short_name)
                 return self._voice_cache[voice_short_name]
 
         voices = await self.get_available_voices()
@@ -454,6 +456,7 @@ class TTSEngine:
         # Thread-safe cache lookup
         with self._text_cache_lock:
             if cache_key in self._text_cache:
+                self._text_cache.move_to_end(cache_key)
                 return self._text_cache[cache_key]
         
         # Text preprocessing for better TTS quality

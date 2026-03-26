@@ -20,7 +20,7 @@ except Exception:
 from .keybind_manager import KeybindManager
 from .settings_tabs import (
     VoiceTab, AudioOutputTab, AppearanceTab, AbbreviationsTab,
-    KeybindsTab, BehaviorTab, VRChatOSCTab, AdvancedTab, TTSProviderTab
+    KeybindsTab, BehaviorTab, SoundboardTab, VRChatOSCTab, AdvancedTab, TTSProviderTab
 )
 from .utils.scroll_utils import prevent_scroll_propagation
 from .theme_constants import (
@@ -160,6 +160,11 @@ class SettingsWindow:
         behavior_frame = self.tabview.add("Behavior")
         self.behavior_tab_obj = BehaviorTab(behavior_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
         self.tabs.append(self.behavior_tab_obj)
+
+        # Soundboard Tab
+        soundboard_frame = self.tabview.add("Soundboard")
+        self.soundboard_tab_obj = SoundboardTab(soundboard_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
+        self.tabs.append(self.soundboard_tab_obj)
 
         # VRChat OSC Tab
         vrchat_frame = self.tabview.add("VRChat OSC")
