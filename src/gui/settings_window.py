@@ -181,8 +181,8 @@ class SettingsWindow:
         self.provider_tab_obj = TTSProviderTab(provider_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
         self.tabs.append(self.provider_tab_obj)
 
-        # Wire up: when provider changes in TTS Provider tab, update Voice tab sliders live
-        self.provider_tab_obj.set_voice_tab_callback(self.voice_tab_obj.update_provider_sliders)
+        # Wire up: when provider changes in TTS Provider tab, reload Voice tab options live
+        self.provider_tab_obj.set_voice_tab_callback(self.voice_tab_obj.reload_for_provider)
         
         # Buttons frame - fixed at bottom with standardized padding
         self.buttons_frame = ctk.CTkFrame(self.window, fg_color="transparent")

@@ -288,13 +288,29 @@ class TTSEngine:
             return self._settings_manager.get("tts_provider", "edge")
         return "edge"
 
-    async def get_available_voices(self) -> List[Dict]:
+    async def get_available_voices(self, provider_override: Optional[str] = None) -> List[Dict]:
         """
         Get list of available voices from the current provider.
+
+        Args:
+            provider_override: Optional provider key ("edge" or "piper") used
+                for transient UI reloads before settings are saved.
         
         Returns:
             List of voice dictionaries with 'name', 'id', 'provider', and provider-specific metadata.
         """
+        if provider_override is not None:
+            try:
+                provider = self._piper_tts_provider if provider_override == "piper" else self._edge_tts_provider
+                voices = await provider.get_available_voices()
+                voices.sort(key=lambda x: x.get('name', ''))
+                # Do not update shared cache for override fetches because the selection
+                # may be unsaved and should not affect runtime provider caching.
+                return voices
+            except Exception as e:
+                logger.error(f"Error getting voices from provider override '{provider_override}': {e}")
+                return []
+
         active_provider = self._get_active_provider_name()
 
         # Return cached voices only when they are still fresh AND belong to the active provider.

@@ -120,8 +120,8 @@ class TTSProviderTab(BaseTab):
         note_label = ctk.CTkLabel(
             self.scroll,
             text=(
-                "ℹ  After switching providers, save and reopen Settings to see "
-                "the updated voice list in the Voice tab."
+                "ℹ  Switching providers updates the Voice tab list automatically. "
+                "Save settings to apply the new provider globally."
             ),
             font=ctk.CTkFont(size=FONT_SM),
             text_color=COLOR_INFO,

@@ -46,6 +46,29 @@ _PIPER_VOICES = [{"name": "Lessac", "short_name": "en_US-lessac-medium", "provid
 class TestGetAvailableVoicesCacheInvalidation:
 
     @pytest.mark.asyncio
+    async def test_provider_override_fetches_requested_provider_without_cache_pollution(self):
+        """provider_override fetches the requested provider and leaves active-provider cache untouched."""
+        engine = _make_engine("edge")
+        edge_fetch = AsyncMock(return_value=list(_EDGE_VOICES))
+        piper_fetch = AsyncMock(return_value=list(_PIPER_VOICES))
+
+        with (
+            patch.object(engine._edge_tts_provider, "get_available_voices", new=edge_fetch),
+            patch.object(engine._piper_tts_provider, "get_available_voices", new=piper_fetch),
+        ):
+            # Override fetch should return Piper voices even when settings provider is Edge.
+            override_voices = await engine.get_available_voices(provider_override="piper")
+            assert any(v["provider"] == "piper" for v in override_voices)
+            assert piper_fetch.call_count == 1
+            assert edge_fetch.call_count == 0
+
+            # Regular fetch still resolves and caches using the active settings provider.
+            active_voices = await engine.get_available_voices()
+            assert any(v["provider"] == "edge_tts" for v in active_voices)
+            assert edge_fetch.call_count == 1
+            assert engine._cached_provider == "edge"
+
+    @pytest.mark.asyncio
     async def test_cache_hit_same_provider(self):
         """Second call with the same provider returns cached result (no provider fetch)."""
         engine = _make_engine("edge")

@@ -415,21 +415,22 @@ class VoiceTab(BaseTab):
     def _apply_provider_slider_visibility(self, provider_key: str):
         """No-op: provider-specific sliders live in the Quick Controls panel."""
 
-    def update_provider_sliders(self, provider_key: str):
-        """No-op: provider-specific sliders live in the Quick Controls panel.
-
-        Called by TTSProviderTab (via SettingsWindow) whenever the user
-        switches providers.
-        """
+    def reload_for_provider(self, provider_key: str):
+        """Reload voices for the selected provider and show loading feedback."""
+        self.voice_dropdown.configure(values=["Loading..."])
+        self.voice_var.set("Loading...")
+        self._load_voices(provider_override=provider_key)
 
     
-    def _load_voices(self):
+    def _load_voices(self, provider_override: Optional[str] = None):
         """Load available voices asynchronously."""
         def do_load():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                voices = loop.run_until_complete(self.tts_engine.get_available_voices())
+                voices = loop.run_until_complete(
+                    self.tts_engine.get_available_voices(provider_override=provider_override)
+                )
                 if self.parent_window:
                     self.parent_window.after(0, lambda: self._apply_voices_ui(voices))
             finally:
