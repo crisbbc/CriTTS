@@ -182,7 +182,6 @@ class VoiceTab(BaseTab):
             values=["Loading voices..."],
             font=ctk.CTkFont(size=FONT_MD),
             dropdown_font=ctk.CTkFont(size=FONT_SM),
-            width=400,
             state="readonly"
         )
         self.voice_dropdown.pack(side="left", fill="x", expand=True, padx=5)

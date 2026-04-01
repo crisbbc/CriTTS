@@ -200,7 +200,20 @@ class SettingsWindow:
             height=BUTTON_HEIGHT
         )
         self.save_button.pack(side="right", padx=SPACING_SM, pady=SPACING_SM)
-        
+
+        # Apply button (saves without closing)
+        self.apply_button = ctk.CTkButton(
+            self.buttons_frame,
+            text="Apply",
+            font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
+            command=self._on_apply,
+            fg_color=COLOR_SUCCESS,
+            hover_color=COLOR_SUCCESS_HOVER,
+            width=BUTTON_WIDTH_DEFAULT,
+            height=BUTTON_HEIGHT
+        )
+        self.apply_button.pack(side="right", padx=SPACING_SM, pady=SPACING_SM)
+
         # Cancel button
         self.cancel_button = ctk.CTkButton(
             self.buttons_frame,
@@ -236,8 +249,9 @@ class SettingsWindow:
         )
         self.refresh_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
         
-        # Bind resize handler for dynamic wraplength
-        
+        # Bind X-button to cancel handler so it doesn't leak dirty in-memory state
+        self.window.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
 
     def _on_refresh(self):
         """Reload data for all tabs."""
@@ -248,14 +262,12 @@ class SettingsWindow:
     def _on_change_placeholder(self, *args, **kwargs):
         pass
 
-    def _on_save(self):
-        """Save settings by collecting them from all modular tabs."""
-        for tab in self.tabs:
-            tab_settings = tab.get_settings()
-            for k, v in tab_settings.items():
-                self.settings.set(k, v)
+    def _collect_and_save(self, close: bool):
+        """Collect settings from all tabs, validate, then save. Closes window only if close=True."""
+        # Collect from all tabs first, before touching in-memory state
+        all_tab_settings = [tab.get_settings() for tab in self.tabs]
 
-        # Validate all settings
+        # Validate BEFORE mutating in-memory state
         validation_issues = []
         for tab in self.tabs:
             validation_issues.extend(tab.validate())
@@ -288,11 +300,25 @@ class SettingsWindow:
             ctk.CTkButton(error_dialog, text="OK", command=error_dialog.destroy).pack(pady=SPACING_LG)
             return
 
-        # If everything is good
+        # Validation passed — now mutate in-memory state and persist
+        for tab_settings in all_tab_settings:
+            for k, v in tab_settings.items():
+                self.settings.set(k, v)
+
         self.settings.save_settings()
         if self.on_save:
             self.on_save()
-        self.window.destroy()
+
+        if close:
+            self.window.destroy()
+
+    def _on_save(self):
+        """Save settings and close the window."""
+        self._collect_and_save(close=True)
+
+    def _on_apply(self):
+        """Save settings without closing the window."""
+        self._collect_and_save(close=False)
 
     def _on_cancel(self):
         self.window.destroy()

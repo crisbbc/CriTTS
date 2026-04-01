@@ -169,7 +169,15 @@ class BaseTab(ABC):
         # Right content area
         self.scroll = ctk.CTkScrollableFrame(self.layout_frame, corner_radius=0, fg_color="transparent")
         self.scroll.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+
+        # Update wraplength labels when the scroll pane is resized
+        self.scroll.bind("<Configure>", self._on_scroll_resize)
     
+    def _on_scroll_resize(self, event):
+        """Update wraplength on all tracked labels when the scroll pane resizes."""
+        new_wrap = max(100, event.width - 32)
+        self.update_wraplength(new_wrap)
+
     def create_description(self, text: str, parent: ctk.CTkFrame = None) -> ctk.CTkLabel:
         """Create a description label with gray text."""
         label = ctk.CTkLabel(
@@ -177,7 +185,7 @@ class BaseTab(ABC):
             text=text,
             font=ctk.CTkFont(size=FONT_SM),
             text_color="gray",
-            wraplength=550
+            wraplength=100
         )
         self._wraplength_labels.append(label)
         return label

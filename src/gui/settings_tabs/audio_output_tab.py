@@ -36,7 +36,6 @@ class AudioOutputTab(BaseTab):
             values=["Loading devices..."],
             font=ctk.CTkFont(size=FONT_MD),
             dropdown_font=ctk.CTkFont(size=FONT_SM),
-            width=500,
             state="readonly"
         )
         self.device_dropdown.pack(fill="x", pady=5)
