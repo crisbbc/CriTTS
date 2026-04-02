@@ -356,6 +356,12 @@ def _make_wav_bytes(
     return buf.getvalue()
 
 
+def _make_silence_bytes(silence_secs: float, sample_rate: int, sample_width: int = 2, channels: int = 1) -> bytes:
+    """Return silent PCM bytes for the given duration."""
+    num_samples = max(0, int(sample_rate * silence_secs))
+    return b"\x00" * (num_samples * sample_width * channels)
+
+
 def _read_voice_config(short_name: str, models_dir: Path) -> Dict[str, Any]:
     """Read a voice model's JSON config and return its ``inference`` block.
 
@@ -516,6 +522,22 @@ class PiperTTSProvider(TTSProvider):
         """
         return self._voice_configs.get(voice, {}).get("length_scale", 1.0)
 
+    def _get_sentence_silence(self) -> float:
+        """Return silence duration (seconds) to insert between sentences.
+
+        Reads ``piper_sentence_silence`` from settings; falls back to 0.2 s.
+        Clamped to [0.0, 2.0] to avoid degenerate values.
+        """
+        _DEFAULT = 0.2
+        if self._settings_manager is not None:
+            val = self._settings_manager.get("piper_sentence_silence", None)
+            if val is not None:
+                try:
+                    return float(max(0.0, min(2.0, val)))
+                except (TypeError, ValueError):
+                    pass
+        return _DEFAULT
+
     # ------------------------------------------------------------------
     # TTSProvider interface
     # ------------------------------------------------------------------
@@ -588,10 +610,26 @@ class PiperTTSProvider(TTSProvider):
             noise_scale=self._get_noise_scale(voice),
             noise_w_scale=self._get_noise_w_scale(voice),
         )
+        silence_secs = self._get_sentence_silence()
 
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wav_file:
-            piper_voice.synthesize_wav(text, wav_file, syn_config=syn_cfg)
+            first_chunk = True
+            for chunk in piper_voice.synthesize(text, syn_config=syn_cfg):
+                if stop_event and stop_event.is_set():
+                    return None
+
+                if first_chunk:
+                    wav_file.setframerate(chunk.sample_rate)
+                    wav_file.setsampwidth(chunk.sample_width)
+                    wav_file.setnchannels(chunk.sample_channels)
+                    first_chunk = False
+                elif silence_secs > 0:
+                    wav_file.writeframes(
+                        _make_silence_bytes(silence_secs, chunk.sample_rate, chunk.sample_width, chunk.sample_channels)
+                    )
+
+                wav_file.writeframes(chunk.audio_int16_bytes)
 
         if stop_event and stop_event.is_set():
             return None
@@ -630,11 +668,18 @@ class PiperTTSProvider(TTSProvider):
             lambda: list(piper_voice.synthesize(text, syn_config=syn_cfg)),
         )
 
+        silence_secs = self._get_sentence_silence()
         for chunk in chunks:
             if stop_event and stop_event.is_set():
                 return
+            # Append sentence silence so playback has a natural pause after each sentence
+            trailing_silence = (
+                _make_silence_bytes(silence_secs, chunk.sample_rate, chunk.sample_width, chunk.sample_channels)
+                if silence_secs > 0
+                else b""
+            )
             wav_bytes = _make_wav_bytes(
-                chunk.audio_int16_bytes,
+                chunk.audio_int16_bytes + trailing_silence,
                 chunk.sample_rate,
                 sample_width=chunk.sample_width,
                 channels=chunk.sample_channels,

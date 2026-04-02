@@ -4,20 +4,8 @@ Modal settings dialog for voice, audio device, and appearance configuration.
 """
 import logging
 import customtkinter as ctk
-import asyncio
-import threading
 from typing import Optional, Callable, List, Dict
-import time
-import re
-import os
-from tkinter import filedialog
 
-try:
-    from ..vrchat import VRChatOSCClient
-except Exception:
-    VRChatOSCClient = None
-
-from .keybind_manager import KeybindManager
 from .settings_tabs import (
     VoiceTab, AudioOutputTab, AppearanceTab, AbbreviationsTab,
     KeybindsTab, BehaviorTab, SoundboardTab, VRChatOSCTab, AdvancedTab, TTSProviderTab
@@ -44,10 +32,6 @@ from .theme_constants import (
 logger = logging.getLogger(__name__)
 
 
-# Default preview text constant
-DEFAULT_PREVIEW_TEXT = "Hello, this is a voice preview."
-
-
 class SettingsWindow:
     """Settings dialog window for CriTTS Recoded."""
     
@@ -64,23 +48,6 @@ class SettingsWindow:
         self.tts_engine = tts_engine
         self.audio_router = audio_router
         self.on_save = on_save
-        
-        self._voices: List[Dict] = []
-        self._devices: List[Dict] = []
-        
-        # Voice preview state
-        self._preview_playing = False
-        self._preview_stop_event = threading.Event()
-        self._filtered_voices: List[Dict] = []
-        
-        # Voice name mapping: friendly name -> short_name
-        self._voice_name_to_short_name: Dict[str, str] = {}
-        
-        # Keybind manager for validation
-        self._keybind_manager = KeybindManager()
-        
-        # Alt key tracking for keybind capture (Windows fix)
-        self._capture_alt_held = False
         
         self._create_window()
         self._on_refresh()
@@ -120,9 +87,6 @@ class SettingsWindow:
             font=ctk.CTkFont(size=FONT_XL, weight=FONT_WEIGHT_BOLD)
         )
         self.title_label.grid(row=0, column=0, padx=SPACING_MD, pady=(SPACING_MD, SPACING_LG), sticky="w")
-        
-        # Initialize wraplength tracking list for dynamic resize
-        self._wraplength_labels = []
         
         # Create tabbed interface with consistent padding
         self.tabview = ctk.CTkTabview(self.main_frame)
@@ -168,7 +132,14 @@ class SettingsWindow:
 
         # VRChat OSC Tab
         vrchat_frame = self.tabview.add("VRChat OSC")
-        self.vrchat_osc_tab_obj = VRChatOSCTab(vrchat_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
+        self.vrchat_osc_tab_obj = VRChatOSCTab(
+            vrchat_frame,
+            self.settings,
+            self.tts_engine,
+            self.audio_router,
+            self._on_change_placeholder,
+            parent_window=self.parent
+        )
         self.tabs.append(self.vrchat_osc_tab_obj)
         
         # Advanced Tab
@@ -271,10 +242,6 @@ class SettingsWindow:
         validation_issues = []
         for tab in self.tabs:
             validation_issues.extend(tab.validate())
-
-        system_issues = self.settings.validate_settings()
-        if system_issues:
-            validation_issues.extend(system_issues)
 
         if validation_issues:
             error_msg = "Settings validation failed:\n\n"

@@ -1044,18 +1044,15 @@ class MainWindow:
                 # VRChat enforces ~1.5 seconds between chatbox messages
                 elapsed = time.time() - self.osc_client._last_chatbox_send_time
                 wait_time = max(0, 1.5 - elapsed)
-                if wait_time > 0:
-                    time.sleep(wait_time)
-                
-                # Send the actual message (respects rate limit, guaranteed to replace typing text)
-                self.osc_client.send_to_chatbox(
+                send_args = (
                     processed_text,
-                    play_notification_sound=self.settings.get("vrchat_osc_play_sound", True),
-                    show_keyboard=False
+                    self.settings.get("vrchat_osc_play_sound", True),
+                    False
                 )
-                
-                # Track when the message was sent for cooldown
-                self._last_message_sent_time = time.time()
+                if wait_time > 0:
+                    self.root.after(int(wait_time * 1000), lambda args=send_args: self._send_chatbox_message(*args))
+                else:
+                    self._send_chatbox_message(*send_args)
             except Exception:
                 self._set_status("Failed to send to VRChat chatbox", "⚠️")
         
@@ -1685,7 +1682,7 @@ class MainWindow:
         # Apply word corrections if configured
         corrections = self.settings.get("stt_corrections", {})
         if corrections:
-            text = self._text_preprocessor.expand_abbreviations(text, corrections)
+            text = self._apply_stt_corrections(text, corrections)
         
         # Insert text at current cursor position
         self.text_input.insert("insert", text)
@@ -1697,6 +1694,44 @@ class MainWindow:
         if self.settings.get("stt_auto_speak", False) and text.strip():
             # Automatically trigger speak after a short delay to let UI update
             self.root.after(100, self._on_speak)
+
+    def _send_chatbox_message(self, text: str, play_notification_sound: bool, show_keyboard: bool):
+        """Send a message to the VRChat chatbox and track cooldown timing."""
+        if not self.osc_client:
+            return
+
+        try:
+            self.osc_client.send_to_chatbox(
+                text,
+                play_notification_sound=play_notification_sound,
+                show_keyboard=show_keyboard
+            )
+            self._last_message_sent_time = time.time()
+        except Exception:
+            self._set_status("Failed to send to VRChat chatbox", "⚠️")
+
+    @staticmethod
+    def _apply_stt_corrections(text: str, corrections: dict) -> str:
+        """Apply word-level corrections to STT text."""
+        if not corrections or not text:
+            return text
+
+        words = text.split()
+        corrected_words = []
+
+        for word in words:
+            word_lower = word.lower()
+            if word_lower in corrections:
+                correction = corrections[word_lower]
+                if word.isupper():
+                    correction = correction.upper()
+                elif word and word[0].isupper():
+                    correction = correction.capitalize()
+                corrected_words.append(correction)
+            else:
+                corrected_words.append(word)
+
+        return " ".join(corrected_words)
     
     def _on_stt_error(self, exception: Exception):
         """Handle STT error (called from background thread)."""
@@ -2355,6 +2390,10 @@ class MainWindow:
         
         # Setup viseme mapper after OSC client is configured
         self._setup_viseme_mapper()
+
+    def refresh_vrchat_osc(self):
+        """Refresh OSC client and viseme mapping after settings updates."""
+        self._setup_osc_client()
     
     def _setup_viseme_mapper(self):
         """Setup viseme mapper for VRChat lip-sync integration."""

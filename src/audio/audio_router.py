@@ -470,7 +470,7 @@ class AudioRouter:
             try:
                 import soundfile as sf
                 audio_buffer = io.BytesIO(audio_data)
-                data, sr = sf.read(audio_buffer, dtype=np.float32)
+                data, sr = sf.read(audio_buffer, dtype="float32")
                 if data.size == 0:
                     raise RuntimeError("soundfile produced empty audio")
                 return data, sr
@@ -548,19 +548,22 @@ class AudioRouter:
                 data = np.column_stack((data, data))
 
             # Play audio using sounddevice
+            data_index = 0
+            data_len = len(data)
+
             def callback(outdata, frames, time, status):
                 # Check if stop was requested
                 if self._stop_requested.is_set():
                     raise sd.CallbackStop()
 
                 # Fill buffer with audio data
-                nonlocal data
-                if len(data) > 0:
-                    chunksize = min(frames, len(data))
-                    outdata[:chunksize] = data[:chunksize]
+                nonlocal data_index, data_len
+                if data_index < data_len:
+                    chunksize = min(frames, data_len - data_index)
+                    outdata[:chunksize] = data[data_index:data_index + chunksize]
                     if chunksize < frames:
                         outdata[chunksize:] = 0
-                    data = data[chunksize:]
+                    data_index += chunksize
                 else:
                     outdata[:] = 0
                     raise sd.CallbackStop()
@@ -771,22 +774,26 @@ class AudioRouter:
             original_data = data.copy()
 
             # Play audio using sounddevice
+            data_index = 0
+            data_len = len(data)
+
             def callback(outdata, frames, time, status):
                 # Check if stop was requested
                 if self._stop_requested.is_set():
                     raise sd.CallbackStop()
 
                 # Fill buffer with audio data
-                nonlocal data, original_data
-                if len(data) > 0:
-                    chunksize = min(frames, len(data))
-                    outdata[:chunksize] = data[:chunksize]
+                nonlocal data_index, data_len, original_data
+                if data_index < data_len:
+                    chunksize = min(frames, data_len - data_index)
+                    outdata[:chunksize] = data[data_index:data_index + chunksize]
                     if chunksize < frames:
                         outdata[chunksize:] = 0
 
                     # Calculate amplitude for this chunk
                     if self._amplitude_callback:
-                        chunk_for_amp = original_data[:chunksize]
+                        start = data_index
+                        chunk_for_amp = original_data[start:start + chunksize]
                         amp = self._calculate_chunk_amplitude(chunk_for_amp)
                         self._current_amplitude = amp
                         try:
@@ -794,8 +801,7 @@ class AudioRouter:
                         except Exception:
                             pass
 
-                    data = data[chunksize:]
-                    original_data = original_data[chunksize:]
+                    data_index += chunksize
                 else:
                     outdata[:] = 0
                     self._current_amplitude = 0.0
@@ -876,205 +882,148 @@ class AudioRouter:
         import queue
         import threading as th
 
+        process = None
+
         try:
             self._stop_requested.clear()
 
             # Get profile settings
             profile_settings = self._get_profile_settings(processing_profile)
             target_sr = profile_settings["sample_rate"]  # None for fast_preview means no resampling
-            kaiser_beta = profile_settings["kaiser_beta"]
-            stereo_width = profile_settings["stereo_width"]
 
             # Determine normalization type: respect enable_normalization flag
-            # If normalization is disabled, use "None"; otherwise use caller-provided type
             if enable_normalization:
                 norm_type = normalization_type
             else:
                 norm_type = "None"
 
             # Queue for decoded audio chunks - bounded to provide backpressure
-            # Limits memory growth when decode outruns playback on long streams
             audio_queue = queue.Queue(maxsize=5)
             playback_started = asyncio.Event()
             playback_finished = th.Event()
-            decode_error = [None]
-            stream_ended = [False]  # Track when generator is exhausted
-            stream_sample_rate = [None]  # Track actual sample rate for fast_preview mode
+            decode_error = [None]  # type: List[Optional[Exception]]
+            detected_sr = [None]  # type: List[Optional[int]]
 
-            # Accumulated MP3 data for decoding - need enough for valid MP3 frames
-            mp3_buffer = bytearray()
-            # Minimum buffer size before attempting decode (MP3 frames need ~100-500 bytes minimum)
-            MIN_DECODE_BUFFER = 4096
-            # Guards to prevent unbounded memory growth on repeated decode failures
-            MAX_BUFFER_SIZE = 10 * 1024 * 1024  # 10 MB limit for MP3 buffer
-            MAX_CONSECUTIVE_DECODE_FAILURES = 10  # Max consecutive decode failures before giving up
-            consecutive_decode_failures = [0]  # Use list for closure mutability
+            # Build persistent ffmpeg decoder
+            ffmpeg_cmd = [
+                'ffmpeg',
+                '-i', 'pipe:0',
+                '-f', 'f32le',
+                '-acodec', 'pcm_f32le',
+            ]
 
-            async def decode_chunks():
-                """Decode incoming MP3 chunks incrementally and add to playback queue."""
-                nonlocal mp3_buffer
+            if target_sr is not None:
+                ffmpeg_cmd.extend(['-ar', str(int(target_sr))])
 
+            ffmpeg_cmd.extend([
+                '-ac', '2',
+                '-'
+            ])
+
+            process = await asyncio.create_subprocess_exec(
+                *ffmpeg_cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            async def feed_stdin():
+                """Feed MP3 chunks into ffmpeg stdin."""
                 try:
                     async for chunk in audio_chunk_generator:
-                        # Check for stop
+                        if self._stop_requested.is_set() or (stop_event and stop_event.is_set()):
+                            break
+                        if process.stdin:
+                            process.stdin.write(chunk)
+                            await process.stdin.drain()
+                except Exception as e:
+                    decode_error[0] = e
+                finally:
+                    if process.stdin:
+                        try:
+                            process.stdin.close()
+                        except Exception:
+                            pass
+
+            async def read_stderr():
+                """Parse ffmpeg stderr to detect sample rate when needed."""
+                if not process.stderr:
+                    return
+                buffer = bytearray()
+                try:
+                    while True:
+                        chunk = await process.stderr.read(512)
+                        if not chunk:
+                            break
+                        if detected_sr[0] is None:
+                            buffer.extend(chunk)
+                            text = buffer.decode('utf-8', errors='replace')
+                            match = re.search(r'(\d+)\s*Hz', text)
+                            if match:
+                                detected_sr[0] = int(match.group(1))
+                            if len(buffer) > 4096:
+                                buffer = buffer[-2048:]
+                except Exception:
+                    pass
+
+            async def read_stdout():
+                """Read decoded PCM from ffmpeg stdout and enqueue for playback."""
+                if not process.stdout:
+                    decode_error[0] = RuntimeError("ffmpeg stdout unavailable")
+                    audio_queue.put(None)
+                    return
+
+                buffer = bytearray()
+                frame_bytes = 8  # stereo float32
+                frames_per_chunk = 2048
+                min_bytes = frame_bytes * frames_per_chunk
+
+                try:
+                    while True:
                         if self._stop_requested.is_set() or (stop_event and stop_event.is_set()):
                             break
 
-                        # Add chunk to buffer
-                        mp3_buffer.extend(chunk)
+                        data = await process.stdout.read(4096)
+                        if not data:
+                            break
+                        buffer.extend(data)
 
-                        # Guard: Check if buffer exceeds maximum size
-                        if len(mp3_buffer) > MAX_BUFFER_SIZE:
-                            logger.error("MP3 buffer exceeded maximum size (%d bytes), aborting decode", MAX_BUFFER_SIZE)
-                            decode_error[0] = RuntimeError(f"MP3 buffer exceeded maximum size ({MAX_BUFFER_SIZE} bytes)")
-                            stream_ended[0] = True
-                            audio_queue.put(None)
-                            return
+                        while len(buffer) >= min_bytes:
+                            chunk_bytes = buffer[:min_bytes]
+                            del buffer[:min_bytes]
 
-                        # Try to decode incrementally when we have enough data
-                        while len(mp3_buffer) >= MIN_DECODE_BUFFER:
-                            try:
-                                # Use ffmpeg for reliable MP3 decoding
-                                try:
-                                    data, sr = await self._decode_mp3_audio(bytes(mp3_buffer), target_sr)
-                                    # ffmpeg decodes all available data, so we clear the buffer
-                                    consumed = len(mp3_buffer)
-                                except RuntimeError as decode_err:
-                                    # Check if it's a partial decode situation
-                                    if "produced no output" in str(decode_err):
-                                        # Not enough data yet, wait for more
-                                        break
-                                    # For other errors, try soundfile as fallback
-                                    try:
-                                        import soundfile as sf
-                                        audio_buffer = io.BytesIO(bytes(mp3_buffer))
-                                        data, sr = sf.read(audio_buffer, dtype=np.float32)
-                                        consumed = audio_buffer.tell()
-                                        if data.size == 0 or consumed == 0:
-                                            break
-                                    except Exception:
-                                        # Decoding failed, increment failure counter
-                                        consecutive_decode_failures[0] += 1
-                                        if consecutive_decode_failures[0] >= MAX_CONSECUTIVE_DECODE_FAILURES:
-                                            logger.error("Too many consecutive decode failures (%d), aborting decode",
-                                                       consecutive_decode_failures[0])
-                                            decode_error[0] = RuntimeError(f"Too many consecutive decode failures ({MAX_CONSECUTIVE_DECODE_FAILURES})")
-                                            stream_ended[0] = True
-                                            audio_queue.put(None)
-                                            return
-                                        break
+                            chunk = np.frombuffer(chunk_bytes, dtype=np.float32).reshape(-1, 2)
+                            effective_sr = target_sr if target_sr is not None else (detected_sr[0] or sample_rate)
 
-                                if data.size > 0:
-                                    # Reset consecutive decode failures on success
-                                    consecutive_decode_failures[0] = 0
+                            if norm_type != "None":
+                                chunk = self._normalize_audio(chunk, norm_type, sample_rate=effective_sr)
 
-                                    # Remove consumed bytes from buffer
-                                    mp3_buffer = mp3_buffer[consumed:]
-
-                                    # Resample if needed (before normalization for correct LUFS)
-                                    # Skip resampling when target_sr is None (fast_preview profile)
-                                    if target_sr is not None and sr != target_sr:
-                                        data = self._resample_high_quality(data, sr, target_sr, kaiser_beta)
-                                        effective_sr = target_sr
-                                    else:
-                                        effective_sr = sr
-
-                                    # Apply normalization
-                                    if norm_type != "None":
-                                        data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
-
-                                    # Apply stereo enhancement for mono data before converting to stereo
-                                    if len(data.shape) == 1 and stereo_width > 0:
-                                        data = self._stereo_enhancement(data, width=stereo_width)
-
-                                    # Ensure stereo for consistent output
-                                    if len(data.shape) == 1:
-                                        data = np.column_stack((data, data))
-
-                                    # Queue for playback with backpressure handling
-                                    # Block with timeout to allow checking stop_event
-                                    while True:
-                                        # Check for stop before attempting to queue
-                                        if self._stop_requested.is_set() or (stop_event and stop_event.is_set()):
-                                            return
-
-                                        try:
-                                            # Try to put with a short timeout to allow stop checking
-                                            audio_queue.put(data, block=True, timeout=0.1)
-                                            break  # Successfully queued
-                                        except queue.Full:
-                                            # Queue is full, loop back and check stop_event
-                                            # This provides backpressure - decoder waits for playback to catch up
-                                            continue
-
-                                    # Track the sample rate for stream creation (needed for fast_preview)
-                                    if stream_sample_rate[0] is None:
-                                        stream_sample_rate[0] = effective_sr
-
-                                    # Signal that playback can start
-                                    if not playback_started.is_set():
-                                        playback_started.set()
-                                else:
-                                    # Couldn't decode yet, wait for more data
-                                    break
-
-                            except Exception as e:
-                                # Decoding failed, increment failure counter
-                                consecutive_decode_failures[0] += 1
-
-                                # Guard: Check if too many consecutive failures
-                                if consecutive_decode_failures[0] >= MAX_CONSECUTIVE_DECODE_FAILURES:
-                                    logger.error("Too many consecutive decode failures (%d), aborting decode",
-                                               consecutive_decode_failures[0])
-                                    decode_error[0] = RuntimeError(f"Too many consecutive decode failures ({MAX_CONSECUTIVE_DECODE_FAILURES})")
-                                    stream_ended[0] = True
-                                    audio_queue.put(None)
+                            while True:
+                                if self._stop_requested.is_set() or (stop_event and stop_event.is_set()):
                                     return
+                                try:
+                                    audio_queue.put(chunk, block=True, timeout=0.1)
+                                    break
+                                except queue.Full:
+                                    continue
 
-                                # Keep the buffer and continue accumulating
-                                break
+                            if not playback_started.is_set():
+                                playback_started.set()
 
-                    # Decode any remaining data in the buffer
-                    if len(mp3_buffer) > 0:
-                        try:
-                            data, sr = await self._decode_audio_data(bytes(mp3_buffer), target_sr)
-
-                            if data.size > 0:
-                                # Resample if needed
-                                # Skip resampling when target_sr is None (fast_preview profile)
-                                if target_sr is not None and sr != target_sr:
-                                    data = self._resample_high_quality(data, sr, target_sr, kaiser_beta)
-                                    effective_sr = target_sr
-                                else:
-                                    effective_sr = sr
-
-                                # Apply normalization
-                                if norm_type != "None":
-                                    data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
-
-                                # Apply stereo enhancement for mono data before converting to stereo
-                                if len(data.shape) == 1 and stereo_width > 0:
-                                    data = self._stereo_enhancement(data, width=stereo_width)
-
-                                # Ensure stereo for consistent output
-                                if len(data.shape) == 1:
-                                    data = np.column_stack((data, data))
-
-                                # Queue for playback
-                                audio_queue.put(data)
-
-                                if not playback_started.is_set():
-                                    playback_started.set()
-                        except Exception as e:
-                            decode_error[0] = e
-
-                    # Signal end of stream
-                    stream_ended[0] = True
-                    audio_queue.put(None)
+                    # Flush remaining buffer
+                    if buffer:
+                        usable = (len(buffer) // frame_bytes) * frame_bytes
+                        if usable > 0:
+                            chunk_bytes = buffer[:usable]
+                            chunk = np.frombuffer(chunk_bytes, dtype=np.float32).reshape(-1, 2)
+                            effective_sr = target_sr if target_sr is not None else (detected_sr[0] or sample_rate)
+                            if norm_type != "None":
+                                chunk = self._normalize_audio(chunk, norm_type, sample_rate=effective_sr)
+                            audio_queue.put(chunk)
 
                 except Exception as e:
                     decode_error[0] = e
-                    stream_ended[0] = True
+                finally:
                     audio_queue.put(None)
 
             # Closure variable to hold leftover samples between callbacks
@@ -1085,16 +1034,13 @@ class AudioRouter:
                 if self._stop_requested.is_set():
                     raise sd.CallbackStop()
 
-                # Check leftover first (guarantees ordering)
                 if leftover[0] is not None:
                     chunk = leftover[0]
                     leftover[0] = None
                 else:
-                    # Get data from queue (non-blocking)
                     try:
                         chunk = audio_queue.get_nowait()
                         if chunk is None:
-                            # End of stream - reset amplitude
                             self._current_amplitude = 0.0
                             if amplitude_callback:
                                 try:
@@ -1103,18 +1049,14 @@ class AudioRouter:
                                     pass
                             raise sd.CallbackStop()
                     except queue.Empty:
-                        # No data available yet, output silence
                         outdata[:] = 0
                         return
 
-                # Fill output buffer
                 if len(chunk) >= frames:
                     outdata[:] = chunk[:frames]
-                    # Store remaining data in leftover for next callback
                     remaining = chunk[frames:]
                     if len(remaining) > 0:
                         leftover[0] = remaining
-                    # Calculate amplitude for this chunk
                     if amplitude_callback:
                         amp = self._calculate_chunk_amplitude(chunk[:frames])
                         self._current_amplitude = amp
@@ -1125,7 +1067,6 @@ class AudioRouter:
                 else:
                     outdata[:len(chunk)] = chunk
                     outdata[len(chunk):] = 0
-                    # Calculate amplitude for this chunk
                     if amplitude_callback:
                         amp = self._calculate_chunk_amplitude(chunk)
                         self._current_amplitude = amp
@@ -1134,31 +1075,24 @@ class AudioRouter:
                         except Exception:
                             pass
 
-            # Start decode task
-            decode_task = asyncio.create_task(decode_chunks())
+            feed_task = asyncio.create_task(feed_stdin())
+            stderr_task = asyncio.create_task(read_stderr())
+            stdout_task = asyncio.create_task(read_stdout())
 
-            # Wait for first chunk or timeout
             try:
                 await asyncio.wait_for(playback_started.wait(), timeout=5.0)
             except asyncio.TimeoutError:
-                # No audio received within timeout
-                decode_task.cancel()
                 return False
 
-            # Check for decode errors
             if decode_error[0]:
                 return False
 
-            # Determine the sample rate for the output stream
-            # For fast_preview (target_sr is None), use the tracked native sample rate
-            # For other profiles, use the target sample rate from profile settings
-            output_sr = target_sr if target_sr is not None else stream_sample_rate[0]
+            output_sr = target_sr if target_sr is not None else (detected_sr[0] or sample_rate)
 
             if output_sr is None:
                 logger.error("Could not determine sample rate for playback stream")
                 return False
 
-            # Start playback stream
             self._current_stream = sd.OutputStream(
                 device=device_index,
                 samplerate=output_sr,
@@ -1168,18 +1102,19 @@ class AudioRouter:
             )
 
             with self._current_stream:
-                # Wait for playback to complete or stop
                 while self._current_stream.active and not self._stop_requested.is_set():
                     if stop_event and stop_event.is_set():
                         self._stop_requested.set()
                         break
                     await asyncio.sleep(0.05)
 
-            # Wait for decode task to complete
             try:
-                await asyncio.wait_for(decode_task, timeout=1.0)
+                await asyncio.wait_for(stdout_task, timeout=1.0)
             except asyncio.TimeoutError:
-                decode_task.cancel()
+                stdout_task.cancel()
+
+            feed_task.cancel()
+            stderr_task.cancel()
 
             return not self._stop_requested.is_set()
 
@@ -1188,6 +1123,11 @@ class AudioRouter:
         except Exception:
             return False
         finally:
+            if process is not None:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
             if self._current_stream is not None:
                 try:
                     self._current_stream.close()

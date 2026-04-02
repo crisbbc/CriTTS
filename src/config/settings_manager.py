@@ -141,8 +141,10 @@ class SettingsManager:
         # Piper TTS Naturalness Settings
         # noise_scale controls expressiveness/phoneme variability (default: 0.667)
         # noise_w_scale controls phoneme duration variability (default: 0.8)
+        # sentence_silence adds a natural pause between sentences (seconds, default: 0.2)
         "piper_noise_scale": 0.667,
         "piper_noise_w_scale": 0.8,
+        "piper_sentence_silence": 0.2,
     }
 
 

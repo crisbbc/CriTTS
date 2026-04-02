@@ -317,18 +317,42 @@ class VRChatOSCTab(BaseTab):
         if not osc_enabled:
             self.viseme_enabled_var.set(False)
             self.typing_animation_var.set(False)
+        
+        if self.parent_window and hasattr(self.parent_window, "main_window"):
+            try:
+                self.parent_window.main_window.refresh_vrchat_osc()
+            except Exception:
+                pass
     
     def _on_viseme_smoothing_change(self, value):
         """Update viseme smoothing label when slider changes."""
         self.viseme_smoothing_value_label.configure(text=f"{int(value)}%")
+        
+        if self.parent_window and hasattr(self.parent_window, "main_window"):
+            try:
+                self.parent_window.main_window.refresh_vrchat_osc()
+            except Exception:
+                pass
     
     def _on_typing_timeout_change(self, value):
         """Update typing timeout label when slider changes."""
         self.typing_timeout_value_label.configure(text=f"{value:.1f}s")
+        
+        if self.parent_window and hasattr(self.parent_window, "main_window"):
+            try:
+                self.parent_window.main_window.refresh_vrchat_osc()
+            except Exception:
+                pass
     
     def _on_message_cooldown_change(self, value):
         """Update message cooldown label when slider changes."""
         self.message_cooldown_value_label.configure(text=f"{value:.1f}s")
+        
+        if self.parent_window and hasattr(self.parent_window, "main_window"):
+            try:
+                self.parent_window.main_window.refresh_vrchat_osc()
+            except Exception:
+                pass
     
     def _test_osc_connection(self):
         """Test OSC configuration."""

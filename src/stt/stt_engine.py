@@ -181,7 +181,9 @@ class STTEngine:
             on_error: Callback function called with exception on error
         """
         with self._lock:
-            if not self._is_listening_event.is_set():
+            is_listening = self._is_listening_event.is_set()
+            auto_stopped = self._auto_stopped_event.is_set()
+            if not is_listening and not auto_stopped:
                 logger.warning("Not currently listening, ignoring stop_and_transcribe call")
                 return
             
@@ -197,6 +199,7 @@ class STTEngine:
             
             # Copy the audio buffer for processing
             audio_buffer = list(self._audio_buffer)
+            self._auto_stopped_event.clear()
         
         logger.info("Stopped recording, %d audio chunks to process", len(audio_buffer))
         
