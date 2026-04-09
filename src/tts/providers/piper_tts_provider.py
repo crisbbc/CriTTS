@@ -4,18 +4,18 @@ Provides offline, open-source neural text-to-speech synthesis using Piper TTS.
 Voice models are downloaded on first use and cached locally.
 """
 import asyncio
+import threading
 import io
 import json
 import logging
 import os
 import shutil
 import wave
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.request import urlopen
 from urllib.error import URLError
-
-from piper import PiperVoice, SynthesisConfig
 
 from . import TTSProvider
 
@@ -27,7 +27,7 @@ def _configure_espeak_path() -> None:
 
     On Windows the bundled espeak-ng data directory is not automatically
     registered by the C extension.  This function sets ``ESPEAK_DATA_PATH``
-    once at module-import time so that every subsequent ``PiperVoice.load()``
+    before the first Piper runtime load so that every subsequent ``PiperVoice.load()``
     call finds the correct language data and produces correct accents.
     """
     if os.environ.get("ESPEAK_DATA_PATH"):
@@ -71,8 +71,13 @@ def _configure_espeak_path() -> None:
         "incorrect accents. Ensure piper-tts is installed correctly."
     )
 
+ 
+def _load_piper_runtime():
+    """Import Piper runtime objects only when synthesis actually needs them."""
+    _configure_espeak_path()
+    from piper import PiperVoice, SynthesisConfig
 
-_configure_espeak_path()
+    return PiperVoice, SynthesisConfig
 
 # Hugging Face URL template used by piper's own download_voices tool
 _VOICE_URL = (
@@ -397,6 +402,7 @@ class PiperTTSProvider(TTSProvider):
 
     # Default model storage directory
     _DEFAULT_MODELS_DIR = Path.home() / ".critts" / "piper_voices"
+    _MAX_LOADED_MODELS = 2
 
     def __init__(self, settings_manager=None, models_dir: Optional[Path] = None,
                  status_callback: Optional[Callable[[str], None]] = None):
@@ -405,9 +411,12 @@ class PiperTTSProvider(TTSProvider):
         self._models_dir.mkdir(parents=True, exist_ok=True)
         self._status_callback: Optional[Callable[[str], None]] = status_callback
         # In-memory cache of loaded PiperVoice objects
-        self._loaded_models: Dict[str, PiperVoice] = {}
+        self._loaded_models: "OrderedDict[str, Any]" = OrderedDict()
         # Cache of per-voice inference config read from each model's .onnx.json
         self._voice_configs: Dict[str, Dict[str, Any]] = {}
+        self._cache_lock = threading.Lock()
+        self._active_voice_uses: Dict[str, int] = {}
+        self._pending_cache_clear = False
 
     def set_status_callback(self, callback: Optional[Callable[[str], None]]) -> None:
         """Register a callback that receives human-readable status messages.
@@ -422,31 +431,90 @@ class PiperTTSProvider(TTSProvider):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _load_voice(self, short_name: str) -> PiperVoice:
+    def _mark_voice_active(self, short_name: str) -> None:
+        """Track an in-flight synthesis using *short_name*."""
+        with self._cache_lock:
+            self._active_voice_uses[short_name] = self._active_voice_uses.get(short_name, 0) + 1
+            if short_name in self._loaded_models:
+                self._loaded_models.move_to_end(short_name)
+
+    def _mark_voice_inactive(self, short_name: str) -> None:
+        """Release in-flight tracking for *short_name* and apply deferred cache work."""
+        should_clear = False
+        with self._cache_lock:
+            current_uses = self._active_voice_uses.get(short_name, 0)
+            if current_uses <= 1:
+                self._active_voice_uses.pop(short_name, None)
+            else:
+                self._active_voice_uses[short_name] = current_uses - 1
+
+            self._evict_if_needed_locked()
+            should_clear = self._pending_cache_clear and not self._active_voice_uses
+            if should_clear:
+                self._pending_cache_clear = False
+
+        if should_clear:
+            self._clear_cache_now()
+
+    def _evict_if_needed_locked(self) -> None:
+        """Evict oldest inactive models until the cache fits within the size limit."""
+        while len(self._loaded_models) > self._MAX_LOADED_MODELS:
+            eviction_key = next(
+                (key for key in self._loaded_models if self._active_voice_uses.get(key, 0) == 0),
+                None,
+            )
+            if eviction_key is None:
+                break
+            self._loaded_models.pop(eviction_key, None)
+            self._voice_configs.pop(eviction_key, None)
+
+    def _clear_cache_now(self) -> None:
+        """Clear all cached Piper models immediately."""
+        with self._cache_lock:
+            self._loaded_models.clear()
+            self._voice_configs.clear()
+
+    def _load_voice(self, short_name: str) -> Any:
         """Return a cached (or freshly loaded) PiperVoice for *short_name*.
 
         Also populates ``self._voice_configs[short_name]`` from the model's
         ``.onnx.json`` sidecar so that per-voice inference parameters are
         available before the first synthesis call.
         """
-        if short_name not in self._loaded_models:
-            model_path = _ensure_model(short_name, self._models_dir, self._status_callback)
-            logger.debug("Loading Piper model %s", model_path)
-            if self._status_callback:
-                self._status_callback(f"Loading Piper model: {short_name} …")
-            self._loaded_models[short_name] = PiperVoice.load(str(model_path))
-            # Read and cache the model's own recommended inference parameters
-            cfg = _read_voice_config(short_name, self._models_dir)
+        with self._cache_lock:
+            cached_voice = self._loaded_models.get(short_name)
+            if cached_voice is not None:
+                self._loaded_models.move_to_end(short_name)
+                return cached_voice
+
+        model_path = _ensure_model(short_name, self._models_dir, self._status_callback)
+        logger.debug("Loading Piper model %s", model_path)
+        if self._status_callback:
+            self._status_callback(f"Loading Piper model: {short_name} …")
+        PiperVoice, _ = _load_piper_runtime()
+        loaded_voice = PiperVoice.load(str(model_path))
+        cfg = _read_voice_config(short_name, self._models_dir)
+
+        with self._cache_lock:
+            cached_voice = self._loaded_models.get(short_name)
+            if cached_voice is not None:
+                self._loaded_models.move_to_end(short_name)
+                return cached_voice
+
+            self._loaded_models[short_name] = loaded_voice
+            self._loaded_models.move_to_end(short_name)
             self._voice_configs[short_name] = cfg
-            if cfg:
-                logger.debug(
-                    "Voice %s inference config: noise_scale=%.3f noise_w=%.3f length_scale=%.3f",
-                    short_name,
-                    cfg.get("noise_scale", 0.667),
-                    cfg.get("noise_w", 0.8),
-                    cfg.get("length_scale", 1.0),
-                )
-        return self._loaded_models[short_name]
+            self._evict_if_needed_locked()
+
+        if cfg:
+            logger.debug(
+                "Voice %s inference config: noise_scale=%.3f noise_w=%.3f length_scale=%.3f",
+                short_name,
+                cfg.get("noise_scale", 0.667),
+                cfg.get("noise_w", 0.8),
+                cfg.get("length_scale", 1.0),
+            )
+        return loaded_voice
 
     @staticmethod
     def _rate_to_length_scale(rate: int, base_length_scale: float = 1.0) -> float:
@@ -473,7 +541,7 @@ class PiperTTSProvider(TTSProvider):
         """Convert 0-100 integer volume to a 0.0-1.0 float scale."""
         return max(0.0, min(1.0, volume / 100.0))
 
-    def _get_noise_scale(self, voice: str) -> float:
+    def _get_noise_scale(self, voice: Optional[str] = None) -> float:
         """Return the noise_scale to use for *voice*.
 
         Priority (highest → lowest):
@@ -492,12 +560,12 @@ class PiperTTSProvider(TTSProvider):
                 except (TypeError, ValueError):
                     pass
         # Use per-voice recommended value if available
-        cfg = self._voice_configs.get(voice, {})
+        cfg = self._voice_configs.get(voice or "", {})
         if "noise_scale" in cfg:
             return cfg["noise_scale"]
         return 0.667
 
-    def _get_noise_w_scale(self, voice: str) -> float:
+    def _get_noise_w_scale(self, voice: Optional[str] = None) -> float:
         """Return the noise_w (phoneme duration variability) scale for *voice*.
 
         Same priority order as :meth:`_get_noise_scale`.
@@ -510,7 +578,7 @@ class PiperTTSProvider(TTSProvider):
                     return float(max(0.0, min(2.0, val)))
                 except (TypeError, ValueError):
                     pass
-        cfg = self._voice_configs.get(voice, {})
+        cfg = self._voice_configs.get(voice or "", {})
         if "noise_w" in cfg:
             return cfg["noise_w"]
         return 0.8
@@ -603,38 +671,67 @@ class PiperTTSProvider(TTSProvider):
         if stop_event and stop_event.is_set():
             return None
 
-        piper_voice = self._load_voice(voice)
-        syn_cfg = SynthesisConfig(
-            length_scale=self._rate_to_length_scale(rate, self._get_length_scale_base(voice)),
-            volume=self._volume_to_scale(volume),
-            noise_scale=self._get_noise_scale(voice),
-            noise_w_scale=self._get_noise_w_scale(voice),
-        )
-        silence_secs = self._get_sentence_silence()
+        self._mark_voice_active(voice)
+        try:
+            piper_voice = self._load_voice(voice)
+            _, SynthesisConfig = _load_piper_runtime()
+            syn_cfg = SynthesisConfig(
+                length_scale=self._rate_to_length_scale(rate, self._get_length_scale_base(voice)),
+                volume=self._volume_to_scale(volume),
+                noise_scale=self._get_noise_scale(voice),
+                noise_w_scale=self._get_noise_w_scale(voice),
+            )
+            silence_secs = self._get_sentence_silence()
+            synthesize = getattr(piper_voice, "synthesize", None)
+            if callable(synthesize):
+                chunks = list(synthesize(text, syn_config=syn_cfg))
+                if chunks:
+                    buf = io.BytesIO()
+                    with wave.open(buf, "wb") as wav_file:
+                        first_chunk = True
+                        for chunk in chunks:
+                            if stop_event and stop_event.is_set():
+                                return None
 
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wav_file:
-            first_chunk = True
-            for chunk in piper_voice.synthesize(text, syn_config=syn_cfg):
+                            if first_chunk:
+                                wav_file.setframerate(chunk.sample_rate)
+                                wav_file.setsampwidth(chunk.sample_width)
+                                wav_file.setnchannels(chunk.sample_channels)
+                                first_chunk = False
+                            elif silence_secs > 0:
+                                wav_file.writeframes(
+                                    _make_silence_bytes(
+                                        silence_secs,
+                                        chunk.sample_rate,
+                                        chunk.sample_width,
+                                        chunk.sample_channels,
+                                    )
+                                )
+
+                            wav_file.writeframes(chunk.audio_int16_bytes)
+
+                    if stop_event and stop_event.is_set():
+                        return None
+
+                    return buf.getvalue()
+
+            synthesize_wav = getattr(piper_voice, "synthesize_wav", None)
+            if callable(synthesize_wav):
+                buf = io.BytesIO()
+                with wave.open(buf, "wb") as wav_file:
+                    synthesize_wav(text, wav_file, syn_config=syn_cfg)
+
                 if stop_event and stop_event.is_set():
                     return None
 
-                if first_chunk:
-                    wav_file.setframerate(chunk.sample_rate)
-                    wav_file.setsampwidth(chunk.sample_width)
-                    wav_file.setnchannels(chunk.sample_channels)
-                    first_chunk = False
-                elif silence_secs > 0:
-                    wav_file.writeframes(
-                        _make_silence_bytes(silence_secs, chunk.sample_rate, chunk.sample_width, chunk.sample_channels)
-                    )
+                wav_bytes = buf.getvalue()
+                if not wav_bytes:
+                    raise RuntimeError(f"Piper voice '{voice}' produced no audio.")
+                return wav_bytes
 
-                wav_file.writeframes(chunk.audio_int16_bytes)
-
-        if stop_event and stop_event.is_set():
-            return None
-
-        return buf.getvalue()
+            raise RuntimeError(f"Piper voice '{voice}' does not support synthesis.")
+        finally:
+            self._mark_voice_inactive(voice)
 
     async def stream_speech(
         self,
@@ -654,37 +751,42 @@ class PiperTTSProvider(TTSProvider):
             return
 
         loop = asyncio.get_event_loop()
-        piper_voice = await loop.run_in_executor(None, self._load_voice, voice)
-        syn_cfg = SynthesisConfig(
-            length_scale=self._rate_to_length_scale(rate, self._get_length_scale_base(voice)),
-            volume=self._volume_to_scale(volume),
-            noise_scale=self._get_noise_scale(voice),
-            noise_w_scale=self._get_noise_w_scale(voice),
-        )
-
-        # synthesize() returns an iterable of AudioChunk (one per sentence)
-        chunks = await loop.run_in_executor(
-            None,
-            lambda: list(piper_voice.synthesize(text, syn_config=syn_cfg)),
-        )
-
-        silence_secs = self._get_sentence_silence()
-        for chunk in chunks:
-            if stop_event and stop_event.is_set():
-                return
-            # Append sentence silence so playback has a natural pause after each sentence
-            trailing_silence = (
-                _make_silence_bytes(silence_secs, chunk.sample_rate, chunk.sample_width, chunk.sample_channels)
-                if silence_secs > 0
-                else b""
+        self._mark_voice_active(voice)
+        try:
+            piper_voice = await loop.run_in_executor(None, self._load_voice, voice)
+            _, SynthesisConfig = _load_piper_runtime()
+            syn_cfg = SynthesisConfig(
+                length_scale=self._rate_to_length_scale(rate, self._get_length_scale_base(voice)),
+                volume=self._volume_to_scale(volume),
+                noise_scale=self._get_noise_scale(voice),
+                noise_w_scale=self._get_noise_w_scale(voice),
             )
-            wav_bytes = _make_wav_bytes(
-                chunk.audio_int16_bytes + trailing_silence,
-                chunk.sample_rate,
-                sample_width=chunk.sample_width,
-                channels=chunk.sample_channels,
+
+            # synthesize() returns an iterable of AudioChunk (one per sentence)
+            chunks = await loop.run_in_executor(
+                None,
+                lambda: list(piper_voice.synthesize(text, syn_config=syn_cfg)),
             )
-            yield wav_bytes
+
+            silence_secs = self._get_sentence_silence()
+            for chunk in chunks:
+                if stop_event and stop_event.is_set():
+                    return
+                # Append sentence silence so playback has a natural pause after each sentence
+                trailing_silence = (
+                    _make_silence_bytes(silence_secs, chunk.sample_rate, chunk.sample_width, chunk.sample_channels)
+                    if silence_secs > 0
+                    else b""
+                )
+                wav_bytes = _make_wav_bytes(
+                    chunk.audio_int16_bytes + trailing_silence,
+                    chunk.sample_rate,
+                    sample_width=chunk.sample_width,
+                    channels=chunk.sample_channels,
+                )
+                yield wav_bytes
+        finally:
+            self._mark_voice_inactive(voice)
 
     async def validate_voice(self, voice: str) -> bool:
         """Return True if *voice* is in the built-in voice list."""
@@ -696,5 +798,9 @@ class PiperTTSProvider(TTSProvider):
 
     def clear_cache(self) -> None:
         """Unload all cached voice models from memory."""
-        self._loaded_models.clear()
-        self._voice_configs.clear()
+        with self._cache_lock:
+            if self._active_voice_uses:
+                self._pending_cache_clear = True
+                return
+
+        self._clear_cache_now()

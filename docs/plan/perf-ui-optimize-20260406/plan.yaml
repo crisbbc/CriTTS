@@ -1,0 +1,482 @@
+plan_id: perf-ui-optimize-20260406
+objective: Fix UI sluggishness and excessive RAM usage with the smallest set of high-impact, low-risk, behavior-safe optimizations.
+created_at: 2026-04-06T00:00:00Z
+created_by: github-copilot-planner
+status: pending_approval
+research_confidence: high
+
+plan_metrics:
+  wave_1_task_count: 2
+  total_dependencies: 7
+  risk_score: medium
+
+tldr: |
+  Focus first on PRD-aligned, behavior-preserving wins already supported by research:
+  1) stop loading or retaining heavyweight offline TTS state unless actual offline synthesis or an explicit warm-up path requires it, while allowing committed provider changes to release inactive state,
+  2) coalesce expensive text-edit work with incremental current-line highlighting plus latest-wins deferred analysis,
+  3) remove duplicate non-streaming playback decode/copy work during segment playback.
+  docs/PRD.yaml is the source of truth for scope, behavior preservation, and verification gates; no AGENTS.md was found.
+
+acceptance_criteria:
+  - id: AC1
+    description: App startup no longer eagerly imports or constructs Coqui/Piper-heavy offline paths unless the active action actually needs them.
+  - id: AC2
+    description: Selecting Coqui in Settings does not preload or retain the XTTS model before the user actually synthesizes with Coqui, while preserving existing first-use status feedback.
+  - id: AC3
+    description: "Offline provider memory is safe and bounded: unsaved settings previews do not load or unload heavy model state, committed provider changes or explicit cache clears can release inactive models, Piper loaded-model memory is bounded by deterministic eviction, and in-flight synthesis/preload is not cleared mid-operation."
+  - id: AC4
+    description: Text editing remains behaviorally identical but uses incremental current-line highlighting plus latest-wins deferred expensive analysis instead of full-text/UI-thread work on every keystroke.
+  - id: AC5
+    description: Non-streaming playback, viseme, amplitude, and duration work avoid duplicate decode/copy work for the same audio segment while leaving streaming playback unchanged unless separately verified.
+  - id: AC6
+    description: Existing user-visible behavior for provider switching, voice indication, playback, visemes, amplitude updates, and offline synthesis output remains unchanged aside from improved responsiveness and lower memory use.
+  - id: AC7
+    description: A measurable execution gate records startup RSS, idle RSS by provider state, typing responsiveness, and playback overhead, and blocks completion if those checks do not improve or if behavior-preservation checks fail.
+
+open_questions: []
+
+pre_mortem:
+  overall_risk_level: medium
+  critical_failure_modes:
+    - scenario: Lazy provider creation breaks provider-switch voice loading or cached voice refresh behavior.
+      likelihood: medium
+      impact: high
+      mitigation: Preserve the current provider_override voice-list flow, add targeted provider-switch regression coverage, and keep provider metadata fetches independent from heavy model load.
+    - scenario: Provider unload runs during an unsaved settings preview or while synthesis/preload is still in flight, causing model churn, race conditions, or failed offline playback.
+      likelihood: medium
+      impact: high
+      mitigation: Only unload on committed provider change or explicit cache clear, treat provider_override preview as metadata-only, and guard clear/unload until active synthesis or preload finishes.
+    - scenario: Debounced text updates leave the current-line highlight or auto-language indicator stale after rapid edits.
+      likelihood: medium
+      impact: medium
+      mitigation: Only defer expensive recomputation, update the current line incrementally, commit only the latest scheduled analysis result, and smoke-test typing, caret moves, paste, and Enter/Shift+Enter behavior.
+    - scenario: Shared decode preparation changes playback normalization, sample-rate handling, or viseme timing.
+      likelihood: medium
+      impact: high
+      mitigation: Reuse the current decode/process pipeline, keep play_audio_streaming out of scope unless explicitly tested, add tests around duration/decode paths, and validate playback behavior with the existing audio-router-focused suite.
+  assumptions:
+    - docs/PRD.yaml is the source of truth for scope, acceptance criteria, and behavior-preservation requirements.
+    - Behavior-safe improvements should avoid changing synthesis output, provider UX, or routing semantics beyond reducing unnecessary work.
+    - Focused pytest suites are necessary but not sufficient; completion also requires measurable perf checks and behavior-preserving smoke coverage.
+
+implementation_specification:
+  code_structure: Keep changes localized to provider lifecycle management in TTSEngine/provider modules, UI event scheduling in MainWindow, and audio preparation/playback handoff in AudioRouter/MainWindow. Keep wave 1 surgical by lazy-creating heavyweight providers and removing eager Coqui preload first; add only a small committed-change/cache-clear lifecycle rule later instead of introducing a broad provider framework. Avoid large architectural rewrites or speculative background services.
+  affected_areas:
+    - main.py
+    - src/tts/tts_engine.py
+    - src/tts/providers/coqui_tts_provider.py
+    - src/tts/providers/piper_tts_provider.py
+    - src/gui/settings_window.py
+    - src/gui/main_window.py
+    - src/audio/audio_router.py
+    - tests/test_tts_engine_cache.py
+    - tests/test_voice_tab_provider_reload.py
+    - tests/test_piper_tts_provider.py
+    - tests/test_coqui_tts_provider.py
+    - tests/test_audio_router.py
+  component_details:
+    - component: TTSEngine provider lifecycle
+      responsibility: Instantiate heavyweight offline providers only when needed, preserve provider_override preview reads as metadata-only, expose a safe committed provider transition path, and centralize cache/unload hooks.
+      interfaces:
+        - "get_available_voices(provider_override: Optional[str] = None) -> List[Dict]"
+        - "_get_provider_by_name(provider_name: str)"
+        - "committed provider-change / clear-cache hook for inactive provider unload"
+        - "clear_voices_cache() -> None"
+    - component: Offline provider memory policy
+      responsibility: Release Coqui XTTS residency only on committed provider change or explicit cache clear, guard against clearing while synthesis/preload is in flight, and keep Piper's in-memory loaded voice models bounded by deterministic eviction.
+      interfaces:
+        - "CoquiTTSProvider.clear_cache() -> None"
+        - "PiperTTSProvider._load_voice(short_name: str) -> PiperVoice"
+        - "PiperTTSProvider.clear_cache() -> None"
+    - component: MainWindow text update scheduler
+      responsibility: Replace full-document current-line retagging with incremental line updates and schedule expensive language-indicator work with latest-wins semantics so editing stays responsive without changing visible behavior.
+      interfaces:
+        - "_on_text_changed() -> None"
+        - "_update_voice_indicator() -> None"
+        - "_highlight_current_line() -> None"
+    - component: AudioRouter prepared playback path
+      responsibility: For non-streaming segment playback only, decode and process audio once per segment, then reuse prepared audio for duration, playback, and amplitude/viseme timing while leaving streaming playback unchanged.
+      interfaces:
+        - "_decode_audio_data(audio_data: bytes, target_sample_rate: Optional[int] = 48000) -> Tuple[np.ndarray, int]"
+        - "get_audio_duration(audio_data: bytes) -> float"
+        - "play_audio_to_device(...)"
+        - "play_audio_with_amplitude(...)"
+  dependencies:
+    - component: MainWindow text update scheduler
+      relationship: Reads TTSEngine language-detection helpers but must control call frequency from the UI thread.
+    - component: TTSEngine provider lifecycle
+      relationship: Owns provider instances and delegates unload/clear behavior to Coqui and Piper provider implementations.
+    - component: AudioRouter prepared playback path
+      relationship: Consumes raw segment bytes from MainWindow and returns timing/playback behavior used by viseme and output routing.
+  integration_points:
+    - SettingsWindow provider-change callback wiring
+    - AdvancedTab clear-cache callback wiring
+    - VoiceTab provider reload path
+    - MainWindow key and caret event bindings
+    - MainWindow playback path for spoken text and soundboard audio
+    - Existing pytest suites for provider cache, provider reload, provider cache clearing, and audio decode behavior
+
+contracts:
+  - from_task: perf-startup-lazy-providers
+    to_task: perf-provider-memory-lifecycle
+    interface: TTSEngine exposes lazy provider access plus a committed-change/cache-clear unload hook without changing provider_override voice-list semantics, without triggering heavy model load on provider selection alone, and without triggering unload during unsaved preview.
+    format: Python class methods and provider lifecycle invariants
+  - from_task: perf-startup-lazy-providers
+    to_task: perf-metrics-verification
+    interface: Expected cold-start/provider-selection behavior is "no offline preload until actual offline synthesis or intentional warm-up", with lower startup RSS than baseline.
+    format: Measured RSS checklist plus provider-selection smoke expectations
+  - from_task: perf-gui-input-throttle
+    to_task: perf-metrics-verification
+    interface: Text edits use incremental current-line highlighting and latest-wins deferred expensive analysis so the newest caret/highlight/voice-indicator state wins after burst typing.
+    format: UI timing checklist with settle-time measurements
+  - from_task: perf-provider-memory-lifecycle
+    to_task: perf-metrics-verification
+    interface: Inactive offline models are released only on committed provider change or explicit cache clear, unsaved preview remains metadata-only, and provider-state idle RSS reflects bounded residency.
+    format: Provider cache policy and provider-state RSS checklist
+  - from_task: perf-audio-single-decode
+    to_task: perf-metrics-verification
+    interface: A decoded/prepared representation is reused for non-streaming duration, playback, and amplitude work of the same segment, while play_audio_streaming remains unchanged.
+    format: AudioRouter decode-count contract and focused pytest command
+  - from_task: perf-metrics-verification
+    to_task: perf-regression-verification
+    interface: Startup RSS, provider-state idle RSS, typing responsiveness, and playback-overhead gates passed before final behavior-preservation signoff.
+    format: Verification report and release-gate checklist
+
+tasks:
+  - id: perf-startup-lazy-providers
+    title: Defer heavyweight offline provider setup until first real offline use
+    description: |
+      Keep wave 1 surgical: replace eager offline provider construction/import paths with lazy provider access in the TTS engine and remove the settings-window callback that preloads Coqui as soon as the user selects it in the UI.
+      Preserve transient provider voice-list reloads by allowing metadata-only preview retrieval without loading XTTS or Piper runtime state, and keep existing first-use Coqui status feedback intact when synthesis actually starts.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers: [AC1, AC2, AC6]
+    priority: high
+    status: completed
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: main.py
+        description: App startup path currently constructs TTSEngine during initialization.
+      - path: src/tts/tts_engine.py
+        description: Current TTSEngine eagerly creates Edge, Coqui, and Piper provider instances in __init__.
+      - path: src/gui/settings_window.py
+        description: Provider-change callback currently preloads Coqui when selected in settings.
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Highest-impact, lowest-risk fix for startup RSS and surprise XTTS residency.
+        timestamp: 2026-04-06T00:00:00Z
+        estimated_effort: medium
+        estimated_files: 3
+        estimated_lines: 160
+        focus_area: provider startup path
+        verification:
+          - Run: python -m pytest -q tests/test_tts_engine_cache.py tests/test_voice_tab_provider_reload.py
+          - Manually open Settings, switch provider to Coqui, and confirm no background preload starts until an actual Coqui synthesis request while first-use load status messaging still appears when synthesis begins.
+        acceptance_criteria:
+          - TTSEngine no longer constructs heavyweight offline providers during app startup unless they are actually needed.
+          - VoiceTab provider reload still works for edge, piper, and coqui selections before settings are saved.
+          - Selecting Coqui in the Settings window alone does not trigger XTTS model preload/residency, and first-use status feedback is preserved when Coqui is actually invoked.
+        failure_modes:
+          - scenario: Lazy factory accidentally changes provider_override behavior and breaks live voice list reload.
+            likelihood: medium
+            impact: high
+            mitigation: Preserve current get_available_voices(provider_override=...) behavior and cover it with existing provider reload/cache tests.
+          - scenario: Status callback wiring no longer reaches Coqui after lazy provider creation.
+            likelihood: low
+            impact: medium
+            mitigation: Route callback registration through the lazy accessor and smoke-test first Coqui load status messages.
+    tech_stack:
+      - Python
+      - customtkinter
+      - coqui-tts
+      - piper-tts
+    test_coverage: Extend provider cache/provider reload regression checks if lazy initialization changes public behavior.
+
+  - id: perf-gui-input-throttle
+    title: Use incremental current-line highlighting and latest-wins text analysis scheduling
+    description: |
+      Reduce typing lag by replacing full-document current-line retagging with incremental updates limited to the old/new active line and by scheduling expensive voice-indicator language analysis with latest-wins semantics during burst edits.
+      Keep visible behavior stable: the current line stays highlighted correctly during caret moves, and typing animation plus Enter/Shift+Enter semantics remain unchanged.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers: [AC4, AC6]
+    priority: high
+    status: completed
+    dependencies: []
+    conflicts_with:
+      - perf-audio-single-decode
+    context_files:
+      - path: src/gui/main_window.py
+        description: _on_text_changed, _update_voice_indicator, _highlight_current_line, and key bindings currently run on every edit.
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: UI-thread work on every keypress is the clearest source of sluggish typing and is safe to optimize with scheduling changes.
+        timestamp: 2026-04-06T00:00:00Z
+        estimated_effort: small
+        estimated_files: 1
+        estimated_lines: 140
+        focus_area: text input responsiveness
+        verification:
+          - Run: python -m pytest -q tests/test_voice_tab_provider_reload.py
+          - Extract or isolate a small scheduler helper/state token path that can be unit-tested headlessly for latest-wins behavior under burst edits, proving stale scheduled analyses cannot overwrite the newest text state.
+          - Manually type and paste a long multi-line block in the main textbox; confirm the current-line highlight tracks the active line correctly and the voice indicator settles to the latest text state within a short debounce window after burst edits.
+        acceptance_criteria:
+          - Text edits allow at most one pending expensive analysis update per burst, and only the latest scheduled result may update the voice indicator.
+          - Current-line highlighting updates only the previously active line and the newly active line instead of removing/reapplying tags across the full document.
+          - A focused helper/unit test deterministically proves latest-wins scheduling behavior for overlapping deferred analyses without requiring a broad GUI test harness.
+          - Typing animation, keyboard shortcuts, and text entry semantics remain unchanged.
+        failure_modes:
+          - scenario: Debounce delay makes the voice indicator or highlight feel stale during normal typing.
+            likelihood: medium
+            impact: medium
+            mitigation: Use short debounce windows, keep current-line movement incremental, and smoke-test both single-keystroke and paste flows.
+          - scenario: An older scheduled analysis result overwrites a newer edit state after burst typing.
+            likelihood: medium
+            impact: medium
+            mitigation: Use generation tokens or equivalent latest-wins bookkeeping so only the newest scheduled analysis can commit UI state.
+          - scenario: Event binding changes interfere with Enter or text-edit shortcuts.
+            likelihood: low
+            impact: high
+            mitigation: Keep existing shortcut bindings intact and verify Enter/Shift+Enter plus standard edit shortcuts manually.
+    tech_stack:
+      - Python
+      - customtkinter
+      - tkinter
+    test_coverage: Keep manual smoke coverage, but require a small extracted helper or equivalent state-token seam for headless latest-wins unit coverage without widening scope.
+
+  - id: perf-provider-memory-lifecycle
+    title: Apply committed-change-only provider unload rules and bounded model eviction
+    description: |
+      Add a small, explicit offline-provider memory policy rather than a large lifecycle framework: release Coqui model state only when the provider change is committed or caches are explicitly cleared, and keep provider_override preview reads metadata-only so unsaved settings changes do not load or unload heavy state.
+      Reuse the existing clear_cache hooks, guard against clearing model state while synthesis or preload is still in flight, and bound Piper's loaded voice models with deterministic eviction rather than unbounded retention.
+    wave: 2
+    agent: gem-implementer
+    prototype: false
+    covers: [AC2, AC3, AC6]
+    priority: high
+    status: pending
+    dependencies:
+      - perf-startup-lazy-providers
+    conflicts_with: []
+    context_files:
+      - path: src/tts/tts_engine.py
+        description: Central provider ownership and cache clearing already live here.
+      - path: src/tts/providers/coqui_tts_provider.py
+        description: clear_cache currently drops XTTS references and should be used when Coqui becomes inactive.
+      - path: src/tts/providers/piper_tts_provider.py
+        description: _loaded_models cache currently grows without eviction.
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Memory retention is a direct user complaint and can be reduced safely without changing synthesis output.
+        timestamp: 2026-04-06T00:00:00Z
+        estimated_effort: medium
+        estimated_files: 3
+        estimated_lines: 190
+        focus_area: offline provider memory
+        verification:
+          - Run: python -m pytest -q tests/test_tts_engine_cache.py tests/test_piper_tts_provider.py tests/test_coqui_tts_provider.py
+          - Add at least one deterministic mocked provider-lifecycle test that starts synthesis/preload, requests unload or cache clear mid-flight, and proves the inactive-state release is deferred until the in-flight operation completes.
+          - Manually preview provider changes before saving, then synthesize once with Coqui, commit a switch back to Edge or Piper, and confirm inactive offline residency is released only after the committed transition or explicit cache clear and never during an in-flight synthesis/preload.
+        acceptance_criteria:
+          - Unsaved provider preview flows do not load or unload heavyweight provider model state.
+          - Switching away from Coqui via a committed provider change, or using explicit cache clear, releases retained XTTS model references through the provider lifecycle path once no synthesis/preload is in flight.
+          - Piper no longer keeps an unbounded in-memory set of loaded voice models; eviction policy is deterministic and low-risk.
+          - A deterministic mocked lifecycle test covers unload-versus-in-flight preload/synthesis ordering so the riskiest concurrency path is regression-protected.
+          - clear_voices_cache remains a reliable global escape hatch for all provider caches.
+        failure_modes:
+          - scenario: A stale reference outside the provider prevents real memory release.
+            likelihood: medium
+            impact: high
+            mitigation: Centralize lifecycle transitions in TTSEngine and ensure provider-owned references are nulled through one path.
+          - scenario: Cache clear or committed provider switch unloads model state while synthesis/preload is still active.
+            likelihood: medium
+            impact: high
+            mitigation: Track in-flight synthesis/preload state and defer clear/unload until the active operation completes.
+          - scenario: Piper eviction unloads a model still needed by the active synthesis request.
+            likelihood: low
+            impact: high
+            mitigation: Evict only inactive entries after load/use bookkeeping and keep the cache size deliberately small but non-zero.
+    tech_stack:
+      - Python
+      - coqui-tts
+      - piper-tts
+    test_coverage: Add/extend cache-clearing and eviction-focused provider tests around existing mocked suites, including a deterministic unload-versus-in-flight lifecycle regression.
+
+  - id: perf-audio-single-decode
+    title: Reuse one prepared audio payload per playback segment
+    description: |
+      Refactor only the non-streaming playback handoff so each segment's audio bytes are decoded and prepared once, then reused for duration calculation, viseme timing, and device playback instead of repeating decode/copy work across MainWindow and AudioRouter.
+      Preserve the current normalization, sample-rate profile, and amplitude routing behavior, and leave play_audio_streaming untouched unless a later change explicitly expands scope.
+    wave: 2
+    agent: gem-implementer
+    prototype: false
+    covers: [AC5, AC6]
+    priority: medium
+    status: pending
+    dependencies:
+      - perf-gui-input-throttle
+    conflicts_with: []
+    context_files:
+      - path: src/gui/main_window.py
+        description: _play_audio_segment currently asks for audio duration and then separately requests playback from AudioRouter.
+      - path: src/audio/audio_router.py
+        description: Duration and playback paths decode/process the same bytes independently.
+      - path: tests/test_audio_router.py
+        description: Existing audio decode tests should anchor behavior-safe changes.
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Duplicate decode/copy work is a contained hotspot with clear boundaries and existing test coverage.
+        timestamp: 2026-04-06T00:00:00Z
+        estimated_effort: medium
+        estimated_files: 3
+        estimated_lines: 220
+        focus_area: playback pipeline
+        verification:
+          - Run: python -m pytest -q tests/test_audio_router.py
+          - Manually play both generated speech and a soundboard clip; confirm playback still works and viseme timing remains aligned.
+        acceptance_criteria:
+          - A single non-streaming playback segment is decoded/prepared once for duration, playback, and amplitude/viseme work.
+          - AudioRouter keeps one authoritative processing path for normalization/resampling/profile logic.
+          - Speech playback and soundboard playback both continue to route successfully through the existing device path.
+          - play_audio_streaming remains unchanged and out of scope for this task.
+        failure_modes:
+          - scenario: Shared prepared-audio objects drift from the current playback processing path and change output characteristics.
+            likelihood: medium
+            impact: high
+            mitigation: Build the reusable object around the existing _decode_audio_data and _process_playback_audio helpers rather than introducing a new DSP path.
+          - scenario: Duration calculations become inaccurate for edge cases like native-rate fast preview or WAV fallback.
+            likelihood: medium
+            impact: medium
+            mitigation: Preserve sample-rate metadata in the prepared representation and validate against current decode tests plus manual speech/soundboard smoke checks.
+          - scenario: Shared helper edits accidentally alter streaming playback behavior.
+            likelihood: low
+            impact: medium
+            mitigation: Keep play_audio_streaming untouched in this task and constrain changes to non-streaming entry points plus shared decode helpers already covered by tests.
+    tech_stack:
+      - Python
+      - sounddevice
+      - soundfile
+      - numpy
+      - scipy
+    test_coverage: Extend the audio-router-focused suite if a new prepared-audio helper is introduced.
+
+  - id: perf-metrics-verification
+    title: Measure perf gates for memory, typing, and playback overhead
+    description: |
+      First capture a reproducible pre-change baseline for the PRD-required execution gates, then rerun the same scripted scenarios post-change: cold-start RSS, idle RSS by provider state, typing responsiveness, and non-streaming playback overhead.
+      Treat this as a blocking gate: if the post-change results do not improve versus the recorded baseline or if the checks reveal behavior drift, the plan does not advance to final signoff.
+    wave: 3
+    agent: gem-reviewer
+    prototype: false
+    covers: [AC1, AC2, AC3, AC4, AC5, AC6, AC7]
+    priority: high
+    status: pending
+    dependencies:
+      - perf-startup-lazy-providers
+      - perf-gui-input-throttle
+      - perf-provider-memory-lifecycle
+      - perf-audio-single-decode
+    conflicts_with: []
+    context_files:
+      - path: docs/PRD.yaml
+        description: Source-of-truth verification requirements for measurable perf and behavior preservation.
+      - path: src/tts/tts_engine.py
+        description: Provider lifecycle and preview/clear-cache behavior to measure.
+      - path: src/gui/main_window.py
+        description: Typing, current-line highlighting, and voice-indicator scheduling behavior to measure.
+      - path: src/audio/audio_router.py
+        description: Non-streaming playback duration/decode/amplitude paths to measure for overhead reduction.
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: PRD scope explicitly requires lightweight profiling/verification, and review requires measurable gates instead of test-only signoff.
+        timestamp: 2026-04-06T00:00:00Z
+        estimated_effort: small
+        estimated_files: 0
+        estimated_lines: 0
+        focus_area: measurable perf verification
+        verification:
+          - Capture and record a reproducible pre-change baseline before implementation verification begins, using the same machine/profile and scenario order for every run.
+          - Baseline + post-change cold-start RSS after launch reaches idle; gate = changed build shows lower RSS and no heavyweight offline provider residency before offline synthesis.
+          - Baseline + post-change idle RSS in these states: fresh launch on Edge, unsaved Coqui preview in Settings, committed Coqui selection before synthesis, post-first Coqui synthesis or explicit warm-up, committed switch away from Coqui, and explicit cache clear; gate = preview and committed pre-synthesis states avoid XTTS residency, and post-switch/cache-clear idle RSS drops from the post-synthesis state.
+          - Baseline + post-change typing responsiveness during burst typing and paste on long multi-line text; gate = no dropped input, no stale latest-wins overwrite, and final highlight/voice-indicator state settles within the debounce window after the last edit.
+          - Baseline + post-change playback overhead on one non-streaming segment across duration lookup, playback, viseme, and amplitude use; gate = one decode/prepared representation per segment and no redundant full-buffer decode path remains.
+        acceptance_criteria:
+          - A reproducible pre-change baseline is captured before final comparison for startup RSS, idle RSS by provider state, typing responsiveness, and playback overhead.
+          - Startup RSS is explicitly measured and lower than baseline once eager offline provider setup is removed.
+          - Idle RSS is explicitly measured for the defined provider states and confirms the committed-change-only unload rule plus bounded provider residency, without implying model load before synthesis or explicit warm-up.
+          - Typing responsiveness is explicitly measured and confirms incremental current-line highlighting with latest-wins expensive analysis behavior.
+          - Playback overhead is explicitly measured for non-streaming segment playback and confirms duplicate decode/copy work has been removed.
+          - Any failed metric or behavior-preservation check blocks progression to final regression signoff.
+        failure_modes:
+          - scenario: Measurements are taken against inconsistent scenarios and produce misleading pass/fail results.
+            likelihood: medium
+            impact: medium
+            mitigation: Capture a named baseline first, then use the same machine/profile, scripted/manual scenario order, and exact provider states/playback path for the comparison run.
+          - scenario: A metric improves while user-visible behavior regresses.
+            likelihood: medium
+            impact: high
+            mitigation: Pair every metric check with the corresponding behavior-preservation smoke expectation and block the gate on either type of failure.
+    requires_review: true
+    review_depth: standard
+    review_security_sensitive: false
+
+  - id: perf-regression-verification
+    title: Run final behavior-preserving regression gate after perf metrics pass
+    description: |
+      After the measurable perf gate passes, run the existing focused pytest suites and a behavior-preservation smoke matrix covering provider switching, voice indication, playback, visemes, amplitude updates, and offline synthesis output.
+      This is the final release gate: pytest success alone is not enough if any user-visible behavior has drifted from the PRD.
+    wave: 4
+    agent: gem-reviewer
+    prototype: false
+    covers: [AC1, AC2, AC3, AC4, AC5, AC6, AC7]
+    priority: high
+    status: pending
+    dependencies:
+      - perf-metrics-verification
+    conflicts_with: []
+    context_files:
+      - path: docs/PRD.yaml
+        description: Behavior-preservation expectations for provider switching, voice indication, playback, visemes, amplitude, and offline synthesis output.
+      - path: tests/test_audio_router.py
+        description: Focused decode/playback regression coverage.
+      - path: tests/test_tts_engine_cache.py
+        description: Provider cache and provider-switch regression coverage.
+      - path: tests/test_piper_tts_provider.py
+        description: Piper cache-clearing behavior coverage.
+      - path: tests/test_coqui_tts_provider.py
+        description: Coqui cache-clearing behavior coverage.
+      - path: tests/test_voice_tab_provider_reload.py
+        description: Live provider reload coverage for the settings UI.
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Final verification must combine the measurable perf gate with explicit PRD-aligned behavior-preservation checks instead of relying on pytest alone.
+        timestamp: 2026-04-06T00:00:00Z
+        estimated_effort: small
+        estimated_files: 0
+        estimated_lines: 0
+        focus_area: regression verification
+        verification:
+          - Run: python -m pytest -q tests/test_audio_router.py tests/test_tts_engine_cache.py tests/test_piper_tts_provider.py tests/test_coqui_tts_provider.py tests/test_voice_tab_provider_reload.py
+          - Smoke checklist: cold app launch, open Settings and preview provider changes before save, commit provider changes, type/paste long text, speak via Edge, speak via Coqui/Piper once, switch back, confirm viseme/amplitude behavior during playback, compare offline synthesis output, and replay a soundboard clip.
+        acceptance_criteria:
+          - The measurable perf gate has already passed for startup RSS, provider-state idle RSS, typing responsiveness, and playback overhead.
+          - Focused pytest suites pass after the changes.
+          - Manual smoke checks confirm no eager Coqui preload on provider selection, correct behavior for unsaved provider previews versus committed switches, stable voice-indicator/current-line behavior, unchanged playback/viseme/amplitude behavior, and unchanged offline synthesis output.
+          - No regression is accepted in provider reload, cache clearing, audio routing, or user-visible workflow behavior even if pytest remains green.
+        failure_modes:
+          - scenario: Tests pass but manual smoke or measurable gates still show noticeable lag, retained memory, or behavior drift.
+            likelihood: medium
+            impact: medium
+            mitigation: Treat both the perf gate and the smoke matrix as release blockers and loop findings back into a follow-up perf-only patch rather than widening the current scope.
+    requires_review: true
+    review_depth: standard
+    review_security_sensitive: false

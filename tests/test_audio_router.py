@@ -8,6 +8,7 @@ import sys
 sys.modules['sounddevice'] = MagicMock()
 
 from src.audio.audio_router import AudioRouter
+from src.audio.audio_router import PreparedAudioPayload
 
 @pytest.fixture
 def audio_router():
@@ -88,3 +89,75 @@ async def test_decode_mp3_audio_no_target_sample_rate(audio_router):
         )
         assert sr == 44100
         assert audio_data.shape == (5, 2)
+
+
+def test_processing_profiles_use_speech_friendly_stereo_width(audio_router):
+    balanced = audio_router._get_profile_settings("balanced")
+    high_quality = audio_router._get_profile_settings("high_quality")
+
+    assert balanced["stereo_width"] <= 0.15
+    assert high_quality["stereo_width"] <= 0.25
+
+
+@pytest.mark.asyncio
+async def test_prepare_audio_for_playback_builds_reusable_payload(audio_router):
+    decoded_audio = np.arange(12, dtype=np.float32)
+    processed_audio = np.zeros((6, 2), dtype=np.float32)
+
+    audio_router._decode_audio_data = AsyncMock(return_value=(decoded_audio, 24000))
+    audio_router._process_playback_audio = MagicMock(return_value=(processed_audio, 48000))
+
+    prepared = await audio_router.prepare_audio_for_playback(
+        b"segment-bytes",
+        enable_normalization=True,
+        normalization_type="RMS",
+        processing_profile="balanced",
+        enable_clarity_eq=False,
+    )
+
+    audio_router._decode_audio_data.assert_awaited_once_with(b"segment-bytes", 48000)
+    audio_router._process_playback_audio.assert_called_once_with(
+        decoded_audio,
+        24000,
+        48000,
+        5.0,
+        "RMS",
+        False,
+        0.15,
+    )
+    assert prepared.sample_rate == 48000
+    assert prepared.data is processed_audio
+    assert prepared.duration_seconds == pytest.approx(6 / 48000)
+
+
+@pytest.mark.asyncio
+async def test_play_audio_with_amplitude_reuses_prepared_payload_without_decoding(audio_router):
+    prepared = PreparedAudioPayload(
+        data=np.zeros((8, 2), dtype=np.float32),
+        sample_rate=48000,
+    )
+    audio_router._decode_audio_data = AsyncMock(side_effect=AssertionError("decode should not run"))
+
+    class _FakeOutputStream:
+        def __init__(self, **kwargs):
+            self.active = False
+            self.finished_callback = kwargs.get("finished_callback")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            if self.finished_callback:
+                self.finished_callback()
+
+        def close(self):
+            pass
+
+    with patch("src.audio.audio_router.sd.OutputStream", side_effect=lambda **kwargs: _FakeOutputStream(**kwargs)):
+        result = await audio_router.play_audio_with_amplitude(
+            b"ignored",
+            amplitude_callback=lambda amplitude: None,
+            prepared_audio=prepared,
+        )
+
+    assert result is True

@@ -234,6 +234,7 @@ class CriTTSApp(ctk.CTk):
         
         # Reload TTS engine cache settings to pick up any changes
         if hasattr(self, 'tts_engine'):
+            self.tts_engine.handle_committed_provider_change()
             self.tts_engine.reload_cache_settings()
         
         # Update microphone passthrough based on settings

@@ -8,7 +8,14 @@ from typing import Any, Callable, Optional, List, Dict
 from .base_tab import BaseTab
 from ..keybind_manager import KeybindManager
 from ..theme_constants import (
-    FONT_SM, FONT_MD, FONT_LG, FONT_WEIGHT_BOLD,
+    BUTTON_HEIGHT,
+    COLOR_PRIMARY,
+    COLOR_PRIMARY_HOVER,
+    COLOR_WARNING,
+    COLOR_WARNING_HOVER,
+    FONT_SM,
+    FONT_MD,
+    FONT_WEIGHT_BOLD,
 )
 
 
@@ -37,29 +44,26 @@ class KeybindsTab(BaseTab):
     def _create_content(self):
         """Create the keybinds tab content."""
         self.setup_layout()
-        
-        self.create_section_header("Keybinds").pack(anchor="w", pady=(10, 5))
-        
-        self.info_label = ctk.CTkLabel(
-            self.scroll,
-            text="Keybinds work application-wide regardless of focus. Click 'Set' to capture key combinations.",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color="gray",
-            wraplength=550
+
+        surface_theme = self.get_active_surface_theme()
+        keybinds_section, keybinds_content = self.create_section_surface("Keybinds")
+        keybinds_section.pack(fill="both", expand=True)
+
+        self.info_label = self.create_helper_text(
+            "Keybinds work application-wide regardless of focus. Click 'Set' to capture key combinations.",
+            parent=keybinds_content,
         )
-        self.info_label.pack(anchor="w", pady=(0, 5))
-        self.add_wraplength_label(self.info_label)
-        
-        self.warning_label = ctk.CTkLabel(
-            self.scroll,
-            text="⚠️ Avoid system shortcuts (Alt+F4, Windows key). Leave empty to disable an action.",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color="orange",
-            wraplength=550
+        self.info_label.pack(anchor="w", pady=(0, 6))
+
+        self.warning_label = self.create_helper_text(
+            self.format_surface_status_text(
+                "Warning: Avoid system shortcuts (Alt+F4, Windows key). Leave empty to disable an action.",
+                "warning",
+            ),
+            parent=keybinds_content,
         )
         self.warning_label.pack(anchor="w", pady=(0, 15))
-        self.add_wraplength_label(self.warning_label)
-        
+
         keybinds = self.settings.get("keybinds", {})
         defaults = {
             "stop": "Escape",
@@ -74,57 +78,42 @@ class KeybindsTab(BaseTab):
             "open_settings": "Open Settings",
             "voice_input": "Toggle voice input"
         }
-        
-        # Info label for Speak keybind
-        self.speak_info_label = ctk.CTkLabel(
-            self.scroll,
-            text="💡 Speak is triggered by pressing Enter in the text box. The keybinds below control other actions.",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color="gray",
-            wraplength=550
+
+        self.speak_info_label = self.create_helper_text(
+            "Note: Speak is triggered by pressing Enter in the text box. The keybinds below control other actions.",
+            parent=keybinds_content,
         )
-        self.speak_info_label.pack(anchor="w", pady=(0, 10))
-        self.add_wraplength_label(self.speak_info_label)
-        
-        # Global Hotkeys Section
-        self.create_separator(self.scroll).pack(fill="x", pady=10)
-        
+        self.speak_info_label.pack(anchor="w", pady=(0, 12))
+
         ctk.CTkLabel(
-            self.scroll,
+            keybinds_content,
             text="System-Wide Hotkeys:",
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD)
         ).pack(anchor="w", pady=(5, 5))
-        
+
         self.global_hotkeys_var = ctk.BooleanVar(value=self.settings.get("global_hotkeys_enabled", False))
         self.global_hotkeys_check = ctk.CTkCheckBox(
-            self.scroll,
+            keybinds_content,
             text="Enable system-wide hotkeys (work even when app is not focused)",
             variable=self.global_hotkeys_var,
             font=ctk.CTkFont(size=FONT_MD)
         )
         self.global_hotkeys_check.pack(anchor="w", pady=5)
-        
-        self.global_hotkeys_info_label = ctk.CTkLabel(
-            self.scroll,
-            text="When enabled, keybinds for Stop, Clear, Settings, and Voice Input will work system-wide. Requires the 'keyboard' library and administrator privileges on some systems.",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color="gray",
-            wraplength=550
+
+        self.global_hotkeys_info_label = self.create_helper_text(
+            "When enabled, keybinds for Stop, Clear, Settings, and Voice Input will work system-wide. Requires the 'keyboard' library and administrator privileges on some systems.",
+            parent=keybinds_content,
         )
-        self.global_hotkeys_info_label.pack(anchor="w", pady=(0, 10))
-        self.add_wraplength_label(self.global_hotkeys_info_label)
-        
-        # Separator for application keybinds section
-        self.create_separator(self.scroll).pack(fill="x", pady=10)
-        
+        self.global_hotkeys_info_label.pack(anchor="w", pady=(0, 12))
+
         ctk.CTkLabel(
-            self.scroll,
+            keybinds_content,
             text="Application Keybinds:",
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD)
         ).pack(anchor="w", pady=(5, 10))
-        
+
         for action in ("stop", "clear", "open_settings", "voice_input"):
-            row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+            row = ctk.CTkFrame(keybinds_content, fg_color="transparent")
             row.pack(fill="x", pady=4)
             
             ctk.CTkLabel(
@@ -147,7 +136,7 @@ class KeybindsTab(BaseTab):
                 font=ctk.CTkFont(size=FONT_SM),
                 command=lambda a=action: self._start_keybind_capture(a),
                 width=60,
-                height=28
+                height=BUTTON_HEIGHT
             )
             capture_btn.pack(side="left", padx=5)
             self.keybind_capture_buttons[action] = capture_btn
@@ -156,7 +145,8 @@ class KeybindsTab(BaseTab):
                 row, 
                 text="", 
                 font=ctk.CTkFont(size=FONT_MD),
-                width=20
+                width=110,
+                text_color=surface_theme["text_secondary"],
             )
             validation_label.pack(side="left", padx=5)
             self.keybind_validation_labels[action] = validation_label
@@ -175,13 +165,13 @@ class KeybindsTab(BaseTab):
             return
         
         if not keybind_string:
-            validation_label.configure(text="", text_color="gray")
+            validation_label.configure(text="", text_color=self.get_active_surface_theme()["text_secondary"])
             return
         
         is_valid = self._keybind_manager.validate_keybind(keybind_string)
         
         if not is_valid:
-            validation_label.configure(text="✗", text_color="#e74c3c")
+            self.configure_surface_status_label(validation_label, "Invalid", "error")
             return
         
         duplicates = []
@@ -192,15 +182,19 @@ class KeybindsTab(BaseTab):
                     duplicates.append(other_action)
         
         if duplicates:
-            validation_label.configure(text="⚠", text_color="#f39c12")
+            self.configure_surface_status_label(validation_label, "Duplicate", "warning")
         else:
-            validation_label.configure(text="✓", text_color="#2ecc71")
+            self.configure_surface_status_label(validation_label, "Ready", "success")
     
     def _start_keybind_capture(self, action_name: str):
         """Start capturing keybind for the specified action."""
         for action, btn in self.keybind_capture_buttons.items():
             if action == action_name:
-                btn.configure(text="Press keys...", fg_color="#e67e22", hover_color="#d35400")
+                btn.configure(
+                    text="Press keys...",
+                    fg_color=COLOR_WARNING,
+                    hover_color=COLOR_WARNING_HOVER,
+                )
             else:
                 btn.configure(state="disabled")
         
@@ -216,7 +210,10 @@ class KeybindsTab(BaseTab):
             self.parent_window.bind("<KeyRelease-Alt_R>", self._on_alt_release)
             self.parent_window.focus_force()
         
-        self.keybind_validation_labels[action_name].configure(text="Capturing...", text_color="blue")
+        self.keybind_validation_labels[action_name].configure(
+            text=self.format_surface_status_text("Capturing...", "active"),
+            text_color=self.get_surface_status_text_color(),
+        )
     
     def _on_alt_press(self, event):
         """Handle Alt key press during keybind capture."""
@@ -294,7 +291,7 @@ class KeybindsTab(BaseTab):
         
         for action, btn in self.keybind_capture_buttons.items():
             if action == self._capturing_keybind:
-                btn.configure(text="Set", fg_color="#3498db", hover_color="#2980b9")
+                btn.configure(text="Set", fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER)
             else:
                 btn.configure(state="normal")
         

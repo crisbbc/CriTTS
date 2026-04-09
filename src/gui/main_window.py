@@ -6,6 +6,7 @@ import customtkinter as ctk
 import asyncio
 import threading
 import tkinter as tk
+from dataclasses import dataclass
 from typing import Optional, Callable
 import os
 import time
@@ -51,6 +52,27 @@ class STTState:
     RECORDING = "recording"          # Currently recording audio
     TRANSCRIBING = "transcribing"    # Processing audio (transcription in progress)
     ERROR = "error"                  # Error state (will auto-reset)
+
+
+@dataclass(frozen=True)
+class DeferredTextAnalysisRequest:
+    """Immutable snapshot for deferred text analysis work."""
+    generation: int
+    text: str
+
+
+class LatestWinsTextAnalysisScheduler:
+    """Track deferred analysis requests so only the newest one may apply."""
+
+    def __init__(self):
+        self._latest_generation = 0
+
+    def next_request(self, text: str) -> DeferredTextAnalysisRequest:
+        self._latest_generation += 1
+        return DeferredTextAnalysisRequest(generation=self._latest_generation, text=text)
+
+    def is_latest(self, request: DeferredTextAnalysisRequest) -> bool:
+        return request.generation == self._latest_generation
 
 
 
@@ -145,6 +167,7 @@ class MainWindow:
         # Voice indicator debounce timer
         self._voice_indicator_timer = None
         self._voice_indicator_animating = False
+        self._voice_indicator_scheduler = LatestWinsTextAnalysisScheduler()
         
         # Text preprocessor (reused across speak calls)
         self._text_preprocessor = TextPreprocessor()
@@ -161,7 +184,7 @@ class MainWindow:
         self._update_status()
         self._setup_osc_client()
         self._setup_recording_overlay()
-        self._setup_piper_status_callback()
+        self._setup_coqui_status_callback()
 
 
 
@@ -436,12 +459,32 @@ class MainWindow:
         self.apply_button_visibility()
 
     
-    def _highlight_current_line(self):
-        """Remove current_line tag from all text, then apply to the line containing the cursor."""
-        self.text_input.tag_remove("current_line", "1.0", "end")
-        cursor_index = self.text_input.index("insert")
+    def _get_line_tag_bounds(self, cursor_index: str) -> tuple[str, str]:
+        """Return the text bounds used for the highlighted line tag."""
         line_num = cursor_index.split(".")[0]
-        self.text_input.tag_add("current_line", f"{line_num}.0", f"{line_num}.end")
+        return f"{line_num}.0", f"{line_num}.end"
+
+    def _highlight_current_line(self):
+        """Incrementally retag only the old and new active line."""
+        new_start, new_end = self._get_line_tag_bounds(self.text_input.index("insert"))
+        current_ranges = self.text_input.tag_ranges("current_line")
+
+        if current_ranges:
+            for range_index in range(0, len(current_ranges), 2):
+                current_start = str(current_ranges[range_index])
+                current_end = str(current_ranges[range_index + 1])
+
+                if current_start == new_start and current_end == new_end:
+                    return
+
+                self.text_input.tag_remove("current_line", current_start, current_end)
+
+        self.text_input.tag_add("current_line", new_start, new_end)
+
+    def _refresh_after_text_mutation(self):
+        """Refresh lightweight editor state after any text mutation."""
+        self._highlight_current_line()
+        self._schedule_voice_indicator_update()
     
     def _on_window_resize(self, event):
         """Handle window resize to update dynamic elements like status label wraplength."""
@@ -495,6 +538,7 @@ class MainWindow:
         try:
             clipboard_text = self.root.clipboard_get()
             self.text_input.insert("insert", clipboard_text)
+            self._refresh_after_text_mutation()
         except Exception:
             pass  # Clipboard empty or error
         return "break"
@@ -506,6 +550,7 @@ class MainWindow:
             self.root.clipboard_clear()
             self.root.clipboard_append(selected)
             self.text_input.delete("sel.first", "sel.last")
+            self._refresh_after_text_mutation()
         except Exception:
             pass  # No selection
         return "break"
@@ -604,6 +649,7 @@ class MainWindow:
     def _insert_soundboard_token(self, slot: str):
         """Insert a soundboard token at the current cursor position."""
         self.text_input.insert("insert", f"[{slot}]")
+        self._refresh_after_text_mutation()
         self.text_input.focus_set()
     
     def _bind_shortcuts(self):
@@ -774,33 +820,41 @@ class MainWindow:
     
     def _update_voice_indicator(self):
         """Update the voice indicator label with current voice information."""
+        self._update_voice_indicator_for_text(self.text_input.get("1.0", "end-1c"))
+
+    def _is_latest_voice_indicator_request(self, request: Optional[DeferredTextAnalysisRequest]) -> bool:
+        """Return whether deferred voice-indicator work may still update the UI."""
+        return request is None or self._voice_indicator_scheduler.is_latest(request)
+
+    def _update_voice_indicator_for_text(
+        self,
+        text: str,
+        request: Optional[DeferredTextAnalysisRequest] = None,
+    ):
+        """Update the voice indicator label for a specific text snapshot."""
         voice = self.settings.get("voice", "Default")
         auto_language = self.settings.get("auto_language_detection", False)
         
         if auto_language:
-            # Get current text to show language detection status
-            text = self.text_input.get("1.0", "end-1c").strip()
+            text = text.strip()
             if text:
-                # Use the TTS engine's comprehensive language detection
                 detected_lang = self.tts_engine._detect_language_from_text(text)
                 voice_short_name = self.tts_engine._detect_language_voice(text)
-                
+
+                if not self._is_latest_voice_indicator_request(request):
+                    return
+
                 if detected_lang and voice_short_name:
-                    # Get the actual voice name from settings or use a fallback
-                    # Check if user has a custom voice mapping for this language
                     language_mappings = self.settings.get("language_voice_mappings", {})
                     custom_voice = language_mappings.get(detected_lang)
                     
                     if custom_voice:
-                        # Use custom voice from settings
                         voice_name = custom_voice
                     else:
-                        # Use the detected voice short name and get its display name
                         voice_info = self.tts_engine.get_voice_info(voice_short_name)
                         if voice_info:
                             voice_name = f"{voice_info['name']} ({voice_info['locale']})"
                         else:
-                            # Fallback to the detected voice short name
                             voice_name = voice_short_name
                     
                     lang_names = {
@@ -821,8 +875,10 @@ class MainWindow:
                     detected_lang_name = lang_names.get(detected_lang, detected_lang.title())
                     new_text = f"{voice_name} (Auto: {detected_lang_name})"
                     new_color = "green"
-                    
-                    # Animate the voice indicator change
+
+                    if not self._is_latest_voice_indicator_request(request):
+                        return
+
                     self._animate_voice_indicator(new_text, new_color)
                 else:
                     self.voice_indicator_value.configure(
@@ -839,6 +895,30 @@ class MainWindow:
                 text=voice,
                 text_color="gray"
             )
+
+    def _schedule_voice_indicator_update(self):
+        """Debounce expensive voice-indicator analysis with latest-wins semantics."""
+        if self._voice_indicator_timer:
+            self.root.after_cancel(self._voice_indicator_timer)
+            self._voice_indicator_timer = None
+
+        request = self._voice_indicator_scheduler.next_request(
+            self.text_input.get("1.0", "end-1c")
+        )
+
+        self._voice_indicator_timer = self.root.after(
+            300,
+            lambda pending_request=request: self._run_scheduled_voice_indicator_update(pending_request),
+        )
+
+    def _run_scheduled_voice_indicator_update(self, request: DeferredTextAnalysisRequest):
+        """Run deferred voice-indicator analysis only if it is still current."""
+        self._voice_indicator_timer = None
+
+        if not self._voice_indicator_scheduler.is_latest(request):
+            return
+
+        self._update_voice_indicator_for_text(request.text, request=request)
     
     def _animate_voice_indicator(self, new_text: str, new_color: str):
         """Animate the voice indicator with smooth transitions."""
@@ -888,10 +968,7 @@ class MainWindow:
     
     def _on_text_changed(self):
         """Handle text input changes for typing animation."""
-        # Debounce voice indicator update to reduce language detection calls
-        if self._voice_indicator_timer:
-            self.root.after_cancel(self._voice_indicator_timer)
-        self._voice_indicator_timer = self.root.after(300, self._update_voice_indicator)
+        self._schedule_voice_indicator_update()
         
         # Handle typing animation if OSC is enabled
         self._handle_typing_animation()
@@ -1288,17 +1365,27 @@ class MainWindow:
     ) -> bool:
         """Play a single prepared audio segment using existing routing settings."""
         voice_amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
+        enable_clarity_eq = self.settings.get("enable_clarity_eq", True)
+        try:
+            prepared_audio = await self.audio_router.prepare_audio_for_playback(
+                audio_data,
+                enable_normalization=enable_normalization,
+                normalization_type=normalization_type,
+                processing_profile=processing_profile,
+                enable_clarity_eq=enable_clarity_eq,
+            )
+        except RuntimeError:
+            return False
 
         if enable_viseme and self._viseme_mapper is not None and self.osc_client is not None:
             amplitude_callback = None
             if voice_amplitude_enabled and self._amplitude_analyzer is not None:
                 amplitude_callback = self._amplitude_analyzer.get_amplitude
 
-            audio_duration = await self.audio_router.get_audio_duration(audio_data)
             self._viseme_mapper.start_viseme_animation(
                 segment_text,
                 self.osc_client.send_viseme,
-                duration=audio_duration,
+                duration=prepared_audio.duration_seconds,
                 speech_rate=speech_rate,
                 amplitude_callback=amplitude_callback,
             )
@@ -1318,6 +1405,8 @@ class MainWindow:
                 normalization_type,
                 amplitude_callback=amplitude_callback_with_osc,
                 processing_profile=processing_profile,
+                enable_clarity_eq=enable_clarity_eq,
+                prepared_audio=prepared_audio,
             )
 
         return await self.audio_router.play_audio_to_device(
@@ -1327,6 +1416,8 @@ class MainWindow:
             enable_normalization,
             normalization_type,
             processing_profile,
+            enable_clarity_eq=enable_clarity_eq,
+            prepared_audio=prepared_audio,
         )
     
     async def _speak_streaming_async(self, text: str, voice: str, rate: int, volume: int, pitch: int, device_idx, processing_profile: str, enable_normalization: bool = True, normalization_type: str = "Peak") -> bool:
@@ -1353,6 +1444,7 @@ class MainWindow:
             
             # Check if voice amplitude feature is enabled for VRChat
             voice_amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
+            enable_clarity_eq = self.settings.get("enable_clarity_eq", True)
             
             # Start viseme animation if enabled (use estimated duration for streaming)
             if self._viseme_mapper is not None and self.osc_client is not None:
@@ -1402,7 +1494,8 @@ class MainWindow:
                 self._stop_event,
                 enable_normalization,
                 normalization_type,
-                amplitude_callback=streaming_amplitude_callback
+                amplitude_callback=streaming_amplitude_callback,
+                enable_clarity_eq=enable_clarity_eq,
             )
             
             return success
@@ -1439,6 +1532,7 @@ class MainWindow:
             self._stop_typing_animation(send_clear=True)
         
         self.text_input.delete("1.0", "end")
+        self._refresh_after_text_mutation()
         self.text_input.focus()
     
     def _on_settings(self):
@@ -1447,12 +1541,16 @@ class MainWindow:
     
     def _on_toggle_overlay(self):
         """Handle overlay toggle button click."""
-        # Flip visibility state
-        self._overlay_visible = not self._overlay_visible
-        
-        # Persist to settings and save to disk
-        self.settings.set("overlay_visible", self._overlay_visible)
-        self.settings.save_settings()
+        previous_visible = self._overlay_visible
+        next_visible = not previous_visible
+        self.settings.set("overlay_visible", next_visible)
+        if not self.settings.save_settings():
+            self.settings.set("overlay_visible", previous_visible)
+            self._overlay_visible = previous_visible
+            self._show_error("Could not save overlay visibility.")
+            return
+
+        self._overlay_visible = next_visible
         # Update overlay visibility
         if self._overlay_visible:
             self._recording_overlay.show_overlay()
@@ -1686,6 +1784,7 @@ class MainWindow:
         
         # Insert text at current cursor position
         self.text_input.insert("insert", text)
+        self._refresh_after_text_mutation()
         
         # Update status
         self._set_status("✅ Voice input added", "✅")
@@ -2090,6 +2189,26 @@ class MainWindow:
         self.status_frame.configure(fg_color=colors["bg_secondary"])
         self.status_label.configure(text_color=colors["text_primary"])
         self.progress_label.configure(text_color=colors["text_muted"])
+        self._apply_quick_controls_theme(mode)
+
+    def _apply_quick_controls_theme(self, mode: str):
+        """Recolor quick controls surfaces to match the active appearance mode."""
+        colors = get_theme_colors(mode)
+        self.quick_controls_frame.configure(fg_color=colors["bg_secondary"])
+        self._qc_rate_label.configure(text_color=colors["text_secondary"])
+        self._qc_volume_label.configure(text_color=colors["text_secondary"])
+        self._qc_pitch_label.configure(text_color=colors["text_secondary"])
+
+        if self._quick_controls_visible:
+            self.controls_toggle_button.configure(
+                fg_color=colors["button_active"],
+                hover_color=colors["button_active_hover"],
+            )
+        else:
+            self.controls_toggle_button.configure(
+                fg_color=colors["button_neutral"],
+                hover_color=colors["button_neutral_hover"],
+            )
     
     def refresh_status(self):
         """Refresh status display (called after settings change)."""
@@ -2217,42 +2336,6 @@ class MainWindow:
             command=self._on_quick_pitch_change
         ).pack(fill="x")
 
-        # --- Piper Noise Scale slider (Piper TTS only) ---
-        self._qc_noise_scale_group = ctk.CTkFrame(self._qc_inner, fg_color="transparent")
-        _ns = float(self.settings.get("piper_noise_scale", 0.667))
-        self._qc_noise_scale_var = ctk.DoubleVar(value=_ns)
-        self._qc_noise_scale_label = ctk.CTkLabel(
-            self._qc_noise_scale_group,
-            text=f"Expr: {_ns:.3f}",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color=COLOR_NEUTRAL_LIGHTER
-        )
-        self._qc_noise_scale_label.pack(anchor="w")
-        ctk.CTkSlider(
-            self._qc_noise_scale_group,
-            from_=0.0, to=2.0, number_of_steps=200,
-            variable=self._qc_noise_scale_var,
-            command=self._on_quick_noise_scale_change
-        ).pack(fill="x")
-
-        # --- Piper Noise W Scale slider (Piper TTS only) ---
-        self._qc_noise_w_group = ctk.CTkFrame(self._qc_inner, fg_color="transparent")
-        _nw = float(self.settings.get("piper_noise_w_scale", 0.8))
-        self._qc_noise_w_var = ctk.DoubleVar(value=_nw)
-        self._qc_noise_w_label = ctk.CTkLabel(
-            self._qc_noise_w_group,
-            text=f"Dur: {_nw:.3f}",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color=COLOR_NEUTRAL_LIGHTER
-        )
-        self._qc_noise_w_label.pack(anchor="w")
-        ctk.CTkSlider(
-            self._qc_noise_w_group,
-            from_=0.0, to=2.0, number_of_steps=200,
-            variable=self._qc_noise_w_var,
-            command=self._on_quick_noise_w_scale_change
-        ).pack(fill="x")
-
         # Apply provider-specific slider visibility and show/hide the panel
         self._update_quick_controls_provider()
         if not self._quick_controls_visible:
@@ -2260,32 +2343,27 @@ class MainWindow:
 
     def _toggle_quick_controls(self):
         """Show or hide the quick controls panel."""
-        self._quick_controls_visible = not self._quick_controls_visible
-        self.settings.set("quick_controls_visible", self._quick_controls_visible)
-        self.settings.save_settings()
+        previous_visible = self._quick_controls_visible
+        next_visible = not previous_visible
+        self.settings.set("quick_controls_visible", next_visible)
+        if not self.settings.save_settings():
+            self.settings.set("quick_controls_visible", previous_visible)
+            self._quick_controls_visible = previous_visible
+            self._show_error("Could not save quick controls visibility.")
+            return
+
+        self._quick_controls_visible = next_visible
 
         if self._quick_controls_visible:
             self.quick_controls_frame.grid()
-            self.controls_toggle_button.configure(
-                fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER
-            )
         else:
             self.quick_controls_frame.grid_remove()
-            self.controls_toggle_button.configure(
-                fg_color=COLOR_NEUTRAL_MEDIUM, hover_color=COLOR_NEUTRAL
-            )
+
+        self._apply_quick_controls_theme(self.settings.get("appearance_mode", "Dark"))
 
     def _update_quick_controls_provider(self):
-        """Show pitch or Piper noise sliders based on the active provider."""
-        provider = self.settings.get("tts_provider", "edge")
-        if provider == "piper":
-            self._qc_pitch_group.pack_forget()
-            self._qc_noise_scale_group.pack(side="left", fill="x", expand=True, padx=SPACING_SM)
-            self._qc_noise_w_group.pack(side="left", fill="x", expand=True, padx=(SPACING_SM, 0))
-        else:
-            self._qc_noise_scale_group.pack_forget()
-            self._qc_noise_w_group.pack_forget()
-            self._qc_pitch_group.pack(side="left", fill="x", expand=True, padx=(SPACING_SM, 0))
+        """Show pitch slider for all providers (Coqui does not use temperature controls)."""
+        self._qc_pitch_group.pack(side="left", fill="x", expand=True, padx=(SPACING_SM, 0))
 
     def refresh_quick_controls(self):
         """Sync quick controls sliders from current settings (called after settings save)."""
@@ -2299,57 +2377,69 @@ class MainWindow:
             self._qc_pitch_var.set(self.settings.get("pitch", 0))
             self._qc_pitch_label.configure(text=f"Pitch: {self._qc_pitch_var.get():+d}%")
 
-            ns = float(self.settings.get("piper_noise_scale", 0.667))
-            self._qc_noise_scale_var.set(ns)
-            self._qc_noise_scale_label.configure(text=f"Expr: {ns:.3f}")
-
-            nw = float(self.settings.get("piper_noise_w_scale", 0.8))
-            self._qc_noise_w_var.set(nw)
-            self._qc_noise_w_label.configure(text=f"Dur: {nw:.3f}")
+            self._quick_controls_visible = self.settings.get("quick_controls_visible", False)
+            if self._quick_controls_visible:
+                self.quick_controls_frame.grid()
+            else:
+                self.quick_controls_frame.grid_remove()
 
             self._update_quick_controls_provider()
+            self._apply_quick_controls_theme(self.settings.get("appearance_mode", "Dark"))
         except Exception:
             pass
+
+    def _persist_quick_control_value(self, key, value, variable, label, format_label):
+        """Persist a quick-control setting and restore the previous value on failure."""
+        previous_value = self.settings.get(key, value)
+        self.settings.set(key, value)
+        if self.settings.save_settings():
+            label.configure(text=format_label(value))
+            return True
+
+        self.settings.set(key, previous_value)
+        variable.set(previous_value)
+        label.configure(text=format_label(previous_value))
+        self._show_error("Could not save quick controls.")
+        return False
 
     def _on_quick_rate_change(self, value):
         """Handle quick controls rate slider change."""
         v = int(round(float(value)))
-        self._qc_rate_label.configure(text=f"Speed: {v:+d}%")
-        self.settings.set("rate", v)
-        self.settings.save_settings()
+        self._persist_quick_control_value(
+            "rate",
+            v,
+            self._qc_rate_var,
+            self._qc_rate_label,
+            lambda current_value: f"Speed: {current_value:+d}%",
+        )
 
     def _on_quick_volume_change(self, value):
         """Handle quick controls volume slider change."""
         v = int(round(float(value)))
-        self._qc_volume_label.configure(text=f"Volume: {v}%")
-        self.settings.set("volume", v)
-        self.settings.save_settings()
+        self._persist_quick_control_value(
+            "volume",
+            v,
+            self._qc_volume_var,
+            self._qc_volume_label,
+            lambda current_value: f"Volume: {current_value}%",
+        )
 
     def _on_quick_pitch_change(self, value):
         """Handle quick controls pitch slider change."""
         v = int(round(float(value)))
-        self._qc_pitch_label.configure(text=f"Pitch: {v:+d}%")
-        self.settings.set("pitch", v)
-        self.settings.save_settings()
-
-    def _on_quick_noise_scale_change(self, value):
-        """Handle quick controls Piper noise scale slider change."""
-        v = round(float(value), 3)
-        self._qc_noise_scale_label.configure(text=f"Expr: {v:.3f}")
-        self.settings.set("piper_noise_scale", v)
-        self.settings.save_settings()
-
-    def _on_quick_noise_w_scale_change(self, value):
-        """Handle quick controls Piper noise W scale slider change."""
-        v = round(float(value), 3)
-        self._qc_noise_w_label.configure(text=f"Dur: {v:.3f}")
-        self.settings.set("piper_noise_w_scale", v)
-        self.settings.save_settings()
+        self._persist_quick_control_value(
+            "pitch",
+            v,
+            self._qc_pitch_var,
+            self._qc_pitch_label,
+            lambda current_value: f"Pitch: {current_value:+d}%",
+        )
 
     def set_text(self, text: str):
         """Set text in the input area."""
         self.text_input.delete("1.0", "end")
         self.text_input.insert("1.0", text)
+        self._refresh_after_text_mutation()
 
     
     def get_text(self) -> str:
@@ -2434,18 +2524,18 @@ class MainWindow:
         else:
             self._recording_overlay.hide_overlay()
 
-    def _setup_piper_status_callback(self):
-        """Register a status callback on the Piper TTS provider.
+    def _setup_coqui_status_callback(self):
+        """Register a status callback on the Coqui TTS provider.
 
-        The callback is invoked from a background thread whenever a Piper voice
+        The callback is invoked from a background thread whenever the Coqui
         model is being downloaded or loaded, allowing the status bar to surface
         progress information to the user.
         """
-        if hasattr(self.tts_engine, "set_piper_status_callback"):
-            self.tts_engine.set_piper_status_callback(self._on_piper_status)
+        if hasattr(self.tts_engine, "set_coqui_status_callback"):
+            self.tts_engine.set_coqui_status_callback(self._on_coqui_status)
 
-    def _on_piper_status(self, message: str) -> None:
-        """Called (from a background thread) with a Piper model status message."""
+    def _on_coqui_status(self, message: str) -> None:
+        """Called (from a background thread) with a Coqui model status message."""
         self.root.after(0, lambda msg=message: self._set_status(msg, "⬇️", "info"))
     
     def shutdown(self):

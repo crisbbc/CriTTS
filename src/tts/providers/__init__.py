@@ -2,7 +2,7 @@
 TTS Provider Abstraction Layer
 
 This module defines the abstract base class for TTS providers and provides
-a common interface for TTS services like Edge TTS and Piper TTS.
+a common interface for TTS services like Edge TTS and Bark TTS.
 """
 
 from abc import ABC, abstractmethod

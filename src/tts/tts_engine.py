@@ -5,6 +5,7 @@ Manages text-to-speech generation, supporting multiple providers.
 import asyncio
 import threading
 from collections import OrderedDict
+from importlib import import_module
 from typing import List, Dict, Optional, Tuple
 import time
 import logging
@@ -12,7 +13,7 @@ import re
 from pathlib import Path
 
 from .providers.edge_tts_provider import EdgeTTSProvider
-from .providers.piper_tts_provider import PiperTTSProvider
+from .providers.coqui_metadata import get_coqui_voice_metadata
 from .audio_cache import AudioCache, PhraseTracker
 from ..config.settings_manager import SettingsManager
 
@@ -126,6 +127,59 @@ class TTSEngine:
         re.IGNORECASE
     )
 
+    # Chat/gaming slang that TTS engines frequently mispronounce.
+    # Uses word-boundary matching so partial matches inside longer words are avoided.
+    _GAMING_ABBREVIATIONS = {
+        'glhf': 'good luck have fun',
+        'asap': 'as soon as possible',
+        'iirc': 'if I recall correctly',
+        'afaik': 'as far as I know',
+        'afk': 'away from keyboard',
+        'brb': 'be right back',
+        'irl': 'in real life',
+        'tbh': 'to be honest',
+        'ngl': 'not gonna lie',
+        'idk': "I don't know",
+        'imo': 'in my opinion',
+        'smh': 'shaking my head',
+        'lmk': 'let me know',
+        'fyi': 'for your information',
+        'omg': 'oh my gosh',
+        'lol': 'laughing out loud',
+        'gg': 'good game',
+        'wp': 'well played',
+        'gl': 'good luck',
+        'hf': 'have fun',
+        'npc': 'en pee see',
+        'ty': 'thank you',
+        'rn': 'right now',
+        'np': 'no problem',
+        'bc': 'because',
+        'tho': 'though',
+        'btw': 'by the way',
+        'ikr': 'I know right',
+    }
+
+    _GAMING_ABBREV_PATTERN = re.compile(
+        r'\b(?:' + '|'.join(re.escape(k) for k in sorted(_GAMING_ABBREVIATIONS, key=len, reverse=True)) + r')\b',
+        re.IGNORECASE
+    )
+
+    # Regex patterns used by _clean_symbols (compiled once at class level)
+    _URL_PATTERN = re.compile(r'https?://\S+|www\.\S+')
+    _MARKDOWN_BOLD_ITALIC = re.compile(r'\*{1,3}(.+?)\*{1,3}', re.DOTALL)
+    _MARKDOWN_UNDERLINE = re.compile(r'_{1,2}(.+?)_{1,2}', re.DOTALL)
+    _MARKDOWN_STRIKE = re.compile(r'~~(.+?)~~', re.DOTALL)
+    _MARKDOWN_CODE = re.compile(r'`{1,3}[^`]*`{1,3}')
+    _MARKDOWN_BLOCK_QUOTE = re.compile(r'^\s*>\s?', re.MULTILINE)
+    _EMOJI_PATTERN = re.compile(
+        u'[\U0001F300-\U0001F9FF\U00002702-\U000027B0\U0000FE00-\U0000FE0F'
+        u'\U00010000-\U0010FFFF\u2600-\u26FF\u2700-\u27BF]+',
+        re.UNICODE
+    )
+    _REPEATED_PUNCT = re.compile(r'([!?]){2,}')
+    _PIPER_VOICE_LANGUAGE = re.compile(r'^([A-Za-z]{2,3})(?:[_-][A-Za-z]{2,4})?[-_]')
+
     def __init__(self, settings_manager: Optional['SettingsManager'] = None):
         """Initialize the TTS engine.
         
@@ -142,10 +196,14 @@ class TTSEngine:
         self._voice_cache_lock = threading.Lock()  # Lock for thread-safe voice cache access
         self._text_cache: OrderedDict = OrderedDict()  # Cache for text processing (LRU)
         self._text_cache_lock = threading.Lock()  # Lock for thread-safe text cache access
+        self._provider_init_lock = threading.Lock()
+        self._coqui_status_callback = None
+        self._committed_provider_name = self._get_active_provider_name()
         
-        # Initialize providers - pass settings_manager to avoid per-call SettingsManager instantiation
+        # Initialize always-lightweight provider eagerly; keep heavyweight offline providers lazy.
         self._edge_tts_provider = EdgeTTSProvider(settings_manager=self._settings_manager)
-        self._piper_tts_provider = PiperTTSProvider(settings_manager=self._settings_manager)
+        self._coqui_provider_instance = None
+        self._piper_provider_instance = None
         
         # Initialize audio cache and phrase tracker
         self._audio_cache: Optional[AudioCache] = None
@@ -267,7 +325,14 @@ class TTSEngine:
         
         for text, voice, count in phrases:
             # Check if already cached
-            if self._audio_cache.lookup(text, voice, 0, 100, 0):
+            if self._audio_cache.lookup(
+                text,
+                voice,
+                0,
+                100,
+                0,
+                provider=self._get_active_provider_name(),
+            ):
                 continue
             
             # Generate and cache
@@ -283,17 +348,64 @@ class TTSEngine:
         return generated
     
     def _get_active_provider_name(self) -> str:
-        """Return the configured TTS provider name ('edge' or 'piper')."""
+        """Return the configured TTS provider name ('edge', 'piper', or 'coqui')."""
         if self._settings_manager:
             return self._settings_manager.get("tts_provider", "edge")
         return "edge"
+
+    def _create_coqui_provider(self):
+        """Create the Coqui provider on first real use."""
+        provider_module = import_module("src.tts.providers.coqui_tts_provider")
+        provider = provider_module.CoquiTTSProvider(settings_manager=self._settings_manager)
+        if self._coqui_status_callback is not None:
+            provider.set_status_callback(self._coqui_status_callback)
+        return provider
+
+    def _create_piper_provider(self):
+        """Create the Piper provider on first real use."""
+        provider_module = import_module("src.tts.providers.piper_tts_provider")
+        return provider_module.PiperTTSProvider(settings_manager=self._settings_manager)
+
+    @property
+    def _coqui_tts_provider(self):
+        """Lazily create the Coqui provider."""
+        if self._coqui_provider_instance is None:
+            with self._provider_init_lock:
+                if self._coqui_provider_instance is None:
+                    self._coqui_provider_instance = self._create_coqui_provider()
+                    if self._coqui_status_callback is not None:
+                        self._coqui_provider_instance.set_status_callback(self._coqui_status_callback)
+        return self._coqui_provider_instance
+
+    @property
+    def _piper_tts_provider(self):
+        """Lazily create the Piper provider."""
+        if self._piper_provider_instance is None:
+            with self._provider_init_lock:
+                if self._piper_provider_instance is None:
+                    self._piper_provider_instance = self._create_piper_provider()
+        return self._piper_provider_instance
+
+    def _get_provider_by_name(self, provider_name: str):
+        """Return the provider instance for a provider key."""
+        if provider_name == "coqui":
+            return self._coqui_tts_provider
+        if provider_name == "piper":
+            return self._piper_tts_provider
+        return self._edge_tts_provider
+
+    def _get_voice_metadata(self, provider_name: str) -> Optional[List[Dict]]:
+        """Return lightweight provider voice metadata when runtime import is unnecessary."""
+        if provider_name == "coqui":
+            return get_coqui_voice_metadata()
+        return None
 
     async def get_available_voices(self, provider_override: Optional[str] = None) -> List[Dict]:
         """
         Get list of available voices from the current provider.
 
         Args:
-            provider_override: Optional provider key ("edge" or "piper") used
+            provider_override: Optional provider key ("edge", "piper", or "coqui") used
                 for transient UI reloads before settings are saved.
         
         Returns:
@@ -301,7 +413,12 @@ class TTSEngine:
         """
         if provider_override is not None:
             try:
-                provider = self._piper_tts_provider if provider_override == "piper" else self._edge_tts_provider
+                metadata_voices = self._get_voice_metadata(provider_override)
+                if metadata_voices is not None:
+                    metadata_voices.sort(key=lambda x: x.get('name', ''))
+                    return metadata_voices
+
+                provider = self._get_provider_by_name(provider_override)
                 voices = await provider.get_available_voices()
                 voices.sort(key=lambda x: x.get('name', ''))
                 # Do not update shared cache for override fetches because the selection
@@ -324,6 +441,14 @@ class TTSEngine:
             return self._voices_cache
         
         try:
+            metadata_voices = self._get_voice_metadata(active_provider)
+            if metadata_voices is not None:
+                metadata_voices.sort(key=lambda x: x.get('name', ''))
+                self._voices_cache = metadata_voices
+                self._cache_timestamp = time.time()
+                self._cached_provider = active_provider
+                return metadata_voices
+
             # Get current provider
             provider = self._get_current_provider()
             
@@ -346,18 +471,47 @@ class TTSEngine:
     
     def _get_current_provider(self):
         """Get the currently active TTS provider based on settings."""
-        if self._get_active_provider_name() == "piper":
-            return self._piper_tts_provider
-        return self._edge_tts_provider
+        return self._get_provider_by_name(self._get_active_provider_name())
 
-    def set_piper_status_callback(self, callback) -> None:
-        """Register a status callback on the Piper TTS provider.
+    def set_coqui_status_callback(self, callback) -> None:
+        """Register a status callback on the Coqui TTS provider.
 
         The callback is called (from a background thread) with a human-readable
-        string whenever a Piper voice model is being downloaded or loaded for
+        string whenever the Coqui model is being downloaded or loaded for
         the first time.  Pass *None* to remove the callback.
         """
-        self._piper_tts_provider.set_status_callback(callback)
+        self._coqui_status_callback = callback
+        if self._coqui_provider_instance is not None:
+            self._coqui_provider_instance.set_status_callback(callback)
+
+    def preload_coqui_model_async(self) -> None:
+        """Trigger Coqui model preloading in a daemon background thread.
+
+        Safe to call multiple times — does nothing if the model is already loaded.
+        Status updates are forwarded via the registered Coqui status callback.
+        """
+        import threading
+        t = threading.Thread(
+            target=self._coqui_tts_provider._ensure_model_loaded,
+            daemon=True,
+            name="coqui-preload",
+        )
+        t.start()
+
+    def handle_committed_provider_change(self) -> None:
+        """Apply the small offline-provider unload policy after settings are saved."""
+        active_provider = self._get_active_provider_name()
+        previous_provider = self._committed_provider_name
+        self._committed_provider_name = active_provider
+
+        if previous_provider == active_provider:
+            return
+
+        if previous_provider == "coqui" and self._coqui_provider_instance is not None:
+            try:
+                self._coqui_provider_instance.clear_cache()
+            except Exception as e:
+                logger.warning(f"Failed to clear inactive Coqui TTS cache: {e}")
     
     def clear_voices_cache(self):
         """Clear the voices cache to force refresh on next call."""
@@ -372,10 +526,17 @@ class TTSEngine:
         except Exception as e:
             logger.warning(f"Failed to clear Edge TTS cache: {e}")
 
-        try:
-            self._piper_tts_provider.clear_cache()
-        except Exception as e:
-            logger.warning(f"Failed to clear Piper TTS cache: {e}")
+        if self._coqui_provider_instance is not None:
+            try:
+                self._coqui_provider_instance.clear_cache()
+            except Exception as e:
+                logger.warning(f"Failed to clear Coqui TTS cache: {e}")
+
+        if self._piper_provider_instance is not None:
+            try:
+                self._piper_provider_instance.clear_cache()
+            except Exception as e:
+                logger.warning(f"Failed to clear Piper TTS cache: {e}")
     
     async def generate_speech_batch(self, texts: List[str], **kwargs) -> List[Tuple[Optional[bytes], Optional[str]]]:
         """
@@ -424,18 +585,25 @@ class TTSEngine:
         
         return None
     
-    async def validate_voice(self, voice_short_name: str) -> bool:
+    async def validate_voice(
+        self,
+        voice_short_name: str,
+        provider_name: Optional[str] = None,
+    ) -> bool:
         """
         Return True if the given voice short_name exists in the available voices.
         Can be called before TTS generation to prevent errors.
         """
+        provider_cache_key = provider_name or self._get_active_provider_name()
+        cache_key = (provider_cache_key, voice_short_name)
+
         # Thread-safe cache lookup
         with self._voice_cache_lock:
-            if voice_short_name in self._voice_cache:
-                self._voice_cache.move_to_end(voice_short_name)
-                return self._voice_cache[voice_short_name]
+            if cache_key in self._voice_cache:
+                self._voice_cache.move_to_end(cache_key)
+                return self._voice_cache[cache_key]
 
-        voices = await self.get_available_voices()
+        voices = await self.get_available_voices(provider_override=provider_name)
         short_names = {v.get("short_name") for v in voices if v.get("short_name")}
         is_valid = voice_short_name in short_names
 
@@ -450,10 +618,15 @@ class TTSEngine:
                         oldest_key = next(iter(self._voice_cache))
                         del self._voice_cache[oldest_key]
 
-            self._voice_cache[voice_short_name] = is_valid
+            self._voice_cache[cache_key] = is_valid
         return is_valid
     
-    async def preprocess_text(self, text: str, voice: Optional[str] = None) -> str:
+    async def preprocess_text(
+        self,
+        text: str,
+        voice: Optional[str] = None,
+        provider_name: Optional[str] = None,
+    ) -> str:
         """
         Preprocess text for better TTS quality and speed.
         
@@ -461,13 +634,19 @@ class TTSEngine:
             text: Input text to preprocess
             voice: Voice ID to determine language for number formatting.
                    If None, falls back to settings voice.
+            provider_name: Optional provider key to keep preprocessing stable for
+                    a single request even if settings change mid-call.
             
         Returns:
             Preprocessed text optimized for TTS
         """
-        # Use cached preprocessing for repeated text
-        # Include voice in cache key so number words are regenerated when voice changes
-        cache_key = (text.strip(), voice or "default")
+        active_provider_name = provider_name or self._get_active_provider_name()
+        language = self._get_current_voice_language(voice, active_provider_name)
+
+        # Use cached preprocessing for repeated text.
+        # Include provider/language so multilingual offline settings do not reuse
+        # stale English-biased preprocessing from a previous voice/configuration.
+        cache_key = (text.strip(), voice or "default", active_provider_name, language)
         
         # Thread-safe cache lookup
         with self._text_cache_lock:
@@ -476,17 +655,19 @@ class TTSEngine:
                 return self._text_cache[cache_key]
         
         # Text preprocessing for better TTS quality
-        processed_text = text
-        
-        # Remove excessive whitespace and normalize
-        processed_text = re.sub(r'\s+', ' ', processed_text).strip()
-        
-        # Handle common abbreviations and numbers
-        processed_text = self._expand_common_abbreviations(processed_text)
+        processed_text = text.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+        # Strip symbols/URLs/emojis/markdown that TTS handles poorly
+        processed_text = self._clean_symbols(processed_text)
+
+        # Handle language-aware abbreviations and numbers
+        if language == 'en':
+            processed_text = self._expand_common_abbreviations(processed_text)
+            processed_text = self._expand_gaming_abbreviations(processed_text)
         processed_text = self._format_numbers(processed_text, voice)
-        
-        # Add slight pauses for better natural flow
-        processed_text = self._add_natural_pauses(processed_text)
+
+        # Add provider-aware pauses after preserving paragraph breaks
+        processed_text = self._add_natural_pauses(processed_text, active_provider_name)
         
         # Note: No hard truncation - edge_tts handles long inputs without a documented
         # 2000-character limit. If issues arise, consider chunking instead.
@@ -500,10 +681,50 @@ class TTSEngine:
         
         return processed_text
     
+    @staticmethod
+    def _clean_symbols(text: str) -> str:
+        """Remove or replace symbols that TTS engines struggle to pronounce clearly.
+
+        Handles URLs, markdown formatting, emojis, and common symbol substitutions
+        so the synthesised speech doesn't contain garbled character strings.
+        """
+        # Replace URLs with the spoken word "link"
+        text = TTSEngine._URL_PATTERN.sub('link', text)
+
+        # Strip markdown formatting but preserve the inner text
+        text = TTSEngine._MARKDOWN_BOLD_ITALIC.sub(r'\1', text)
+        text = TTSEngine._MARKDOWN_UNDERLINE.sub(r'\1', text)
+        text = TTSEngine._MARKDOWN_STRIKE.sub(r'\1', text)
+        text = TTSEngine._MARKDOWN_CODE.sub('', text)
+        text = TTSEngine._MARKDOWN_BLOCK_QUOTE.sub('', text)
+
+        # Strip emojis (they produce garbled output or unicode names in most TTS models)
+        text = TTSEngine._EMOJI_PATTERN.sub('', text)
+
+        # Replace common symbols with natural spoken equivalents
+        text = text.replace(' & ', ' and ')
+        text = re.sub(r'&', ' and ', text)
+        text = re.sub(r'\bw/o\b', 'without', text)
+        text = re.sub(r'\bw/\b', 'with', text)
+
+        # Reduce runs of repeated punctuation to a single mark (e.g. "!!!!" → "!")
+        text = TTSEngine._REPEATED_PUNCT.sub(r'\1', text)
+
+        # Normalise whitespace
+        text = re.sub(r' {2,}', ' ', text).strip()
+        return text
+
     def _expand_common_abbreviations(self, text: str) -> str:
         """Expand common abbreviations for better pronunciation."""
         abbrev_map = self._COMMON_ABBREVIATIONS
         return self._COMMON_ABBREV_PATTERN.sub(
+            lambda m: abbrev_map.get(m.group(0).lower(), m.group(0)), text
+        )
+
+    def _expand_gaming_abbreviations(self, text: str) -> str:
+        """Expand chat/gaming slang for clearer TTS pronunciation."""
+        abbrev_map = self._GAMING_ABBREVIATIONS
+        return self._GAMING_ABBREV_PATTERN.sub(
             lambda m: abbrev_map.get(m.group(0).lower(), m.group(0)), text
         )
     
@@ -602,7 +823,22 @@ class TTSEngine:
         
         return result
     
-    def _get_current_voice_language(self, voice: Optional[str] = None) -> str:
+    @staticmethod
+    def _normalize_language_code(language_code: Optional[str]) -> str:
+        """Normalize locale-like codes to the base number-formatting language."""
+        if not isinstance(language_code, str) or not language_code.strip():
+            return 'en'
+
+        normalized = language_code.strip().lower().replace('_', '-')
+        if normalized.startswith('zh-'):
+            return 'zh'
+        return normalized.split('-', 1)[0]
+
+    def _get_current_voice_language(
+        self,
+        voice: Optional[str] = None,
+        provider_name: Optional[str] = None,
+    ) -> str:
         """Get the language code from a voice ID.
         
         Args:
@@ -612,20 +848,33 @@ class TTSEngine:
             Language code (e.g., 'en', 'es', 'fr')
         """
         current_voice = voice
+        provider_name = provider_name or self._get_active_provider_name()
         if current_voice is None:
             try:
                 settings_manager = self._get_settings()
                 current_voice = settings_manager.get("voice", "en-US-AriaNeural")
             except Exception:
                 current_voice = "en-US-AriaNeural"
-        
-        # Extract language from voice short name
+
+        if provider_name == "coqui":
+            try:
+                settings_manager = self._get_settings()
+                return self._normalize_language_code(settings_manager.get("coqui_language", "en"))
+            except Exception:
+                return 'en'
+
+        if provider_name == "piper":
+            match = self._PIPER_VOICE_LANGUAGE.match(current_voice)
+            if match:
+                return self._normalize_language_code(match.group(1))
+            return 'en'
+
         if '-' in current_voice:
-            return current_voice.split('-')[0].lower()
-        
-        return 'en'  # Default to English
-    
-    def _add_natural_pauses(self, text: str) -> str:
+            return self._normalize_language_code(current_voice.split('-', 1)[0])
+
+        return 'en'
+
+    def _add_natural_pauses(self, text: str, provider_name: str = "edge") -> str:
         """
         Add natural pauses to improve speech flow.
         
@@ -633,19 +882,29 @@ class TTSEngine:
         The tags get spoken as plain text instead of being interpreted.
         This method now only handles text normalization without SSML injection.
         """
-        # Normalize multiple spaces to single space
-        text = re.sub(r' +', ' ', text)
-        
-        # Normalize multiple newlines to double newline (paragraph break)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        
-        # Ensure space after punctuation if followed by letter
-        text = re.sub(r'([.!?])([A-Za-z])', r'\1 \2', text)
-        
-        # Ensure space after comma if followed by letter
-        text = re.sub(r',([A-Za-z])', r', \1', text)
-        
-        return text
+        paragraphs = re.split(r'\n\s*\n+', text.strip())
+        processed_paragraphs = []
+
+        for paragraph in paragraphs:
+            chunk = re.sub(r'\s*\n\s*', ' ', paragraph.strip())
+            if not chunk:
+                continue
+
+            chunk = re.sub(r'\s*[—–]+\s*', ', ', chunk)
+            chunk = re.sub(r'\s*:\s*', ': ', chunk)
+            chunk = re.sub(r'\s*;\s*', '; ', chunk)
+            chunk = re.sub(r'\s*,\s*', ', ', chunk)
+            chunk = re.sub(r'\s+([,;:.!?…])', r'\1', chunk)
+            chunk = re.sub(r'([.!?…])([^\s])', r'\1 \2', chunk)
+            chunk = re.sub(r'([:;,])([^\s])', r'\1 \2', chunk)
+            chunk = re.sub(r' {2,}', ' ', chunk).strip()
+
+            if provider_name in {"piper", "coqui"} and chunk[-1] not in '.!?…':
+                chunk += '.'
+
+            processed_paragraphs.append(chunk)
+
+        return '\n\n'.join(processed_paragraphs)
     
     async def speak(
         self, 
@@ -685,7 +944,8 @@ class TTSEngine:
         pitch: int = 0,
         stop_event: Optional[threading.Event] = None,
         auto_select_voice: bool = False,
-        use_cache: bool = True
+        use_cache: bool = True,
+        provider_override: Optional[str] = None,
     ) -> Tuple[Optional[bytes], Optional[str]]:
         """
         Generate speech from text using the current provider.
@@ -699,6 +959,8 @@ class TTSEngine:
             stop_event: Optional event to signal cancellation
             auto_select_voice: If True, automatically select best voice for text language
             use_cache: If True, check cache before generating (default: True)
+            provider_override: Optional provider key for transient UI previews that
+                should use an unsaved provider selection without mutating settings.
             
         Returns:
             Tuple of (audio_data, error_message). 
@@ -718,10 +980,13 @@ class TTSEngine:
         rate = max(-100, min(100, rate))
         volume = max(0, min(100, volume))
         pitch = max(-100, min(100, pitch))
-        
-        # Get current provider
-        provider = self._get_current_provider()
-        
+
+        # Snapshot provider name once so that every step of this request
+        # (provider selection, cache lookup, and cache store) uses the same
+        # provider identity even if settings change mid-call.
+        provider_name = provider_override or self._get_active_provider_name()
+        provider = self._get_provider_by_name(provider_name)
+
         # Auto-select voice if requested and provider supports it
         actual_voice = voice
         
@@ -752,9 +1017,9 @@ class TTSEngine:
             pass
         
         # Validate voice before generation (cached); fall back to provider default if mismatched
-        if not await self.validate_voice(actual_voice):
+        if not await self.validate_voice(actual_voice, provider_name=provider_name):
             fallback = provider.get_default_voice()
-            if fallback and await self.validate_voice(fallback):
+            if fallback and await self.validate_voice(fallback, provider_name=provider_name):
                 logger.info(
                     "Voice '%s' is not valid for the current provider; "
                     "falling back to '%s'", actual_voice, fallback
@@ -764,7 +1029,7 @@ class TTSEngine:
                 # Invalidate the validation cache entry for the incompatible voice
                 # so it is re-checked if the provider changes later.
                 with self._voice_cache_lock:
-                    self._voice_cache.pop(invalid_voice, None)
+                    self._voice_cache.pop((provider_name, invalid_voice), None)
             else:
                 return None, (
                     f"Voice '{actual_voice}' is not available with the current TTS provider. "
@@ -772,11 +1037,22 @@ class TTSEngine:
                 )
         
         # Preprocess text for better quality and speed, passing actual_voice for language-aware number formatting
-        processed_text = await self.preprocess_text(text, actual_voice)
-        
+        processed_text = await self.preprocess_text(
+            text,
+            actual_voice,
+            provider_name=provider_name,
+        )
+
         # Check audio cache first
         if use_cache and self._audio_cache:
-            cached_audio = self._audio_cache.lookup(processed_text, actual_voice, rate, volume, pitch)
+            cached_audio = self._audio_cache.lookup(
+                processed_text,
+                actual_voice,
+                rate,
+                volume,
+                pitch,
+                provider=provider_name,
+            )
             if cached_audio:
                 logger.debug(f"Cache hit for text ({len(cached_audio)} bytes)")
                 return cached_audio, None
@@ -851,6 +1127,7 @@ class TTSEngine:
                     rate, 
                     volume, 
                     pitch,
+                    provider=provider_name,
                     generation_time=duration
                 )
             

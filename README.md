@@ -2,14 +2,14 @@
 
 # CriTTS Recoded
 
-A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS supports both **online** and **offline** TTS — it integrates Microsoft Edge's TTS engine (via edge-tts) for high-quality online speech and Piper TTS for fully offline, privacy-friendly synthesis. Audio can be routed to any output device, including virtual cables for Discord/VRChat integration.
+A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS supports both **online** and **offline** TTS — it integrates Microsoft Edge's TTS engine (via edge-tts) for high-quality online speech, Piper TTS for fast local synthesis, and Coqui XTTS v2 for higher-quality offline speech. Audio can be routed to any output device, including virtual cables for Discord/VRChat integration.
 
 ## Features
 
 ### Core TTS
 - **Free Online TTS Engine**: Uses Microsoft Edge's online TTS service (no API key required)
-- **Offline TTS Engine**: Uses [Piper TTS](https://github.com/rhasspy/piper) for fully local, privacy-friendly speech synthesis (no internet required after model download)
-- **100+ Voices**: Access to all Microsoft Edge voices plus a curated set of Piper voices in multiple languages
+- **Offline TTS Engines**: Choose [Piper TTS](https://github.com/rhasspy/piper) for fast local playback or Coqui XTTS v2 for higher-quality offline synthesis
+- **100+ Voices**: Access to all Microsoft Edge voices plus curated Piper and Coqui offline voices
 - **Voice Customization**: Adjust speech rate (-100 to +100), volume (0-100), and pitch (-100 to +100)
 - **Auto Language Detection**: Automatically detects text language and selects appropriate voice
 - **Custom Language Mappings**: Set preferred voices for each language
@@ -89,6 +89,7 @@ python main.py
 customtkinter
 edge-tts>=7.2.3
 piper-tts>=1.2.0
+coqui-tts[codec]>=0.27.5
 langid>=1.1.6
 sounddevice
 soundfile>=0.12.0
@@ -126,7 +127,6 @@ Access settings by clicking the "Settings" button or pressing `Ctrl+,`
 - Adjust rate, volume, and pitch
 - Preview voices before selecting
 - Manage favorite voices
-- Switch between **Edge TTS** (online) and **Piper TTS** (offline) in Settings → Voice → TTS Provider
 
 #### Audio Output Tab
 - Select output device
@@ -152,6 +152,10 @@ Access settings by clicking the "Settings" button or pressing `Ctrl+,`
 - Enable auto language detection
 - Set language-to-voice mappings
 
+#### Soundboard Tab
+- Map soundboard slots to local audio files
+- Enable or disable inline soundboard command parsing for tokens like `[1]`
+
 #### VRChat OSC Tab
 - Enable OSC integration
 - Configure chatbox settings
@@ -162,21 +166,31 @@ Access settings by clicking the "Settings" button or pressing `Ctrl+,`
 - Select processing profile
 - Enable streaming playback (experimental)
 
-## Offline TTS with Piper
+#### TTS Provider Tab
+- Switch between **Edge TTS (Online)**, **Piper TTS (Offline Fast)**, and **Coqui TTS (Offline High Quality)**
+- Review provider-specific capabilities before saving
+- Configure Coqui GPU selection and speech language when using Coqui TTS
 
-CriTTS includes built-in support for [Piper TTS](https://github.com/rhasspy/piper), a fast, local neural text-to-speech engine. Unlike Edge TTS, Piper runs entirely on your machine — no internet connection is needed once the voice model has been downloaded.
+## Offline TTS Providers
 
-### Switching to Piper
+CriTTS includes built-in support for both offline providers:
 
-1. Open **Settings → Voice**
-2. Change **TTS Provider** to **Piper**
-3. Choose a voice from the Piper voice list
+- [Piper TTS](https://github.com/rhasspy/piper) for fast, local neural text-to-speech with per-voice model downloads.
+- Coqui XTTS v2 for higher-quality offline synthesis with a larger first-use model download.
+
+### Switching Offline Providers
+
+1. Open **Settings → TTS Provider**
+2. Change **Active Provider** to **Piper TTS (Offline Fast)** or **Coqui TTS (Offline High Quality)**
+3. Choose a voice from the selected provider's voice list
 
 ### First-Use Model Download
 
 Piper voice models are downloaded automatically the first time they are used and cached in `~/.critts/piper_voices/`. Model files range from a few MB (x-low quality) to ~100 MB (high quality).
 
-While the model is downloading or loading, the **status bar** at the bottom of the main window shows a live indicator (e.g. `⬇️ Downloading Piper model: en_US-lessac-medium.onnx …`). Subsequent uses of the same voice are instant.
+Coqui XTTS v2 downloads a larger shared model on first use (about 1.8 GB) and then runs fully offline.
+
+While a model is downloading or loading, the **status bar** at the bottom of the main window shows a live indicator. Subsequent uses of the same model are instant.
 
 ### Available Piper Voices
 

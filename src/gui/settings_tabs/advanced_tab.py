@@ -9,8 +9,9 @@ from typing import Any, Callable, Optional, List, Dict
 from .base_tab import BaseTab
 from ..theme_constants import (
     FONT_XS, FONT_SM, FONT_MD, FONT_LG, FONT_XL, FONT_WEIGHT_BOLD,
-    BUTTON_HEIGHT_SM, BUTTON_WIDTH_DEFAULT,
+    BUTTON_HEIGHT, BUTTON_WIDTH_DEFAULT,
     COLOR_DANGER, COLOR_DANGER_HOVER,
+    SPACING_MD,
 )
 
 logger = logging.getLogger(__name__)
@@ -18,10 +19,16 @@ logger = logging.getLogger(__name__)
 
 class AdvancedTab(BaseTab):
     """Tab for advanced settings."""
+
+    def _load_data(self):
+        """Populate dynamic cache data during settings window refreshes."""
+        self._on_refresh_cache_stats()
     
     def _create_content(self):
         """Create the advanced tab content."""
         self.setup_layout()
+
+        surface_theme = self.get_active_surface_theme()
         
         # Main title
         ctk.CTkLabel(
@@ -30,46 +37,52 @@ class AdvancedTab(BaseTab):
             font=ctk.CTkFont(size=FONT_XL, weight=FONT_WEIGHT_BOLD)
         ).pack(anchor="w", pady=(10, 5))
         
-        advanced_desc_label = ctk.CTkLabel(
-            self.scroll,
+        advanced_desc_label = self.create_helper_text(
             text="Configure cache, performance, and experimental features. Changes take effect after saving.",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color="gray",
-            wraplength=550
+            parent=self.scroll,
         )
-        advanced_desc_label.pack(anchor="w", pady=(0, 15))
-        self.add_wraplength_label(advanced_desc_label)
+        advanced_desc_label.pack(anchor="w", pady=(0, SPACING_MD))
         
         # Cache Management Section
-        self._create_cache_section()
+        cache_section, cache_content = self.create_section_surface(
+            "Cache Management",
+            parent=self.scroll,
+            description="Audio cache stores generated speech to improve response times for repeated phrases.",
+        )
+        cache_section.pack(fill="x", pady=(0, SPACING_MD))
+        self._create_cache_section(cache_content, surface_theme)
         
         # Network Privacy Section
-        self._create_network_privacy_section()
+        privacy_section, privacy_content = self.create_section_surface(
+            "Network Privacy",
+            parent=self.scroll,
+            description="Route Text-to-Speech requests through a proxy to obfuscate your IP address from Microsoft servers.",
+        )
+        privacy_section.pack(fill="x", pady=(0, SPACING_MD))
+        self._create_network_privacy_section(privacy_content)
 
         # Performance Settings Section
-        self._create_performance_section()
+        performance_section, performance_content = self.create_section_surface(
+            "Performance Settings",
+            parent=self.scroll,
+        )
+        performance_section.pack(fill="x", pady=(0, SPACING_MD))
+        self._create_performance_section(performance_content)
         
         # Experimental Features Section
-        self._create_experimental_section()
-    
-    def _create_network_privacy_section(self):
-        """Create the network privacy settings section."""
-        self.create_section_header("Network Privacy").pack(anchor="w", pady=(10, 5))
-
-        privacy_desc_label = ctk.CTkLabel(
-            self.scroll,
-            text="Route Text-to-Speech requests through a proxy to obfuscate your IP address from Microsoft servers.",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color="gray",
-            wraplength=550
+        experimental_section, experimental_content = self.create_section_surface(
+            "Experimental Features",
+            parent=self.scroll,
         )
-        privacy_desc_label.pack(anchor="w", pady=(0, 10))
-        self.add_wraplength_label(privacy_desc_label)
-
+        experimental_section.pack(fill="x", pady=(0, SPACING_MD))
+        self._create_experimental_section(experimental_content)
+    
+    def _create_network_privacy_section(self, parent):
+        """Create the network privacy settings section."""
         # Enable proxy checkbox
         self.proxy_enabled_var = ctk.BooleanVar(value=self.settings.get("proxy_enabled", False))
         self.proxy_enabled_check = ctk.CTkCheckBox(
-            self.scroll,
+            parent,
             text="Enable Proxy for TTS requests",
             variable=self.proxy_enabled_var,
             font=ctk.CTkFont(size=FONT_MD),
@@ -78,7 +91,7 @@ class AdvancedTab(BaseTab):
         self.proxy_enabled_check.pack(anchor="w", pady=5)
 
         # Proxy settings frame (to be toggled)
-        self.proxy_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.proxy_frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.proxy_frame.pack(fill="x", pady=5)
 
         # Proxy Type
@@ -167,8 +180,6 @@ class AdvancedTab(BaseTab):
         )
         self.proxy_password_entry.pack(side="left", padx=5)
 
-        self.create_separator(self.scroll).pack(fill="x", pady=15)
-
         # Initial state update
         self._on_proxy_toggle()
 
@@ -180,32 +191,22 @@ class AdvancedTab(BaseTab):
         self.proxy_username_entry.configure(state=state)
         self.proxy_password_entry.configure(state=state)
 
-    def _create_cache_section(self):
+    def _create_cache_section(self, parent, surface_theme):
         """Create the cache management section."""
-        self.create_section_header("Cache Management").pack(anchor="w", pady=(10, 5))
-        
-        cache_desc_label = ctk.CTkLabel(
-            self.scroll,
-            text="Audio cache stores generated speech to improve response times for repeated phrases.",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color="gray",
-            wraplength=550
-        )
-        cache_desc_label.pack(anchor="w", pady=(0, 10))
-        self.add_wraplength_label(cache_desc_label)
-        
         # Cache statistics display
         self.cache_stats_text = ctk.CTkTextbox(
-            self.scroll,
+            parent,
             font=ctk.CTkFont(size=FONT_SM),
             height=120,
             wrap="word",
-            state="disabled"
+            state="disabled",
+            fg_color=surface_theme["pane_fg"],
+            text_color=surface_theme["text_primary"],
         )
         self.cache_stats_text.pack(fill="x", pady=5)
         
         # Cache buttons frame
-        cache_buttons_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        cache_buttons_frame = ctk.CTkFrame(parent, fg_color="transparent")
         cache_buttons_frame.pack(fill="x", pady=10)
         
         self.clear_cache_button = ctk.CTkButton(
@@ -213,8 +214,8 @@ class AdvancedTab(BaseTab):
             text="Clear Audio Cache",
             font=ctk.CTkFont(size=FONT_SM),
             command=self._on_clear_cache,
-            width=140,
-            height=BUTTON_HEIGHT_SM,
+            width=BUTTON_WIDTH_DEFAULT,
+            height=BUTTON_HEIGHT,
             fg_color=COLOR_DANGER,
             hover_color=COLOR_DANGER_HOVER
         )
@@ -225,15 +226,15 @@ class AdvancedTab(BaseTab):
             text="Refresh Statistics",
             font=ctk.CTkFont(size=FONT_SM),
             command=self._on_refresh_cache_stats,
-            width=140,
-            height=BUTTON_HEIGHT_SM
+            width=BUTTON_WIDTH_DEFAULT,
+            height=BUTTON_HEIGHT
         )
         self.refresh_stats_button.pack(side="left", padx=5)
         
         # Cache enabled checkbox
         self.cache_enabled_var = ctk.BooleanVar(value=self.settings.get("audio_cache_enabled", True))
         self.cache_enabled_check = ctk.CTkCheckBox(
-            self.scroll,
+            parent,
             text="Enable audio cache",
             variable=self.cache_enabled_var,
             font=ctk.CTkFont(size=FONT_MD)
@@ -242,12 +243,12 @@ class AdvancedTab(BaseTab):
         
         # Max cache size slider
         ctk.CTkLabel(
-            self.scroll,
+            parent,
             text="Maximum Cache Size:",
             font=ctk.CTkFont(size=FONT_MD)
         ).pack(anchor="w", pady=(10, 5))
         
-        cache_size_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        cache_size_frame = ctk.CTkFrame(parent, fg_color="transparent")
         cache_size_frame.pack(fill="x", pady=5)
         
         self.cache_max_size_var = ctk.IntVar(value=self.settings.get("audio_cache_max_size_mb", 500))
@@ -270,22 +271,19 @@ class AdvancedTab(BaseTab):
         )
         self.cache_size_value_label.pack(side="right", padx=5)
         
-        self.create_separator(self.scroll).pack(fill="x", pady=15)
-    
-    def _create_performance_section(self):
+
+    def _create_performance_section(self, parent):
         """Create the performance settings section."""
-        self.create_section_header("Performance Settings").pack(anchor="w", pady=(10, 5))
-        
         # Processing profile dropdown
         ctk.CTkLabel(
-            self.scroll,
+            parent,
             text="Processing Profile:",
             font=ctk.CTkFont(size=FONT_MD)
         ).pack(anchor="w", pady=(10, 5))
         
         self.processing_profile_var = ctk.StringVar(value=self.settings.get("processing_profile", "balanced"))
         self.processing_profile_dropdown = ctk.CTkComboBox(
-            self.scroll,
+            parent,
             variable=self.processing_profile_var,
             values=["fast_preview", "balanced", "high_quality"],
             font=ctk.CTkFont(size=FONT_SM),
@@ -294,21 +292,20 @@ class AdvancedTab(BaseTab):
         )
         self.processing_profile_dropdown.pack(anchor="w", pady=5)
         
-        ctk.CTkLabel(
-            self.scroll,
-            text="Fast Preview: No resampling, no stereo enhancement | Balanced: 48 kHz resampling, moderate stereo enhancement | High Quality: 48 kHz resampling, maximum stereo enhancement",
-            font=ctk.CTkFont(size=FONT_XS),
-            text_color="gray"
+        self.create_helper_text(
+            text="Fast Preview: No resampling, no stereo enhancement | Balanced: 48 kHz resampling with subtle speech-friendly stereo | High Quality: 48 kHz resampling with gentle stereo enhancement",
+            parent=parent,
+            font_size=FONT_XS,
         ).pack(anchor="w", pady=(0, 10))
         
         # Text cache size
         ctk.CTkLabel(
-            self.scroll,
+            parent,
             text="Text Cache Size:",
             font=ctk.CTkFont(size=FONT_MD)
         ).pack(anchor="w", pady=(10, 5))
         
-        text_cache_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        text_cache_frame = ctk.CTkFrame(parent, fg_color="transparent")
         text_cache_frame.pack(fill="x", pady=5)
         
         self.text_cache_size_var = ctk.StringVar(value=str(self.settings.get("text_cache_size", 1000)))
@@ -320,48 +317,35 @@ class AdvancedTab(BaseTab):
         )
         self.text_cache_entry.pack(side="left", padx=5)
         
-        ctk.CTkLabel(
-            text_cache_frame,
+        self.create_helper_text(
             text="Number of processed text entries to cache (100-10000)",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color="gray"
+            parent=text_cache_frame,
         ).pack(side="left", padx=5)
-        
-        self.create_separator(self.scroll).pack(fill="x", pady=15)
-    
-    def _create_experimental_section(self):
+
+    def _create_experimental_section(self, parent):
         """Create the experimental features section."""
-        self.create_section_header("Experimental Features").pack(anchor="w", pady=(10, 5))
-        
-        experimental_warning_label = ctk.CTkLabel(
-            self.scroll,
-            text="⚠️ Experimental features may be unstable or change in future versions.",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color="orange",
-            wraplength=550
+        experimental_warning_label = self.create_helper_text(
+            text="⚠ Experimental features may be unstable or change in future versions.",
+            parent=parent,
         )
         experimental_warning_label.pack(anchor="w", pady=(0, 10))
-        self.add_wraplength_label(experimental_warning_label)
         
         # Streaming playback checkbox
         self.streaming_playback_var = ctk.BooleanVar(value=self.settings.get("enable_streaming_playback", False))
         self.streaming_playback_check = ctk.CTkCheckBox(
-            self.scroll,
+            parent,
             text="Enable Streaming Playback (Experimental)",
             variable=self.streaming_playback_var,
             font=ctk.CTkFont(size=FONT_MD)
         )
         self.streaming_playback_check.pack(anchor="w", pady=5)
         
-        streaming_desc_label = ctk.CTkLabel(
-            self.scroll,
+        streaming_desc_label = self.create_helper_text(
             text="Starts playing audio as soon as the first chunks arrive from Edge TTS, reducing the delay before you hear speech. Best for longer text. Note: Audio normalization and viseme sync use estimated timing in streaming mode.",
-            font=ctk.CTkFont(size=FONT_XS),
-            text_color="gray",
-            wraplength=550
+            parent=parent,
+            font_size=FONT_XS,
         )
         streaming_desc_label.pack(anchor="w", pady=(0, 10))
-        self.add_wraplength_label(streaming_desc_label)
     
     def _on_clear_cache(self):
         """Clear the audio cache with user confirmation."""

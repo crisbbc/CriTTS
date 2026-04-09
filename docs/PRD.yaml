@@ -1,0 +1,154 @@
+prd_id: PRD-PERFORMANCE-OPTIMIZATION-WAVE-1-20260406
+version: 1.1.0
+
+user_stories:
+  - as_a: CriTTS User
+    i_want: typing, voice switching, and playback to stay responsive
+    so_that: the desktop app feels fast even during normal editing and preview use
+  - as_a: Offline TTS User
+    i_want: selecting Coqui or Piper providers to avoid unnecessary idle memory growth
+    so_that: the app does not consume multi-gigabyte RAM before I actually synthesize speech
+  - as_a: Maintainer
+    i_want: performance fixes to target lazy loading, bounded caches, and UI-thread hot paths first
+    so_that: we can deliver high-impact optimization without changing user-facing behavior
+  - as_a: QA Reviewer
+    i_want: optimization work to be measurable and behavior-preserving
+    so_that: regressions are easy to detect before release
+  - as_a: CriTTS User
+    i_want: the settings window to visually match the main window more closely
+    so_that: configuration screens feel cohesive without relearning the interface
+  - as_a: Maintainer
+    i_want: settings modernization to stay limited to styling alignment
+    so_that: we can improve polish across all tabs without changing navigation, content, or section order
+
+scope:
+  in_scope:
+    - Remove eager Coqui XTTS v2 preload behavior triggered by provider selection and shift heavyweight model residency to explicit demand paths only
+    - Lazy-load heavyweight TTS provider imports and construction during startup so the app does not pay Coqui/Piper initialization cost before use
+    - "Add bounded eviction or unload behavior for Piper in-memory voice models instead of unbounded `_loaded_models` growth"
+    - Move full-text language detection and voice-indicator recomputation off the hot key-edit path, keeping updates debounced and behaviorally equivalent
+    - Reduce per-keystroke UI work in the text editor by replacing full-tag current-line updates with incremental updates limited to the affected line/cursor change
+    - Remove redundant playback decoding and large-array duplication in viseme/amplitude paths when audio duration or amplitude data can be derived from already processed buffers
+    - Add lightweight profiling/verification around startup RSS, idle RSS by provider state, typing responsiveness, and playback overhead
+    - Align all settings tabs and section containers to the main window's visual system using mostly matching card-style sections, spacing tokens, and surface colors
+    - Keep existing settings content, tab set, tab order, and section order stable while applying subtle, clean styling updates across the settings window
+  out_of_scope:
+    - Redesigning the UI layout or changing visible workflows for speaking, provider switching, or settings management
+    - Rewriting settings navigation, renaming tabs, or reordering tab and section content
+    - Adding new settings controls or removing existing copy purely for the settings modernization work
+    - Replacing Coqui XTTS v2, Piper, Edge TTS, or the current audio stack with different vendors or frameworks
+    - New user-facing settings unless required to preserve existing behavior during optimization rollout
+    - Large architectural rewrites, multiprocessing redesigns, or speculative optimizations outside the identified hot paths
+
+acceptance_criteria:
+  - criterion: AC-001 Coqui model loading becomes demand-driven
+    verification: Selecting the Coqui provider in settings no longer starts XTTS v2 preload automatically, and the model is loaded only from explicit synthesis or an intentional warm-up path while preserving existing first-use status feedback
+  - criterion: AC-002 Startup avoids unnecessary heavyweight provider cost
+    verification: "`main.py` and `src/tts/tts_engine.py` no longer eagerly import and construct heavyweight offline-provider dependencies before they are needed, and profiling shows lower startup/import memory than the current baseline"
+  - criterion: AC-003 Piper memory usage is bounded
+    verification: "`PiperTTSProvider` no longer keeps an unbounded in-memory `_loaded_models` cache, and inactive voice models can be evicted or unloaded without breaking subsequent synthesis"
+  - criterion: AC-004 Typing stays off expensive UI-thread full-text work
+    verification: key editing no longer performs synchronous full-text language detection, full voice-indicator recomputation, or whole-document current-line retagging on every key release, while indicator and highlight behavior remain functionally correct
+  - criterion: AC-005 Playback no longer decodes the same audio twice for one segment
+    verification: viseme timing, duration lookup, playback, and amplitude analysis reuse a single decoded/processed representation per segment where possible, avoiding redundant full-buffer decode/copy work
+  - criterion: AC-006 Behavior is preserved
+    verification: existing user-visible behavior for provider switching, voice indication, playback, visemes, amplitude updates, and offline synthesis output remains unchanged aside from improved responsiveness and lower memory use
+  - criterion: AC-007 Settings styling aligns with the main window
+    verification: all settings tabs use section containers and surface treatment that mostly match the main window's card-style presentation, spacing rhythm, and surface colors
+  - criterion: AC-008 Settings structure stays stable
+    verification: tab names, tab order, section ordering, and existing control content remain unchanged after the styling update
+  - criterion: AC-009 Styling remains subtle and clean
+    verification: the settings window adopts a restrained visual refresh that feels close to the main window without introducing louder accent usage, dense chrome, or distracting decorative elements
+  - criterion: AC-010 Styling applies consistently across tabs
+    verification: Voice, Audio Output, Appearance, Abbreviations, Keybinds, Behavior, Soundboard, VRChat OSC, Advanced, and TTS Provider tabs all receive the same settings-surface alignment treatment for their section containers
+
+needs_clarification: []
+
+features:
+  - name: Lazy Offline Provider Loading
+    overview: Defer heavyweight Coqui and related offline-provider imports, construction, and model residency until the user actually needs synthesis work from that provider.
+    status: active
+  - name: Bounded Offline Model Caching
+    overview: Replace unbounded offline model residency with explicit cache limits or eviction behavior, starting with Piper voice models and Coqui preload removal.
+    status: active
+  - name: Responsive Text Editing Path
+    overview: Remove full-text language and tagging work from hot UI-thread key events while keeping voice indicator and current-line highlighting behavior intact.
+    status: active
+  - name: Playback Fast Path Cleanup
+    overview: Reuse decoded audio buffers for duration, playback, viseme timing, and amplitude work to cut redundant CPU and memory overhead.
+    status: active
+  - name: Settings Surface Alignment
+    overview: Refresh the settings window so every tab uses subtle main-window-aligned card sections, spacing, and surface colors without changing navigation or content structure.
+    status: active
+
+state_machines:
+  - name: OfflineProviderMemoryLifecycle
+    states:
+      - unloaded
+      - lazily_initialized
+      - active_model_loaded
+      - evicted
+    transitions:
+      - from: unloaded
+        to: lazily_initialized
+        trigger: User selects or invokes a provider path that requires provider instantiation but not full model residency
+      - from: lazily_initialized
+        to: active_model_loaded
+        trigger: User requests synthesis or explicit warm-up that requires the provider model in memory
+      - from: active_model_loaded
+        to: evicted
+        trigger: Cache policy or provider switch unloads an inactive model to recover memory
+  - name: TextAnalysisUpdateFlow
+    states:
+      - idle
+      - editing
+      - debounced
+      - ui_updated
+    transitions:
+      - from: idle
+        to: editing
+        trigger: User changes text input
+      - from: editing
+        to: debounced
+        trigger: Hot-path handler schedules deferred analysis instead of running full-text work immediately
+      - from: debounced
+        to: ui_updated
+        trigger: Deferred analysis completes and updates indicator/highlight state
+
+errors:
+  - code: ERR_PERF_MEM_001
+    message: Coqui XTTS v2 is still eagerly preloaded or kept resident before explicit synthesis demand.
+  - code: ERR_PERF_MEM_002
+    message: Piper voice-model memory cache can still grow without bounded eviction.
+  - code: ERR_PERF_UI_001
+    message: Key editing still performs expensive full-text analysis or whole-document tagging on the UI thread.
+  - code: ERR_PERF_AUDIO_001
+    message: Playback still decodes or copies full audio buffers redundantly for duration, viseme, or amplitude processing.
+  - code: ERR_PERF_VERIFY_001
+    message: Optimization changes alter user-visible provider, playback, or voice-indicator behavior instead of preserving it.
+  - code: ERR_SETTINGS_UI_001
+    message: Settings tabs still use inconsistent section styling, spacing, or surface colors instead of the shared main-window-aligned treatment.
+  - code: ERR_SETTINGS_UI_002
+    message: Settings modernization changed tab navigation, content order, or visible controls instead of limiting the work to style alignment.
+
+decisions:
+  - decision: Prioritize low-risk lazy loading and hot-path reductions over architectural rewrites.
+    rationale: The reported issues are concentrated in model residency, eager initialization, and synchronous UI-thread work, so targeted changes provide the highest impact with the lowest regression risk.
+  - decision: Coqui provider selection should not imply immediate XTTS v2 residency.
+    rationale: README-documented XTTS v2 size is about 1.8 GB, so auto-preloading on selection is the strongest avoidable RAM spike and is not required to preserve the visible workflow.
+  - decision: Offline model caches must be bounded.
+    rationale: "Piper currently retains loaded voices indefinitely in `_loaded_models`, which turns normal voice exploration into cumulative memory growth."
+  - decision: Text-edit handlers should schedule or reuse analysis rather than recompute full-text state synchronously.
+    rationale: Voice-indicator updates and current-line highlighting are user-feedback features, not work that must block every keystroke.
+  - decision: Playback paths should reuse decoded buffers for downstream consumers.
+    rationale: Pre-playback duration checks and amplitude analysis currently add avoidable decode/copy overhead that can be removed without changing output behavior.
+  - decision: Settings modernization is a style-alignment pass, not a navigation rewrite.
+    rationale: The discuss phase explicitly constrained the work to card-style sections, spacing, and surface-color alignment, so preserving tab/content order keeps regression risk low while improving visual cohesion.
+  - decision: The settings window should stay visually close to the main window with subtle treatment.
+    rationale: Matching the main window's quieter card surfaces and spacing system improves consistency without making settings feel like a separate redesign.
+
+changes:
+  - version: 1.0.0
+    change: Created the initial performance optimization PRD focused on lazy offline-provider loading, bounded model caching, UI-thread hot-path reduction, and playback fast-path cleanup while preserving existing user-facing behavior.
+  - version: 1.1.0
+    change: Added plan settings-modernize-20260409 to capture a settings-window style-alignment pass across all tabs and section containers using main-window-like card surfaces, spacing, and subtle visual treatment while keeping navigation and content order unchanged.

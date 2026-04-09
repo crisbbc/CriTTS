@@ -1,0 +1,256 @@
+plan_id: cache-display-scope-20260409
+objective: Fix cache statistics so they render without a manual refresh, and scope cached speech per provider and voice so identical phrases do not reuse audio across incompatible TTS configurations.
+created_at: 2026-04-09T00:00:00Z
+created_by: github-copilot-planner
+status: pending
+research_confidence: high
+
+plan_metrics:
+  wave_1_task_count: 2
+  total_dependencies: 2
+  risk_score: medium
+
+tldr: |
+  Two localized fixes are needed.
+  First, the Advanced settings cache panel needs an initial data-load hook so stats appear when the window opens instead of only after pressing Refresh.
+  Second, audio cache identity must include the active provider as well as the resolved voice so the same phrase does not reuse cached audio across different providers or voice selections.
+  docs/PRD.yaml exists but currently describes an earlier performance-optimization effort rather than this cache bugfix, and no root AGENTS.md was found during planning.
+
+acceptance_criteria:
+  - id: AC-1
+    description: Opening Settings shows populated cache statistics in the Advanced tab without requiring the Refresh Statistics button.
+  - id: AC-2
+    description: Clearing cache or reopening Settings keeps the Advanced cache display synchronized with the current cache state.
+  - id: AC-3
+    description: Speaking the same phrase with a different TTS provider does not return cached audio created under another provider.
+  - id: AC-4
+    description: Speaking the same phrase with a different voice under the same provider does not return cached audio created for another voice.
+  - id: AC-5
+    description: Existing cache behavior for same text plus same provider plus same voice remains intact, and focused regression tests cover the UI and cache-scoping paths.
+
+open_questions: []
+
+pre_mortem:
+  overall_risk_level: medium
+  critical_failure_modes:
+    - scenario: The Advanced tab refresh hook runs before its widgets exist and leaves the settings window blank or throws during startup.
+      likelihood: medium
+      impact: medium
+      mitigation: Trigger the first stats refresh only after AdvancedTab content is built, and cover the initialization path with a focused SettingsWindow/AdvancedTab regression test.
+    - scenario: Provider-aware cache changes keep reusing old provider-agnostic disk entries and still surface stale audio for the wrong provider or voice.
+      likelihood: medium
+      impact: high
+      mitigation: Version the cache key/index format, thread provider identity through lookup/store paths, and add regression tests that prove cross-provider and cross-voice requests miss while same-provider same-voice requests still hit.
+  assumptions:
+    - The user request is the source of truth for this bugfix because docs/PRD.yaml does not describe the cache-display or cache-scoping issue.
+    - The safest migration path is to invalidate or segregate provider-agnostic cache keys rather than attempting a lossy on-disk migration.
+    - The fix should remain localized to settings UI refresh flow, TTSEngine cache calls, and AudioCache persistence behavior.
+
+implementation_specification:
+  code_structure: Keep the change narrow. Use the existing SettingsWindow-to-tab refresh pattern for the cache display, and extend the current TTSEngine-to-AudioCache contract so cache identity is keyed by normalized text, resolved voice, active provider, and synthesis modifiers. Preserve current UI layout and current cache-management controls.
+  affected_areas:
+    - src/gui/settings_window.py
+    - src/gui/settings_tabs/advanced_tab.py
+    - src/tts/tts_engine.py
+    - src/tts/audio_cache.py
+    - tests/test_voice_tab_provider_reload.py
+    - tests/test_tts_engine_cache.py
+  component_details:
+    - component: Advanced cache statistics panel
+      responsibility: Populate the cache statistics textbox when the settings experience initializes and after explicit cache-management actions, without requiring a manual refresh click.
+      interfaces:
+        - "SettingsWindow._on_refresh()"
+        - "AdvancedTab._on_refresh_cache_stats()"
+        - "AdvancedTab optional tab-level load hook"
+    - component: Provider-aware audio cache identity
+      responsibility: Ensure cached audio lookup, storage, and any related phrase-cache bookkeeping distinguish entries by provider and voice so only compatible speech is reused.
+      interfaces:
+        - "AudioCache.lookup(...)"
+        - "AudioCache.store(...)"
+        - "AudioCache._generate_key(...)"
+        - "TTSEngine.generate_speech(...)"
+        - "TTSEngine.pregenerate_common_phrases(...)"
+  dependencies:
+    - component: Advanced cache statistics panel
+      relationship: Reads current cache statistics from TTSEngine and depends on SettingsWindow calling the tab refresh hook after tab creation.
+    - component: Provider-aware audio cache identity
+      relationship: Receives the active provider from TTSEngine and persists provider-scoped metadata inside AudioCache.
+  integration_points:
+    - SettingsWindow initialization and refresh flow
+    - AdvancedTab cache statistics textbox and clear-cache button flow
+    - TTSEngine generate_speech cache lookup/store path
+    - TTSEngine pre-generation path for common phrases
+    - Existing pytest suites for settings-window reload behavior and TTS engine cache behavior
+
+contracts:
+  - from_task: cache-display-initial-load
+    to_task: cache-bugfix-verification
+    interface: Opening Settings or clearing cache yields an already-populated Advanced cache statistics textbox that reflects current engine state without a manual button press.
+    format: CustomTkinter settings-window lifecycle plus focused pytest assertions
+  - from_task: cache-provider-voice-scoping
+    to_task: cache-bugfix-verification
+    interface: Cache lookup/store only hits when text, active provider, resolved voice, and synthesis modifiers all match; cross-provider or cross-voice reuse must miss.
+    format: Python cache-contract regression tests and cache-version invariant
+
+tasks:
+  - id: cache-display-initial-load
+    title: Populate cache statistics when the settings UI opens
+    description: |
+      Add a tab refresh path so the Advanced cache statistics textbox is filled as part of the settings-window lifecycle instead of waiting for the manual Refresh Statistics button.
+      Keep the fix limited to the existing SettingsWindow and AdvancedTab interaction pattern, and preserve the current clear-cache follow-up refresh behavior.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers: [AC-1, AC-2]
+    priority: medium
+    status: pending
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: src/gui/settings_window.py
+        description: Builds all tabs, calls _on_refresh(), and already routes clear-cache follow-up refreshes to AdvancedTab.
+      - path: src/gui/settings_tabs/advanced_tab.py
+        description: Owns the cache statistics textbox and _on_refresh_cache_stats() but currently lacks an initialization-time load hook.
+      - path: tests/test_voice_tab_provider_reload.py
+        description: Existing lightweight settings-window regression tests can be extended for cache-display initialization.
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: The cache display bug is most likely an initialization gap, and it can be fixed without widening scope beyond the settings UI refresh flow.
+        timestamp: 2026-04-09T00:00:00Z
+        estimated_effort: small
+        estimated_files: 3
+        estimated_lines: 120
+        focus_area: settings cache UI
+        verification:
+          - Run: python -m pytest -q tests/test_voice_tab_provider_reload.py
+          - Manually open Settings > Advanced and confirm cache stats are present before pressing Refresh Statistics.
+          - Clear the audio cache from Settings and confirm the textbox updates immediately afterward.
+        acceptance_criteria:
+          - Settings initialization triggers one safe cache-stats refresh after AdvancedTab widgets exist.
+          - The Advanced tab shows non-empty cache statistics text when TTSEngine is available.
+          - Existing clear-cache refresh behavior still works after the initialization change.
+        failure_modes:
+          - scenario: The refresh hook fires before the textbox exists and raises during settings-window creation.
+            likelihood: medium
+            impact: medium
+            mitigation: Invoke the hook after tab construction or via a tab-specific load method, and regression-test the init sequence headlessly.
+          - scenario: The initialization hook overwrites later manual refresh or clear-cache behavior with stale values.
+            likelihood: low
+            impact: medium
+            mitigation: Reuse the same _on_refresh_cache_stats() method for both initial load and follow-up actions so there is only one rendering path.
+    tech_stack:
+      - Python
+      - customtkinter
+    test_coverage: Extend the existing settings-window regression test module with a focused cache-stat initialization assertion.
+
+  - id: cache-provider-voice-scoping
+    title: Scope cached speech by provider and resolved voice
+    description: |
+      Update the audio-cache contract so identical text only reuses audio when the active provider, resolved voice, and synthesis modifiers match the request.
+      Treat this as a cache-identity fix rather than a feature change: preserve same-provider same-voice hits, but prevent cross-provider and cross-voice reuse by threading provider identity through TTSEngine and AudioCache and by invalidating old provider-agnostic cache keys safely.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers: [AC-3, AC-4, AC-5]
+    priority: high
+    status: pending
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: src/tts/tts_engine.py
+        description: Owns active-provider resolution and currently calls AudioCache.lookup/store with processed text and resolved voice only.
+      - path: src/tts/audio_cache.py
+        description: Generates disk cache keys from text, voice, rate, volume, and pitch, and persists the cache index/version.
+      - path: tests/test_tts_engine_cache.py
+        description: Existing cache-oriented TTSEngine regressions are the right home for provider/voice cache-scope coverage.
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: The wrong-audio bug is rooted in cache identity and must be fixed where TTSEngine and AudioCache decide whether a request is a hit or miss.
+        timestamp: 2026-04-09T00:00:00Z
+        estimated_effort: medium
+        estimated_files: 3
+        estimated_lines: 220
+        focus_area: audio cache identity
+        verification:
+          - Run: python -m pytest -q tests/test_tts_engine_cache.py
+          - Verify same text plus same provider plus same voice still returns a cache hit.
+          - Verify same text with a different provider or a different voice returns a cache miss and stores a separate entry.
+        acceptance_criteria:
+          - AudioCache keys and persisted metadata include provider identity in addition to text, voice, and synthesis modifiers.
+          - TTSEngine passes the active provider consistently to cache lookup/store paths.
+          - Old provider-agnostic cache entries cannot satisfy new provider-aware lookups.
+          - Focused regression tests cover same-provider hit, cross-provider miss, and cross-voice miss behavior.
+        failure_modes:
+          - scenario: The provider used for lookup differs from the provider used for storage and causes duplicate or unreachable entries.
+            likelihood: medium
+            impact: high
+            mitigation: Resolve provider once per generation request inside TTSEngine and pass the same value through both lookup and store.
+          - scenario: Cache-version handling leaves old disk entries visible and the bug survives after upgrade.
+            likelihood: medium
+            impact: high
+            mitigation: Bump cache version or segregate keys so provider-aware code never matches provider-agnostic entries, and cover the behavior with cache regression tests.
+          - scenario: Ancillary phrase pre-generation logic still groups phrases too broadly and reintroduces mixed-provider reuse later.
+            likelihood: low
+            impact: medium
+            mitigation: Review phrase-tracking and pre-generation touchpoints in the same task and update their identity model if they rely on the old provider-agnostic cache contract.
+    tech_stack:
+      - Python
+      - json
+      - hashlib
+    test_coverage: Extend the TTS engine cache suite with provider-aware and voice-aware audio-cache regression cases.
+
+  - id: cache-bugfix-verification
+    title: Verify settings cache display and provider-scoped audio reuse
+    description: |
+      Run the focused regression gate for this bugfix after both implementation tasks land.
+      Confirm the settings UI shows cache stats immediately, and confirm cache reuse only occurs for matching text, provider, and voice combinations.
+    wave: 2
+    agent: gem-reviewer
+    prototype: false
+    covers: [AC-1, AC-2, AC-3, AC-4, AC-5]
+    priority: medium
+    status: pending
+    dependencies:
+      - cache-display-initial-load
+      - cache-provider-voice-scoping
+    conflicts_with: []
+    context_files:
+      - path: src/gui/settings_tabs/advanced_tab.py
+        description: Final cache-stat rendering behavior to verify on settings open and after clear-cache actions.
+      - path: src/tts/audio_cache.py
+        description: Final provider-aware cache key/version behavior to verify.
+      - path: tests/test_voice_tab_provider_reload.py
+        description: Focused UI regression coverage for settings-window behavior.
+      - path: tests/test_tts_engine_cache.py
+        description: Focused engine/cache regression coverage for audio reuse boundaries.
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: This bugfix is small enough to validate with a targeted regression gate rather than a broad full-suite pass.
+        timestamp: 2026-04-09T00:00:00Z
+        estimated_effort: small
+        estimated_files: 0
+        estimated_lines: 0
+        focus_area: cache bugfix verification
+        verification:
+          - Run: python -m pytest -q tests/test_voice_tab_provider_reload.py tests/test_tts_engine_cache.py
+          - Manual smoke: open Settings > Advanced and confirm cache stats render immediately.
+          - Manual smoke: speak one phrase twice with the same provider and voice to confirm a cache hit path still works, then repeat with a different provider and a different voice to confirm no stale audio is reused.
+        acceptance_criteria:
+          - Focused regression tests covering settings initialization and audio-cache scoping pass.
+          - Manual smoke confirms the cache stats textbox is populated without a manual refresh.
+          - Manual smoke confirms cached audio is isolated per provider and per voice for identical text.
+        failure_modes:
+          - scenario: Tests pass but the UI still appears blank in the real settings flow because the init hook timing differs from the mocked test path.
+            likelihood: low
+            impact: medium
+            mitigation: Require a manual Settings-window smoke check in addition to the focused pytest module.
+          - scenario: Same-provider cache reuse regresses while fixing cross-provider isolation.
+            likelihood: low
+            impact: medium
+            mitigation: Include an explicit same-provider same-voice hit assertion in the focused regression suite and smoke test.
+    requires_review: true
+    review_depth: standard
+    review_security_sensitive: false

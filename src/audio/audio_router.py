@@ -5,6 +5,7 @@ Handles audio device enumeration and routing audio to specific output devices.
 import threading
 import queue
 import re
+from dataclasses import dataclass
 import sounddevice as sd
 import numpy as np
 import io
@@ -20,6 +21,21 @@ try:
     import pyloudnorm as pyln
 except ImportError:
     pyln = None
+
+
+@dataclass(frozen=True)
+class PreparedAudioPayload:
+    """Processed non-streaming audio ready for duration lookup and playback."""
+
+    data: np.ndarray
+    sample_rate: int
+
+    @property
+    def duration_seconds(self) -> float:
+        """Return payload duration in seconds."""
+        if self.sample_rate <= 0 or self.data.size == 0:
+            return 0.0
+        return len(self.data) / self.sample_rate
 
 
 
@@ -274,16 +290,61 @@ class AudioRouter:
             "balanced": {
                 "sample_rate": 48000,
                 "kaiser_beta": 5.0,
-                "stereo_width": 0.3,
+                "stereo_width": 0.15,
             },
             "high_quality": {
                 "sample_rate": 48000,
                 "kaiser_beta": 8.0,   # Higher quality anti-aliasing
-                "stereo_width": 0.5,  # More stereo enhancement
+                "stereo_width": 0.25,  # Gentle stereo enhancement for speech
             }
         }
 
         return profiles.get(profile, profiles["balanced"])
+
+    def _resolve_playback_settings(
+        self,
+        enable_normalization: bool,
+        normalization_type: str,
+        processing_profile: str,
+    ) -> Tuple[Optional[int], float, float, str]:
+        """Resolve the shared playback configuration for non-streaming audio."""
+        profile_settings = self._get_profile_settings(processing_profile)
+        target_sr = profile_settings["sample_rate"]
+        kaiser_beta = profile_settings["kaiser_beta"]
+        stereo_width = profile_settings["stereo_width"]
+        norm_type = normalization_type if enable_normalization else "None"
+        return target_sr, kaiser_beta, stereo_width, norm_type
+
+    def _process_playback_audio(
+        self,
+        data: np.ndarray,
+        sample_rate: int,
+        target_sample_rate: Optional[int],
+        kaiser_beta: float,
+        norm_type: str,
+        enable_clarity_eq: bool,
+        stereo_width: float,
+    ) -> Tuple[np.ndarray, int]:
+        """Apply the shared speech-friendly playback processing pipeline."""
+        if target_sample_rate is not None and sample_rate != target_sample_rate:
+            data = self._resample_high_quality(data, sample_rate, target_sample_rate, kaiser_beta)
+            effective_sr = target_sample_rate
+        else:
+            effective_sr = sample_rate
+
+        if norm_type != "None" and len(data) > 0:
+            data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
+
+        if enable_clarity_eq and len(data) > 0:
+            data = self._apply_clarity_eq(data, effective_sr)
+
+        if len(data.shape) == 1 and stereo_width > 0:
+            data = self._stereo_enhancement(data, width=stereo_width)
+
+        if len(data.shape) == 1:
+            data = np.column_stack((data, data))
+
+        return data, effective_sr
 
     def _resample_high_quality(self, data: np.ndarray, orig_sr: int, target_sr: int, kaiser_beta: float = 5.0) -> np.ndarray:
         """
@@ -310,6 +371,56 @@ class AudioRouter:
         resampled = signal.resample_poly(data, up, down, window=('kaiser', kaiser_beta))
 
         return resampled
+
+    def _apply_clarity_eq(self, data: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Apply a two-stage speech clarity EQ for improved intelligibility.
+
+        Stage 1 – High-pass at 80 Hz:
+            Removes low-frequency rumble that Piper ONNX models sometimes
+            produce, which can mask consonants over VBCable / voice chat.
+
+        Stage 2 – Presence peak at 2.5 kHz (+2.5 dB, Q=0.8):
+            The 2–4 kHz band carries the bulk of speech intelligibility
+            (fricatives, plosives, formant transitions).  A gentle boost here
+            makes voices noticeably clearer without sounding harsh.
+        """
+        nyquist = sample_rate / 2.0
+
+        # --- Stage 1: high-pass at 80 Hz ---
+        hp_norm = 80.0 / nyquist
+        if 0.0 < hp_norm < 1.0:
+            sos_hp = signal.butter(2, hp_norm, btype='high', output='sos')
+        else:
+            sos_hp = None
+
+        # --- Stage 2: peaking EQ at 2500 Hz, +2.5 dB, Q=0.8 ---
+        f0 = 2500.0
+        gain_db = 2.5
+        Q = 0.8
+        A = 10 ** (gain_db / 40.0)
+        w0 = 2.0 * np.pi * f0 / sample_rate
+        sin_w0 = np.sin(w0)
+        cos_w0 = np.cos(w0)
+        alpha = sin_w0 / (2.0 * Q)
+        b_peak = np.array([1.0 + alpha * A, -2.0 * cos_w0, 1.0 - alpha * A])
+        a_peak = np.array([1.0 + alpha / A, -2.0 * cos_w0, 1.0 - alpha / A])
+        sos_peak = signal.tf2sos(b_peak, a_peak)
+
+        def _process(ch: np.ndarray) -> np.ndarray:
+            if sos_hp is not None:
+                ch = signal.sosfilt(sos_hp, ch)
+            return signal.sosfilt(sos_peak, ch)
+
+        if data.ndim == 1:
+            result = _process(data)
+        else:
+            result = np.column_stack([_process(data[:, i]) for i in range(data.shape[1])])
+
+        # Soft-limit to prevent any post-EQ clipping
+        peak = np.max(np.abs(result))
+        if peak > 0.99:
+            result = result * (0.99 / peak)
+        return result
 
     def _stereo_enhancement(self, data: np.ndarray, width: float = 0.5) -> np.ndarray:
         """
@@ -479,6 +590,95 @@ class AudioRouter:
                 # Re-raise the original ffmpeg error with context
                 raise RuntimeError(f"Audio decode failed - ffmpeg: {e}; soundfile: {sf_error}")
 
+    async def prepare_audio_for_playback(
+        self,
+        audio_data: bytes,
+        enable_normalization: bool = True,
+        normalization_type: str = "Peak",
+        processing_profile: str = "balanced",
+        enable_clarity_eq: bool = True,
+    ) -> PreparedAudioPayload:
+        """Decode and process one non-streaming segment for reuse."""
+        target_sr, kaiser_beta, stereo_width, norm_type = self._resolve_playback_settings(
+            enable_normalization,
+            normalization_type,
+            processing_profile,
+        )
+        data, sr = await self._decode_audio_data(audio_data, target_sr)
+        processed_data, effective_sr = self._process_playback_audio(
+            data,
+            sr,
+            target_sr,
+            kaiser_beta,
+            norm_type,
+            enable_clarity_eq,
+            stereo_width,
+        )
+        return PreparedAudioPayload(data=processed_data, sample_rate=effective_sr)
+
+    async def _play_prepared_audio(
+        self,
+        prepared_audio: PreparedAudioPayload,
+        device_index: Optional[int] = None,
+        amplitude_callback=None,
+        wait_interval: float = 0.1,
+    ) -> bool:
+        """Play a previously prepared non-streaming payload."""
+        self._stop_requested.clear()
+        self._amplitude_callback = amplitude_callback
+
+        data = prepared_audio.data
+        effective_sr = prepared_audio.sample_rate
+        data_index = 0
+        data_len = len(data)
+
+        def callback(outdata, frames, time, status):
+            if self._stop_requested.is_set():
+                raise sd.CallbackStop()
+
+            nonlocal data_index, data_len
+            if data_index < data_len:
+                chunksize = min(frames, data_len - data_index)
+                outdata[:chunksize] = data[data_index:data_index + chunksize]
+                if chunksize < frames:
+                    outdata[chunksize:] = 0
+
+                if self._amplitude_callback:
+                    start = data_index
+                    chunk_for_amp = data[start:start + chunksize]
+                    amp = self._calculate_chunk_amplitude(chunk_for_amp)
+                    self._current_amplitude = amp
+                    try:
+                        self._amplitude_callback(amp)
+                    except Exception:
+                        pass
+
+                data_index += chunksize
+            else:
+                outdata[:] = 0
+                self._current_amplitude = 0.0
+                if self._amplitude_callback:
+                    try:
+                        self._amplitude_callback(0.0)
+                    except Exception:
+                        pass
+                raise sd.CallbackStop()
+
+        channels = data.shape[1] if len(data.shape) > 1 else 1
+        self._current_stream = sd.OutputStream(
+            device=device_index,
+            samplerate=effective_sr,
+            channels=channels,
+            callback=callback,
+            finished_callback=self._stream_finished
+        )
+
+        with self._current_stream:
+            while self._current_stream.active and not self._stop_requested.is_set():
+                await asyncio.sleep(wait_interval)
+
+        return not self._stop_requested.is_set()
+
     async def play_audio_to_device(
         self,
         audio_data: bytes,
@@ -486,7 +686,9 @@ class AudioRouter:
         device_index: Optional[int] = None,
         enable_normalization: bool = True,
         normalization_type: str = "Peak",
-        processing_profile: str = "balanced"
+        processing_profile: str = "balanced",
+        enable_clarity_eq: bool = True,
+        prepared_audio: Optional[PreparedAudioPayload] = None,
     ) -> bool:
 
         """
@@ -504,90 +706,24 @@ class AudioRouter:
             True if playback succeeded, False otherwise.
         """
         try:
-            self._stop_requested.clear()
+            if prepared_audio is None:
+                try:
+                    prepared_audio = await self.prepare_audio_for_playback(
+                        audio_data,
+                        enable_normalization=enable_normalization,
+                        normalization_type=normalization_type,
+                        processing_profile=processing_profile,
+                        enable_clarity_eq=enable_clarity_eq,
+                    )
+                except RuntimeError as e:
+                    logger.error("Failed to decode audio data: %s", e)
+                    return False
 
-            # Derive processing settings from profile
-            profile_settings = self._get_profile_settings(processing_profile)
-            target_sr = profile_settings["sample_rate"]
-            kaiser_beta = profile_settings["kaiser_beta"]
-            stereo_width = profile_settings["stereo_width"]
-
-            # Determine normalization type: respect enable_normalization flag
-            # If normalization is disabled, use "None"; otherwise use caller-provided type
-            if enable_normalization:
-                norm_type = normalization_type
-            else:
-                norm_type = "None"
-
-            # Decode audio data using ffmpeg (reliable MP3 support) with fallback to soundfile
-            # For fast_preview (target_sr is None), decode at native sample rate to avoid resampling
-            try:
-                data, sr = await self._decode_audio_data(audio_data, target_sr)
-            except RuntimeError as e:
-                logger.error("Failed to decode audio data: %s", e)
-                return False
-
-            # High-quality resampling using scipy (skip for fast_preview when target_sr is None)
-            # Do resampling BEFORE normalization so LUFS uses correct sample rate
-            if target_sr is not None and sr != target_sr:
-                data = self._resample_high_quality(data, sr, target_sr, kaiser_beta)
-                effective_sr = target_sr
-            else:
-                effective_sr = sr
-
-            # Apply normalization after resampling, using the effective sample rate for LUFS
-            if norm_type != "None":
-                data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
-
-            # Convert mono to stereo with enhancement (skip for fast_preview)
-            if len(data.shape) == 1 and stereo_width > 0:
-                data = self._stereo_enhancement(data, width=stereo_width)
-
-            # Ensure stereo for consistent output
-            if len(data.shape) == 1:
-                data = np.column_stack((data, data))
-
-            # Play audio using sounddevice
-            data_index = 0
-            data_len = len(data)
-
-            def callback(outdata, frames, time, status):
-                # Check if stop was requested
-                if self._stop_requested.is_set():
-                    raise sd.CallbackStop()
-
-                # Fill buffer with audio data
-                nonlocal data_index, data_len
-                if data_index < data_len:
-                    chunksize = min(frames, data_len - data_index)
-                    outdata[:chunksize] = data[data_index:data_index + chunksize]
-                    if chunksize < frames:
-                        outdata[chunksize:] = 0
-                    data_index += chunksize
-                else:
-                    outdata[:] = 0
-                    raise sd.CallbackStop()
-
-            # Create output stream
-            # Use the effective_sr already computed during resampling
-            channels = data.shape[1] if len(data.shape) > 1 else 1
-
-            self._current_stream = sd.OutputStream(
-                device=device_index,
-                samplerate=effective_sr,
-                channels=channels,
-                callback=callback,
-                finished_callback=self._stream_finished
+            return await self._play_prepared_audio(
+                prepared_audio,
+                device_index=device_index,
+                wait_interval=0.1,
             )
-
-
-            with self._current_stream:
-                # Wait for playback to complete or stop requested
-                while self._current_stream.active and not self._stop_requested.is_set():
-                    await asyncio.sleep(0.1)
-
-            # Return False when playback was interrupted by stop request
-            return not self._stop_requested.is_set()
 
         except sd.PortAudioError:
             return False
@@ -659,12 +795,14 @@ class AudioRouter:
             Duration in seconds as a float, or 0.0 on error.
         """
         try:
-            # Try to decode the audio and calculate duration from samples
-            data, sr = await self._decode_audio_data(audio_data, 48000)
-            if data.size > 0:
-                # Duration = number of samples / sample rate
-                return len(data) / sr
-            return 0.0
+            prepared_audio = await self.prepare_audio_for_playback(
+                audio_data,
+                enable_normalization=False,
+                normalization_type="None",
+                processing_profile="balanced",
+                enable_clarity_eq=False,
+            )
+            return prepared_audio.duration_seconds
         except Exception:
             return 0.0
 
@@ -710,7 +848,9 @@ class AudioRouter:
         enable_normalization: bool = True,
         normalization_type: str = "Peak",
         amplitude_callback=None,
-        processing_profile: str = "balanced"
+        processing_profile: str = "balanced",
+        enable_clarity_eq: bool = True,
+        prepared_audio: Optional[PreparedAudioPayload] = None,
     ) -> bool:
         """
         Play audio data with real-time amplitude analysis.
@@ -728,109 +868,25 @@ class AudioRouter:
             True if playback succeeded, False otherwise.
         """
         try:
-            self._stop_requested.clear()
-            self._amplitude_callback = amplitude_callback
+            if prepared_audio is None:
+                try:
+                    prepared_audio = await self.prepare_audio_for_playback(
+                        audio_data,
+                        enable_normalization=enable_normalization,
+                        normalization_type=normalization_type,
+                        processing_profile=processing_profile,
+                        enable_clarity_eq=enable_clarity_eq,
+                    )
+                except RuntimeError as e:
+                    logger.error("Failed to decode audio data: %s", e)
+                    return False
 
-            # Derive processing settings from profile
-            profile_settings = self._get_profile_settings(processing_profile)
-            target_sr = profile_settings["sample_rate"]
-            kaiser_beta = profile_settings["kaiser_beta"]
-            stereo_width = profile_settings["stereo_width"]
-
-            # Determine normalization type: respect enable_normalization flag
-            if enable_normalization:
-                norm_type = normalization_type
-            else:
-                norm_type = "None"
-
-            # Decode audio data using ffmpeg (reliable MP3 support) with fallback to soundfile
-            # For fast_preview (target_sr is None), decode at native sample rate to avoid resampling
-            try:
-                data, sr = await self._decode_audio_data(audio_data, target_sr)
-            except RuntimeError as e:
-                logger.error("Failed to decode audio data: %s", e)
-                return False
-
-            # High-quality resampling using scipy (skip for fast_preview when target_sr is None)
-            if target_sr is not None and sr != target_sr:
-                data = self._resample_high_quality(data, sr, target_sr, kaiser_beta)
-                effective_sr = target_sr
-            else:
-                effective_sr = sr
-
-            # Apply normalization after resampling
-            if norm_type != "None":
-                data = self._normalize_audio(data, norm_type, sample_rate=effective_sr)
-
-            # Convert mono to stereo with enhancement (skip for fast_preview)
-            if len(data.shape) == 1 and stereo_width > 0:
-                data = self._stereo_enhancement(data, width=stereo_width)
-
-            # Ensure stereo for consistent output
-            if len(data.shape) == 1:
-                data = np.column_stack((data, data))
-
-            # Store original data for amplitude calculation
-            original_data = data.copy()
-
-            # Play audio using sounddevice
-            data_index = 0
-            data_len = len(data)
-
-            def callback(outdata, frames, time, status):
-                # Check if stop was requested
-                if self._stop_requested.is_set():
-                    raise sd.CallbackStop()
-
-                # Fill buffer with audio data
-                nonlocal data_index, data_len, original_data
-                if data_index < data_len:
-                    chunksize = min(frames, data_len - data_index)
-                    outdata[:chunksize] = data[data_index:data_index + chunksize]
-                    if chunksize < frames:
-                        outdata[chunksize:] = 0
-
-                    # Calculate amplitude for this chunk
-                    if self._amplitude_callback:
-                        start = data_index
-                        chunk_for_amp = original_data[start:start + chunksize]
-                        amp = self._calculate_chunk_amplitude(chunk_for_amp)
-                        self._current_amplitude = amp
-                        try:
-                            self._amplitude_callback(amp)
-                        except Exception:
-                            pass
-
-                    data_index += chunksize
-                else:
-                    outdata[:] = 0
-                    self._current_amplitude = 0.0
-                    if self._amplitude_callback:
-                        try:
-                            self._amplitude_callback(0.0)
-                        except Exception:
-                            pass
-                    raise sd.CallbackStop()
-
-            # Create output stream - use effective_sr from processing
-            channels = data.shape[1] if len(data.shape) > 1 else 1
-
-            self._current_stream = sd.OutputStream(
-                device=device_index,
-                samplerate=effective_sr,
-                channels=channels,
-                callback=callback,
-                finished_callback=self._stream_finished
+            return await self._play_prepared_audio(
+                prepared_audio,
+                device_index=device_index,
+                amplitude_callback=amplitude_callback,
+                wait_interval=0.05,
             )
-
-
-            with self._current_stream:
-                # Wait for playback to complete or stop requested
-                while self._current_stream.active and not self._stop_requested.is_set():
-                    await asyncio.sleep(0.05)  # Faster updates for amplitude
-
-            # Return False when playback was interrupted by stop request
-            return not self._stop_requested.is_set()
 
         except sd.PortAudioError:
             return False
@@ -857,7 +913,8 @@ class AudioRouter:
         stop_event=None,
         enable_normalization: bool = True,
         normalization_type: str = "Peak",
-        amplitude_callback=None
+        amplitude_callback=None,
+        enable_clarity_eq: bool = True,
     ) -> bool:
         """
         Play streaming audio data to a specific output device.
@@ -890,6 +947,8 @@ class AudioRouter:
             # Get profile settings
             profile_settings = self._get_profile_settings(processing_profile)
             target_sr = profile_settings["sample_rate"]  # None for fast_preview means no resampling
+            kaiser_beta = profile_settings["kaiser_beta"]
+            stereo_width = profile_settings["stereo_width"]
 
             # Determine normalization type: respect enable_normalization flag
             if enable_normalization:
@@ -994,9 +1053,15 @@ class AudioRouter:
 
                             chunk = np.frombuffer(chunk_bytes, dtype=np.float32).reshape(-1, 2)
                             effective_sr = target_sr if target_sr is not None else (detected_sr[0] or sample_rate)
-
-                            if norm_type != "None":
-                                chunk = self._normalize_audio(chunk, norm_type, sample_rate=effective_sr)
+                            chunk, effective_sr = self._process_playback_audio(
+                                chunk,
+                                effective_sr,
+                                None,
+                                kaiser_beta,
+                                norm_type,
+                                enable_clarity_eq,
+                                stereo_width,
+                            )
 
                             while True:
                                 if self._stop_requested.is_set() or (stop_event and stop_event.is_set()):
@@ -1017,8 +1082,15 @@ class AudioRouter:
                             chunk_bytes = buffer[:usable]
                             chunk = np.frombuffer(chunk_bytes, dtype=np.float32).reshape(-1, 2)
                             effective_sr = target_sr if target_sr is not None else (detected_sr[0] or sample_rate)
-                            if norm_type != "None":
-                                chunk = self._normalize_audio(chunk, norm_type, sample_rate=effective_sr)
+                            chunk, effective_sr = self._process_playback_audio(
+                                chunk,
+                                effective_sr,
+                                None,
+                                kaiser_beta,
+                                norm_type,
+                                enable_clarity_eq,
+                                stereo_width,
+                            )
                             audio_queue.put(chunk)
 
                 except Exception as e:

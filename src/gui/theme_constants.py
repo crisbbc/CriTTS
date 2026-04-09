@@ -191,6 +191,89 @@ WINDOW_SETTINGS_MIN_WIDTH = 820
 WINDOW_SETTINGS_MIN_HEIGHT = 540
 
 # =============================================================================
+# SETTINGS SURFACE TOKENS
+# Shared settings-shell and section styling derived from the main window.
+# =============================================================================
+SETTINGS_WINDOW_FG = COLOR_BG_PRIMARY
+SETTINGS_PANE_FG = COLOR_BG_SECONDARY
+SETTINGS_SECTION_FG = COLOR_BG_TERTIARY
+SETTINGS_BORDER_COLOR = COLOR_NEUTRAL_MEDIUM
+SETTINGS_SUPPORTING_TEXT_COLOR = "#b7c4d6"
+SETTINGS_MUTED_TEXT_COLOR = COLOR_NEUTRAL_LIGHT
+SETTINGS_TAB_SELECTED_COLOR = "#4338ca"
+SETTINGS_TAB_SELECTED_HOVER = "#3730a3"
+SETTINGS_TAB_UNSELECTED_HOVER = COLOR_NEUTRAL_MEDIUM
+SETTINGS_TAB_TEXT_COLOR = COLOR_NEUTRAL_LIGHTEST
+
+
+def get_active_appearance_mode() -> str:
+    """Return the current CTk appearance mode with a dark fallback."""
+    try:
+        import customtkinter as ctk
+        mode = ctk.get_appearance_mode()
+    except Exception:
+        return "Dark"
+
+    return mode if mode in {"Light", "Dark"} else "Dark"
+
+
+def get_settings_surface_theme(mode: str | None = None) -> dict:
+    """
+    Get shared style tokens for the settings shell and section surfaces.
+
+    Returns:
+        Dictionary of semantic settings surface tokens.
+    """
+    resolved_mode = "Dark" if mode is None else mode
+    colors = get_theme_colors(resolved_mode)
+
+    if resolved_mode == "Light":
+        tab_selected_color = "#c7d2fe"
+        tab_selected_hover = "#a5b4fc"
+        tab_unselected_hover = COLOR_BG_TERTIARY_LIGHT
+        tab_text_color = COLOR_TEXT_PRIMARY_LIGHT
+        text_supporting = COLOR_TEXT_SECONDARY_LIGHT
+    else:
+        if resolved_mode == "System":
+            resolved_mode = get_active_appearance_mode()
+
+        if resolved_mode == "Light":
+            tab_selected_color = "#c7d2fe"
+            tab_selected_hover = "#a5b4fc"
+            tab_unselected_hover = COLOR_BG_TERTIARY_LIGHT
+            tab_text_color = COLOR_TEXT_PRIMARY_LIGHT
+            text_supporting = COLOR_TEXT_SECONDARY_LIGHT
+        else:
+            tab_selected_color = SETTINGS_TAB_SELECTED_COLOR
+            tab_selected_hover = SETTINGS_TAB_SELECTED_HOVER
+            tab_unselected_hover = SETTINGS_TAB_UNSELECTED_HOVER
+            tab_text_color = SETTINGS_TAB_TEXT_COLOR
+            text_supporting = SETTINGS_SUPPORTING_TEXT_COLOR
+
+    return {
+        "window_fg": colors["bg_primary"],
+        "pane_fg": colors["bg_secondary"],
+        "section_fg": colors["bg_tertiary"],
+        "border_color": colors["border_color"],
+        "sidebar_button_hover": colors["bg_tertiary"],
+        "scrollbar_button_color": colors["border_color"],
+        "scrollbar_button_hover_color": colors["text_muted"],
+        "text_primary": colors["text_primary"],
+        "text_supporting": text_supporting,
+        "text_secondary": colors["text_secondary"],
+        "text_muted": colors["text_muted"],
+        "tab_selected_color": tab_selected_color,
+        "tab_selected_hover": tab_selected_hover,
+        "tab_unselected_hover": tab_unselected_hover,
+        "tab_text_color": tab_text_color,
+        "button_neutral": colors["button_neutral"],
+        "button_neutral_hover": colors["button_neutral_hover"],
+        "shell_corner_radius": RADIUS_LG,
+        "section_corner_radius": RADIUS_MD,
+    }
+
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
@@ -252,21 +335,33 @@ def get_theme_colors(mode: str) -> dict:
         return {
             "bg_primary": COLOR_BG_PRIMARY_LIGHT,
             "bg_secondary": COLOR_BG_SECONDARY_LIGHT,
+            "bg_tertiary": COLOR_BG_TERTIARY_LIGHT,
             "input_bg": COLOR_NEUTRAL_DARK_LIGHT,
             "line_highlight": COLOR_NEUTRAL_MEDIUM_LIGHT,
             "text_primary": COLOR_TEXT_PRIMARY_LIGHT,
             "text_secondary": COLOR_TEXT_SECONDARY_LIGHT,
             "text_muted": COLOR_TEXT_MUTED_LIGHT,
             "voice_name": COLOR_PRIMARY_LIGHT_MODE,
+            "border_color": COLOR_NEUTRAL_MEDIUM_LIGHT,
+            "button_active": COLOR_PRIMARY_LIGHT_MODE,
+            "button_active_hover": COLOR_PRIMARY_HOVER,
+            "button_neutral": COLOR_BG_TERTIARY_LIGHT,
+            "button_neutral_hover": COLOR_NEUTRAL_MEDIUM_LIGHT,
         }
     else:  # Dark mode (default)
         return {
             "bg_primary": COLOR_BG_PRIMARY,
             "bg_secondary": COLOR_BG_SECONDARY,
+            "bg_tertiary": COLOR_BG_TERTIARY,
             "input_bg": COLOR_NEUTRAL_DARK,
             "line_highlight": COLOR_NEUTRAL_MEDIUM,
             "text_primary": COLOR_NEUTRAL_LIGHTEST,
             "text_secondary": COLOR_NEUTRAL_LIGHTER,
             "text_muted": COLOR_NEUTRAL_LIGHT,
             "voice_name": COLOR_PRIMARY_LIGHT,
+            "border_color": COLOR_NEUTRAL_MEDIUM,
+            "button_active": COLOR_PRIMARY,
+            "button_active_hover": COLOR_PRIMARY_HOVER,
+            "button_neutral": COLOR_NEUTRAL_MEDIUM,
+            "button_neutral_hover": COLOR_NEUTRAL,
         }

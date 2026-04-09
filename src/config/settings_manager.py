@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 class SettingsManager:
     """Manages application settings with JSON persistence."""
+
+    VALID_TTS_PROVIDERS = ("edge", "piper", "coqui")
     
     DEFAULT_SETTINGS = {
         "voice": "en-US-AriaNeural",
@@ -136,15 +138,22 @@ class SettingsManager:
         "overlay_visible": True,  # Whether the recording overlay is visible
 
         # TTS Provider Selection
-        "tts_provider": "edge",  # "edge" (Edge TTS, online) or "piper" (Piper TTS, offline)
+        "tts_provider": "edge",  # "edge" (online), "piper" (offline fast), or "coqui" (offline high quality)
 
-        # Piper TTS Naturalness Settings
-        # noise_scale controls expressiveness/phoneme variability (default: 0.667)
-        # noise_w_scale controls phoneme duration variability (default: 0.8)
-        # sentence_silence adds a natural pause between sentences (seconds, default: 0.2)
-        "piper_noise_scale": 0.667,
-        "piper_noise_w_scale": 0.8,
+        # Coqui TTS Settings
+        # gpu_device selects the CUDA device (-2 = Auto, -1 = CPU only, 0+ = GPU index)
+        # language sets the XTTS v2 synthesis language (ISO code, default: "en")
+        "coqui_gpu_device": -2,
+        "coqui_language": "en",
+
+        # Piper TTS Settings
+        # Keep None to preserve per-voice .onnx.json inference recommendations.
+        "piper_noise_scale": None,
+        "piper_noise_w_scale": None,
         "piper_sentence_silence": 0.2,
+
+        # Audio clarity EQ: high-pass + presence boost for speech intelligibility
+        "enable_clarity_eq": True,
     }
 
 
@@ -169,9 +178,14 @@ class SettingsManager:
             self.config_path = Path(config_path)
         
         self._settings = {}
+        self._persisted_settings = {}
         self._voices_mapping: dict = {}  # friendly_name -> short_name
         self._lock = threading.RLock()  # Thread safety for settings access (reentrant for update() -> set())
         self.load_settings()
+
+    def _update_persisted_settings_snapshot(self):
+        """Track the last settings state known to be synchronized with disk."""
+        self._persisted_settings = copy.deepcopy(self._settings)
     
     def set_voices_mapping(self, voices_mapping: dict):
         """
@@ -211,6 +225,7 @@ class SettingsManager:
                 issues = self.validate_settings()
                 if issues:
                     logger.warning("Settings validation issues: %s", issues)
+                self._update_persisted_settings_snapshot()
             else:
                 self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
                 self.save_settings()
@@ -227,9 +242,11 @@ class SettingsManager:
             except OSError:
                 logger.warning("Error loading settings: %s. Using defaults.", e)
             self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
+            self._update_persisted_settings_snapshot()
         except IOError as e:
             logger.warning("Error loading settings: %s. Using defaults.", e)
             self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
+            self._update_persisted_settings_snapshot()
     
     def _validate_text_setting(self, key: str, default_value: str) -> bool:
         """
@@ -312,6 +329,7 @@ class SettingsManager:
                 with open(tmp_path, 'w', encoding='utf-8') as f:
                     json.dump(self._settings, f, indent=4)
                 os.replace(tmp_path, self.config_path)
+                self._update_persisted_settings_snapshot()
                 return True
             except IOError as e:
                 logger.warning("Error saving settings: %s", e)
@@ -364,9 +382,17 @@ class SettingsManager:
                 value = self.DEFAULT_SETTINGS["appearance_mode"]
             
             # Validate TTS provider
-            if key == "tts_provider" and value not in ["edge", "piper"]:
+            if key == "tts_provider" and value not in self.VALID_TTS_PROVIDERS:
                 logger.warning("Invalid TTS provider: %s, using default", value)
                 value = self.DEFAULT_SETTINGS["tts_provider"]
+
+            # Validate Coqui GPU device index
+            if key == "coqui_gpu_device":
+                try:
+                    idx = int(value)
+                    value = max(-2, idx)
+                except (TypeError, ValueError):
+                    value = -2
             
             self._settings[key] = value
     
@@ -374,18 +400,46 @@ class SettingsManager:
         """Get all settings as a dictionary."""
         with self._lock:
             return self._settings.copy()
+
+    def get_persisted_settings(self):
+        """Get the last settings snapshot that successfully loaded from or saved to disk."""
+        with self._lock:
+            return copy.deepcopy(self._persisted_settings)
+
+    def restore_last_persisted_settings(self):
+        """Restore the in-memory settings to the last snapshot known to match disk."""
+        with self._lock:
+            self._settings = copy.deepcopy(self._persisted_settings)
     
     def update(self, settings_dict):
         """Update multiple settings at once."""
         with self._lock:
             for key, value in settings_dict.items():
                 self.set(key, value)
+
+    def _mutate_and_save(self, mutator):
+        """Apply an in-memory mutation and roll it back if persistence fails."""
+        with self._lock:
+            previous_settings = copy.deepcopy(self._persisted_settings)
+            mutator()
+            if self.save_settings():
+                return True
+            self._settings = previous_settings
+            return False
+
+    def set_and_save(self, key, value):
+        """Set a setting and persist it, restoring the previous state on failure."""
+        return self._mutate_and_save(lambda: self.set(key, value))
+
+    def update_and_save(self, settings_dict):
+        """Update multiple settings and persist them atomically."""
+        return self._mutate_and_save(lambda: self.update(settings_dict))
     
     def reset_to_defaults(self):
         """Reset all settings to default values."""
-        with self._lock:
-            self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
-            self.save_settings()
+        return self._mutate_and_save(
+            lambda: setattr(self, "_settings", copy.deepcopy(self.DEFAULT_SETTINGS))
+        )
     
     def _validate_keybind_format(self, keybind_string: str) -> bool:
         """
@@ -433,7 +487,7 @@ class SettingsManager:
             
             # Check TTS provider
             tts_provider = self._settings.get("tts_provider")
-            if tts_provider not in ["edge", "piper"]:
+            if tts_provider not in self.VALID_TTS_PROVIDERS:
                 issues.append(f"Invalid TTS provider: {tts_provider}")
             
             # Check numeric range settings

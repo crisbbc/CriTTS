@@ -12,6 +12,10 @@ from typing import Any, Callable, Optional, List, Dict
 from .base_tab import BaseTab
 from ..theme_constants import (
     FONT_SM, FONT_MD, FONT_LG, FONT_WEIGHT_BOLD,
+    BUTTON_HEIGHT,
+    COLOR_DANGER, COLOR_DANGER_HOVER,
+    COLOR_SUCCESS, COLOR_SUCCESS_HOVER,
+    SPACING_MD,
 )
 from ..utils.scroll_utils import prevent_scroll_propagation
 
@@ -19,11 +23,6 @@ logger = logging.getLogger(__name__)
 
 # Default preview text constant
 DEFAULT_PREVIEW_TEXT = "Hello, this is a voice preview."
-
-# Default Piper noise values (match piper library defaults)
-_PIPER_NOISE_SCALE_DEFAULT = 0.667
-_PIPER_NOISE_W_SCALE_DEFAULT = 0.8
-_PIPER_PROVIDER_KEY = "piper"
 
 
 class VoiceTab(BaseTab):
@@ -39,48 +38,131 @@ class VoiceTab(BaseTab):
         parent_window: ctk.CTk = None
     ):
         self.parent_window = parent_window
+        self._async_callbacks_active = True
+        self._voice_load_request_id = 0
         self._voices: List[Dict] = []
         self._filtered_voices: List[Dict] = []
         self._voice_name_to_short_name: Dict[str, str] = {}
         self._preview_playing = False
         self._preview_stop_event = threading.Event()
+        self._active_provider_key = settings_manager.get("tts_provider", "edge")
         
         super().__init__(tab_widget, settings_manager, tts_engine, audio_router, on_change)
+
+    def invalidate_async_callbacks(self) -> None:
+        """Prevent queued background callbacks from touching a stale tab instance."""
+        self._async_callbacks_active = False
+        if getattr(self, "_preview_playing", False):
+            self._preview_playing = False
+            preview_stop_event = getattr(self, "_preview_stop_event", None)
+            if preview_stop_event is not None:
+                preview_stop_event.set()
+
+            audio_router = getattr(self, "audio_router", None)
+            if audio_router is not None:
+                try:
+                    audio_router.stop_playback()
+                except Exception:
+                    logger.debug("Ignoring preview stop failure during VoiceTab invalidation", exc_info=True)
+
+    def _is_async_callback_target_alive(self) -> bool:
+        """Return True while this tab instance still owns live widgets."""
+        if not getattr(self, "_async_callbacks_active", True):
+            return False
+
+        tab_widget = getattr(self, "tab", None)
+        if tab_widget is not None:
+            try:
+                tab_winfo_exists = getattr(tab_widget, "winfo_exists", None)
+                if callable(tab_winfo_exists) and not tab_winfo_exists():
+                    return False
+            except Exception:
+                return False
+
+        return True
+
+    def _schedule_on_ui_thread(self, callback: Callable[[], None], delay_ms: int = 0) -> bool:
+        """Safely queue UI work only while the parent window is still available."""
+        parent_window = getattr(self, "parent_window", None)
+        if parent_window is None:
+            return False
+
+        if not self._is_async_callback_target_alive():
+            return False
+
+        try:
+            winfo_exists = getattr(parent_window, "winfo_exists", None)
+            if callable(winfo_exists) and not winfo_exists():
+                return False
+
+            def guarded_callback() -> None:
+                if not self._is_async_callback_target_alive():
+                    return
+                callback()
+
+            parent_window.after(delay_ms, guarded_callback)
+            return True
+        except RuntimeError:
+            return False
+        except Exception:
+            return False
     
     def _create_content(self):
         """Create the voice tab content."""
         self.setup_layout()
-        
+        browser_section, browser_content = self.create_section_surface(
+            "Voice Selection",
+            parent=self.scroll,
+            register_sidebar=False,
+        )
+        browser_section.pack(fill="x", pady=(0, SPACING_MD))
+
         # Filters frame
-        self._create_filters_section()
+        self._create_filters_section(browser_content)
         
         # Search field
-        self._create_search_section()
+        self._create_search_section(browser_content)
         
         # Voice selection
-        self._create_voice_selection_section()
+        self._create_voice_selection_section(browser_content)
         
         # Preview controls
-        self._create_preview_section()
+        self._create_preview_section(browser_content)
         
         # Voice info panel
-        self._create_voice_info_section()
+        self._create_voice_info_section(browser_content)
         
         # Favorites section
-        self._create_favorites_section()
+        favorites_section, favorites_content = self.create_section_surface(
+            "★ Favorite Voices",
+            parent=self.scroll,
+        )
+        favorites_section.pack(fill="x", pady=(0, SPACING_MD))
+        self._create_favorites_section(favorites_content)
         
         # Recent voices section
-        self._create_recent_section()
+        recent_section, recent_content = self.create_section_surface(
+            "Recent Voices",
+            parent=self.scroll,
+        )
+        recent_section.pack(fill="x", pady=(0, SPACING_MD))
+        self._create_recent_section(recent_content)
         
         # Rate/Volume/Pitch sliders
-        self._create_parameter_sliders()
+        controls_section, controls_content = self.create_section_surface(
+            "Quick Controls",
+            parent=self.scroll,
+            register_sidebar=False,
+        )
+        controls_section.pack(fill="x", pady=(0, SPACING_MD))
+        self._create_parameter_sliders(controls_content)
         
         # Load voices asynchronously
         self._load_voices()
     
-    def _create_filters_section(self):
+    def _create_filters_section(self, parent):
         """Create the filters section."""
-        self.filters_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.filters_frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.filters_frame.pack(fill="x", pady=5)
         
         # Language filter
@@ -135,17 +217,17 @@ class VoiceTab(BaseTab):
         )
         self.clear_filters_button.pack(side="left", padx=10)
     
-    def _create_search_section(self):
+    def _create_search_section(self, parent):
         """Create the search section."""
         self.search_label = ctk.CTkLabel(
-            self.scroll,
+            parent,
             text="Search Voices:",
             font=ctk.CTkFont(size=FONT_MD)
         )
         self.search_label.pack(anchor="w", pady=(10, 5))
         
         self.search_entry = ctk.CTkEntry(
-            self.scroll,
+            parent,
             font=ctk.CTkFont(size=FONT_MD),
             placeholder_text="Type to filter voices..."
         )
@@ -153,19 +235,20 @@ class VoiceTab(BaseTab):
         self.search_entry.bind("<KeyRelease>", self._on_voice_search)
         
         # Voice count label
+        surface_theme = self.get_active_surface_theme()
         self.voice_count_label = ctk.CTkLabel(
-            self.scroll,
+            parent,
             text="Loading voices...",
             font=ctk.CTkFont(size=FONT_SM),
-            text_color="gray"
+            text_color=surface_theme["text_secondary"],
         )
         self.voice_count_label.pack(anchor="w", pady=(5, 10))
     
-    def _create_voice_selection_section(self):
+    def _create_voice_selection_section(self, parent):
         """Create the voice selection section."""
-        self.create_separator(self.scroll).pack(fill="x", pady=5)
+        self.create_separator(parent).pack(fill="x", pady=5)
         
-        self.voice_selection_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.voice_selection_frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.voice_selection_frame.pack(fill="x", pady=5)
         
         self.voice_label = ctk.CTkLabel(
@@ -193,16 +276,17 @@ class VoiceTab(BaseTab):
             text="☆",
             font=ctk.CTkFont(size=16),
             command=self._toggle_favorite_voice,
-            width=40,
-            height=32
+            width=BUTTON_HEIGHT,
+            height=BUTTON_HEIGHT,
+            **self.get_subtle_button_style(),
         )
         self.favorite_button.pack(side="left", padx=5)
     
-    def _create_preview_section(self):
+    def _create_preview_section(self, parent):
         """Create the preview section."""
-        self.create_separator(self.scroll).pack(fill="x", pady=10)
+        self.create_separator(parent).pack(fill="x", pady=10)
         
-        self.preview_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.preview_frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.preview_frame.pack(fill="x", pady=10)
         
         # Preview text entry
@@ -225,10 +309,9 @@ class VoiceTab(BaseTab):
             text="↻",
             font=ctk.CTkFont(size=14),
             command=self._reset_preview_text,
-            width=32,
-            height=32,
-            fg_color="transparent",
-            hover_color=("gray75", "gray25")
+            width=BUTTON_HEIGHT,
+            height=BUTTON_HEIGHT,
+            **self.get_subtle_button_style(),
         )
         self.reset_preview_button.pack(side="left", padx=2)
         
@@ -239,9 +322,9 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             command=self._on_voice_preview,
             width=100,
-            height=32,
-            fg_color="#2ecc71",
-            hover_color="#27ae60"
+            height=BUTTON_HEIGHT,
+            fg_color=COLOR_SUCCESS,
+            hover_color=COLOR_SUCCESS_HOVER,
         )
         self.preview_button.pack(side="left", padx=5)
         
@@ -252,9 +335,9 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             command=self._stop_voice_preview,
             width=100,
-            height=32,
-            fg_color="#e74c3c",
-            hover_color="#c0392b"
+            height=BUTTON_HEIGHT,
+            fg_color=COLOR_DANGER,
+            hover_color=COLOR_DANGER_HOVER,
         )
         
         # Loading indicator
@@ -262,19 +345,27 @@ class VoiceTab(BaseTab):
             self.preview_frame,
             text="",
             font=ctk.CTkFont(size=FONT_SM),
-            text_color="gray"
+            text_color=self.get_surface_status_text_color(),
         )
         self.preview_loading_label.pack(side="left", padx=10)
     
-    def _create_voice_info_section(self):
+    def _create_voice_info_section(self, parent):
         """Create the voice info panel."""
-        self.voice_info_frame = ctk.CTkFrame(self.scroll, fg_color=("gray90", "gray20"))
-        self.voice_info_frame.pack(fill="x", pady=15, padx=5)
+        surface_theme = self.get_active_surface_theme()
+        self.voice_info_frame = ctk.CTkFrame(
+            parent,
+            fg_color=surface_theme["pane_fg"],
+            corner_radius=self.get_section_surface_style()["corner_radius"],
+            border_width=1,
+            border_color=surface_theme["border_color"],
+        )
+        self.voice_info_frame.pack(fill="x", pady=15)
         
         self.voice_info_title = ctk.CTkLabel(
             self.voice_info_frame,
             text="Selected Voice Information",
-            font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD)
+            font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
+            text_color=surface_theme["text_primary"],
         )
         self.voice_info_title.pack(anchor="w", padx=10, pady=(10, 5))
         
@@ -349,14 +440,14 @@ class VoiceTab(BaseTab):
         )
         self.voice_info_short_value.grid(row=3, column=1, sticky="w", pady=2, padx=5)
     
-    def _create_favorites_section(self):
+    def _create_favorites_section(self, parent):
         """Create the favorites section."""
-        self.create_separator(self.scroll).pack(fill="x", pady=10)
-        
-        self.favorites_label = self.create_section_header("★ Favorite Voices")
-        self.favorites_label.pack(anchor="w", pady=(10, 5))
-        
-        self.favorites_frame = ctk.CTkScrollableFrame(self.scroll, height=100)
+        surface_theme = self.get_active_surface_theme()
+        self.favorites_frame = ctk.CTkScrollableFrame(
+            parent,
+            height=100,
+            fg_color=surface_theme["pane_fg"],
+        )
         self.favorites_frame.pack(fill="x", pady=5)
         prevent_scroll_propagation(self.favorites_frame)
         
@@ -364,16 +455,18 @@ class VoiceTab(BaseTab):
             self.favorites_frame,
             text="No favorite voices yet. Click the star button to add favorites!",
             font=ctk.CTkFont(size=FONT_SM),
-            text_color="gray"
+            text_color=surface_theme["text_secondary"],
         )
         self.favorites_empty_label.pack(pady=20)
     
-    def _create_recent_section(self):
+    def _create_recent_section(self, parent):
         """Create the recent voices section."""
-        self.recent_label = self.create_section_header("Recent Voices")
-        self.recent_label.pack(anchor="w", pady=(15, 5))
-        
-        self.recent_frame = ctk.CTkScrollableFrame(self.scroll, height=80)
+        surface_theme = self.get_active_surface_theme()
+        self.recent_frame = ctk.CTkScrollableFrame(
+            parent,
+            height=80,
+            fg_color=surface_theme["pane_fg"],
+        )
         self.recent_frame.pack(fill="x", pady=5)
         prevent_scroll_propagation(self.recent_frame)
         
@@ -381,34 +474,26 @@ class VoiceTab(BaseTab):
             self.recent_frame,
             text="No recent voices yet.",
             font=ctk.CTkFont(size=FONT_SM),
-            text_color="gray"
+            text_color=surface_theme["text_secondary"],
         )
         self.recent_empty_label.pack(pady=20)
     
-    def _create_parameter_sliders(self):
+    def _create_parameter_sliders(self, parent):
         """Initialise parameter variables; the actual sliders live in Quick Controls."""
-        # Keep IntVar/DoubleVar members so voice preview and get_settings() still work.
+        # Keep IntVar members so voice preview and get_settings() still work.
         # Quick Controls (main window) saves these values to settings on every change,
         # so the vars below always reflect the most-recently saved values.
         self.rate_var = ctk.IntVar(value=self.settings.get("rate", 0))
         self.volume_var = ctk.IntVar(value=self.settings.get("volume", 100))
         self.pitch_var = ctk.IntVar(value=self.settings.get("pitch", 0))
-        self._noise_scale_var = ctk.DoubleVar(
-            value=float(self.settings.get("piper_noise_scale", _PIPER_NOISE_SCALE_DEFAULT))
-        )
-        self._noise_w_scale_var = ctk.DoubleVar(
-            value=float(self.settings.get("piper_noise_w_scale", _PIPER_NOISE_W_SCALE_DEFAULT))
-        )
 
-        self.create_separator(self.scroll).pack(fill="x", pady=15)
-        ctk.CTkLabel(
-            self.scroll,
+        self.create_helper_text(
             text=(
                 "🎚  Speed, Volume, Pitch, and Expressiveness sliders are available in the\n"
                 "Quick Controls panel — click the  🎚 Controls  button in the main window."
             ),
-            font=ctk.CTkFont(size=FONT_MD),
-            text_color="gray",
+            parent=parent,
+            font_size=FONT_MD,
             justify="left",
         ).pack(anchor="w", pady=(10, 5), padx=5)
 
@@ -417,13 +502,35 @@ class VoiceTab(BaseTab):
 
     def reload_for_provider(self, provider_key: str):
         """Reload voices for the selected provider and show loading feedback."""
+        self._active_provider_key = provider_key
         self.voice_dropdown.configure(values=["Loading..."])
         self.voice_var.set("Loading...")
         self._load_voices(provider_override=provider_key)
 
+    def _next_voice_load_request_id(self) -> int:
+        """Return a monotonically increasing request id for async voice loads."""
+        request_id = getattr(self, "_voice_load_request_id", 0) + 1
+        self._voice_load_request_id = request_id
+        return request_id
+
+    def _is_latest_voice_load_request(self, request_id: int) -> bool:
+        """Return True only for the most recently requested async voice load."""
+        return (
+            self._is_async_callback_target_alive()
+            and getattr(self, "_voice_load_request_id", 0) == request_id
+        )
+
+    def _apply_voices_ui_if_latest(self, voices: List[Dict], request_id: int) -> None:
+        """Ignore stale async voice loads once a newer request has started."""
+        if not self._is_latest_voice_load_request(request_id):
+            return
+        self._apply_voices_ui(voices)
+
     
     def _load_voices(self, provider_override: Optional[str] = None):
         """Load available voices asynchronously."""
+        request_id = self._next_voice_load_request_id()
+
         def do_load():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -431,8 +538,9 @@ class VoiceTab(BaseTab):
                 voices = loop.run_until_complete(
                     self.tts_engine.get_available_voices(provider_override=provider_override)
                 )
-                if self.parent_window:
-                    self.parent_window.after(0, lambda: self._apply_voices_ui(voices))
+                self._schedule_on_ui_thread(
+                    lambda: self._apply_voices_ui_if_latest(voices, request_id)
+                )
             finally:
                 loop.close()
         
@@ -610,7 +718,7 @@ class VoiceTab(BaseTab):
                 self.favorites_frame,
                 text="No favorite voices yet. Click the star button to add favorites!",
                 font=ctk.CTkFont(size=FONT_SM),
-                text_color="gray"
+                text_color=self.get_active_surface_theme()["text_secondary"],
             ).pack(pady=20)
             return
         
@@ -625,10 +733,9 @@ class VoiceTab(BaseTab):
                 font=ctk.CTkFont(size=FONT_SM),
                 command=lambda s=short: self._select_voice_by_short_name(s),
                 width=200,
+                height=BUTTON_HEIGHT,
                 anchor="w",
-                fg_color="transparent",
-                text_color=("gray10", "gray90"),
-                hover_color=("gray75", "gray25")
+                **self.get_subtle_button_style(),
             ).pack(anchor="w", pady=2, padx=2)
     
     def _refresh_recent_ui(self):
@@ -642,7 +749,7 @@ class VoiceTab(BaseTab):
                 self.recent_frame,
                 text="No recent voices yet.",
                 font=ctk.CTkFont(size=FONT_SM),
-                text_color="gray"
+                text_color=self.get_active_surface_theme()["text_secondary"],
             ).pack(pady=20)
             return
         
@@ -657,10 +764,9 @@ class VoiceTab(BaseTab):
                 font=ctk.CTkFont(size=FONT_SM),
                 command=lambda s=short: self._select_voice_by_short_name(s),
                 width=200,
+                height=BUTTON_HEIGHT,
                 anchor="w",
-                fg_color="transparent",
-                text_color=("gray10", "gray90"),
-                hover_color=("gray75", "gray25")
+                **self.get_subtle_button_style(),
             ).pack(anchor="w", pady=2, padx=2)
     
     def _select_voice_by_short_name(self, short_name: str):
@@ -711,7 +817,10 @@ class VoiceTab(BaseTab):
         
         short = self._voice_name_to_short_name.get(self.voice_var.get())
         if not short:
-            self.preview_loading_label.configure(text="Select a voice first.")
+            self.preview_loading_label.configure(
+                text=self.format_surface_status_text("Select a voice first.", "warning"),
+                text_color=self.get_surface_status_text_color(),
+            )
             return
         
         raw_text = str(self.preview_text_var.get()).strip()
@@ -724,7 +833,23 @@ class VoiceTab(BaseTab):
         self._preview_stop_event.clear()
         self._preview_playing = True
         self._set_preview_ui_loading(True)
-        self.preview_loading_label.configure(text="Generating...", text_color="gray")
+
+        # Show a hint for offline providers that may need to download a model
+        provider_name = getattr(self, "_active_provider_key", self.settings.get("tts_provider", "edge"))
+        if provider_name == "coqui":
+            self.configure_surface_status_label(
+                self.preview_loading_label,
+                "Generating... (first use downloads ~1.8 GB)",
+                "idle",
+            )
+        elif provider_name == "piper":
+            self.configure_surface_status_label(
+                self.preview_loading_label,
+                "Generating... (first use may download a Piper voice model)",
+                "idle",
+            )
+        else:
+            self.configure_surface_status_label(self.preview_loading_label, "Generating...", "idle")
         
         def run():
             loop = None
@@ -739,30 +864,26 @@ class VoiceTab(BaseTab):
                         self.volume_var.get(),
                         self.pitch_var.get(),
                         self._preview_stop_event,
+                        provider_override=provider_name,
                     )
                 )
                 
                 if self._preview_stop_event.is_set():
-                    if self.parent_window:
-                        self.parent_window.after(0, lambda: self._preview_done(None))
+                    self._schedule_on_ui_thread(lambda: self._preview_done(None))
                     return
                 
                 if err:
-                    if self.parent_window:
-                        self.parent_window.after(0, lambda: self._preview_done(err))
+                    self._schedule_on_ui_thread(lambda: self._preview_done(err))
                     return
                 
                 if not audio_data:
-                    if self.parent_window:
-                        self.parent_window.after(0, lambda: self._preview_done("No audio generated."))
+                    self._schedule_on_ui_thread(lambda: self._preview_done("No audio generated."))
                     return
                 
-                if self.parent_window:
-                    self.parent_window.after(0, lambda: self._preview_loading_playing())
+                self._schedule_on_ui_thread(lambda: self._preview_loading_playing())
                 
                 if self._preview_stop_event.is_set():
-                    if self.parent_window:
-                        self.parent_window.after(0, lambda: self._preview_done(None))
+                    self._schedule_on_ui_thread(lambda: self._preview_done(None))
                     return
                 
                 enable_norm = self.settings.get("enable_normalization", True)
@@ -776,16 +897,13 @@ class VoiceTab(BaseTab):
                 
                 if not self._preview_stop_event.is_set():
                     if success:
-                        if self.parent_window:
-                            self.parent_window.after(0, lambda: self._preview_done(None))
+                        self._schedule_on_ui_thread(lambda: self._preview_done(None))
                     else:
-                        if self.parent_window:
-                            self.parent_window.after(0, lambda: self._preview_done("Playback failed."))
+                        self._schedule_on_ui_thread(lambda: self._preview_done("Playback failed."))
             
             except Exception as e:
                 logger.error("Preview exception: %s", e)
-                if self.parent_window:
-                    self.parent_window.after(0, lambda: self._preview_done(str(e)))
+                self._schedule_on_ui_thread(lambda: self._preview_done(str(e)))
             finally:
                 if loop:
                     loop.close()
@@ -805,7 +923,7 @@ class VoiceTab(BaseTab):
     
     def _preview_loading_playing(self):
         """Update loading label to Playing."""
-        self.preview_loading_label.configure(text="Playing...")
+        self.configure_surface_status_label(self.preview_loading_label, "Playing...", "success")
     
     def _preview_done(self, error: Optional[str]):
         """Handle preview completion."""
@@ -813,11 +931,13 @@ class VoiceTab(BaseTab):
         self._set_preview_ui_loading(False)
         
         if error:
-            self.preview_loading_label.configure(text=error, text_color="#e74c3c")
-            if self.parent_window:
-                self.parent_window.after(3000, lambda: self.preview_loading_label.configure(text="", text_color="gray"))
+            self.configure_surface_status_label(self.preview_loading_label, error, "error")
+            self._schedule_on_ui_thread(
+                lambda: self.configure_surface_status_label(self.preview_loading_label, "", "idle"),
+                delay_ms=3000,
+            )
         else:
-            self.preview_loading_label.configure(text="", text_color="gray")
+            self.configure_surface_status_label(self.preview_loading_label, "", "idle")
     
     def _stop_voice_preview(self):
         """Stop voice preview."""
@@ -850,11 +970,6 @@ class VoiceTab(BaseTab):
             "voice_filter_language": self.language_filter_var.get(),
             "voice_filter_gender": self.gender_filter_var.get(),
             "voice_filter_region": self.region_filter_var.get(),
-            # Piper naturalness values are always persisted so they survive provider
-            # round-trips and are available immediately if the user switches to Piper.
-            # They are ignored by Edge TTS and other non-Piper providers.
-            "piper_noise_scale": round(self._noise_scale_var.get(), 3),
-            "piper_noise_w_scale": round(self._noise_w_scale_var.get(), 3),
         }
         
         short = self._voice_name_to_short_name.get(self.voice_var.get())

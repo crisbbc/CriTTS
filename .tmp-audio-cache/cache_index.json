@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "entries": {
+    "b23a642f3f584e89a903b289f51e24c4": {
+      "text": "Hello",
+      "provider": "coqui",
+      "voice": "shared",
+      "rate": 0,
+      "volume": 100,
+      "pitch": 0,
+      "size_bytes": 10,
+      "created": 1775734912.0965202,
+      "last_access": 1775734912.0970368,
+      "access_count": 1,
+      "generation_time": 0.0
+    }
+  },
+  "stats": {
+    "hits": 1,
+    "misses": 1,
+    "total_saved_time": 0.0
+  }
+}

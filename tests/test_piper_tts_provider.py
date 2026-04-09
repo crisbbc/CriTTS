@@ -169,6 +169,14 @@ class TestGetAvailableVoices:
         assert voices == _BUILTIN_VOICES
 
     @pytest.mark.asyncio
+    async def test_returns_builtin_voices_without_loading_runtime(self, provider):
+        with patch("src.tts.providers.piper_tts_provider._load_piper_runtime") as load_runtime:
+            voices = await provider.get_available_voices()
+
+        assert voices == _BUILTIN_VOICES
+        load_runtime.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_voices_are_independent_copy(self, provider):
         voices = await provider.get_available_voices()
         voices.clear()
@@ -186,6 +194,37 @@ class TestClearCache:
         provider._loaded_models["fake"] = MagicMock()
         provider.clear_cache()
         assert provider._loaded_models == {}
+
+    def test_load_voice_evicts_oldest_inactive_model_when_cache_limit_is_exceeded(self, tmp_path):
+        """Piper should deterministically evict the oldest inactive model."""
+        provider = PiperTTSProvider(settings_manager=None, models_dir=tmp_path)
+        fake_piper_voice = MagicMock()
+        fake_piper_voice.load.side_effect = [
+            MagicMock(name="voice-a"),
+            MagicMock(name="voice-b"),
+            MagicMock(name="voice-c"),
+        ]
+
+        with (
+            patch(
+                "src.tts.providers.piper_tts_provider._ensure_model",
+                side_effect=[tmp_path / "a.onnx", tmp_path / "b.onnx", tmp_path / "c.onnx"],
+            ),
+            patch(
+                "src.tts.providers.piper_tts_provider._load_piper_runtime",
+                return_value=(fake_piper_voice, MagicMock()),
+            ),
+            patch(
+                "src.tts.providers.piper_tts_provider._read_voice_config",
+                side_effect=[{"cfg": "a"}, {"cfg": "b"}, {"cfg": "c"}],
+            ),
+        ):
+            provider._load_voice("voice-a")
+            provider._load_voice("voice-b")
+            provider._load_voice("voice-c")
+
+        assert list(provider._loaded_models) == ["voice-b", "voice-c"]
+        assert "voice-a" not in provider._voice_configs
 
 
 # ---------------------------------------------------------------------------
@@ -272,8 +311,13 @@ class TestStatusCallback:
         provider = PiperTTSProvider(models_dir=tmp_path, status_callback=cb)
 
         fake_voice = MagicMock()
+        fake_piper_voice = MagicMock()
+        fake_piper_voice.load.return_value = fake_voice
         with patch("src.tts.providers.piper_tts_provider._ensure_model", return_value=tmp_path / "x.onnx"):
-            with patch("src.tts.providers.piper_tts_provider.PiperVoice.load", return_value=fake_voice):
+            with patch(
+                "src.tts.providers.piper_tts_provider._load_piper_runtime",
+                return_value=(fake_piper_voice, MagicMock()),
+            ):
                 provider._load_voice("en_US-lessac-medium")
 
         cb.assert_called()

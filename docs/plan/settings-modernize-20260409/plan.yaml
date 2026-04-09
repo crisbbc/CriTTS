@@ -1,0 +1,559 @@
+plan_id: settings-modernize-20260409
+objective: Modernize the Settings tabs so they visually align with the main window UI without changing navigation or content structure.
+created_at: "2026-04-09T00:00:00Z"
+created_by: gem-team:gem-planner
+status: pending
+research_confidence: high
+
+plan_metrics:
+  wave_1_task_count: 1
+  total_dependencies: 5
+  risk_score: medium
+
+tldr: |
+  This remains a medium-complexity styling pass, not a navigation rewrite.
+  The plan still starts with shared settings-shell and BaseTab primitives, but that foundation now explicitly includes an adoption audit showing which tabs can consume shared styling directly and which need manual adapters.
+  Card treatment is now bounded to top-level section containers so inner rows, textboxes, lists, and dynamic panels do not get double-boxed or visually louder than the main window.
+  Final validation now includes accessibility checks (contrast, focus visibility, readability, nested-surface differentiation), structural invariants (tab order, sidebar anchor order, section-header order, Coqui visibility), and long-tab scroll behavior. Documentation updates are conditional on finding a real mismatch.
+
+acceptance_criteria:
+  - id: "AC-007"
+    description: "All settings tabs use section containers and surface treatment that mostly match the main window's card-style presentation, spacing rhythm, and surface colors."
+  - id: "AC-008"
+    description: "Tab names, tab order, section ordering, and existing control content remain unchanged after the styling update."
+  - id: "AC-009"
+    description: "The settings window adopts a restrained visual refresh that feels close to the main window without louder accent usage, dense chrome, or distracting decoration."
+  - id: "AC-010"
+    description: "Voice, Audio Output, Appearance, Abbreviations, Keybinds, Behavior, Soundboard, VRChat OSC, Advanced, and TTS Provider tabs all receive the same settings-surface alignment treatment for their section containers."
+
+open_questions: []
+
+verification_invariants:
+  tab_order:
+    - Voice
+    - Audio Output
+    - Appearance
+    - Abbreviations
+    - Keybinds
+    - Behavior
+    - Soundboard
+    - VRChat OSC
+    - Advanced
+    - TTS Provider
+  sidebar_anchor_order:
+    - tab: Appearance
+      anchors: ["Appearance Mode", "Visible Buttons"]
+    - tab: Audio Output
+      anchors: ["Output Device", "Device Information", "Audio Normalization", "Microphone Passthrough"]
+    - tab: Abbreviations
+      anchors: ["Abbreviations", "Usage Tips"]
+    - tab: Keybinds
+      anchors: ["Keybinds"]
+    - tab: Behavior
+      anchors: ["Behavior", "Text Transcription", "Transcription Refinement", "Audio Pre-processing", "Word Corrections"]
+    - tab: Soundboard
+      anchors: ["Soundboard"]
+    - tab: Voice
+      anchors: ["★ Favorite Voices", "Recent Voices"]
+    - tab: VRChat OSC
+      anchors: ["VRChat OSC Chatbox", "VRChat Viseme Lip-Sync", "Typing Indicator"]
+    - tab: Advanced
+      anchors: ["Cache Management", "Network Privacy", "Performance Settings", "Experimental Features"]
+    - tab: TTS Provider
+      anchors: ["Active Provider", "Provider Details"]
+  conditional_visibility:
+    - "The Coqui-only settings frame in TTS Provider stays hidden for non-Coqui providers and reappears immediately after the Provider Details separator when Coqui is selected."
+  interaction_invariants:
+    - "Sidebar anchor count and order remain unchanged per tab and still target the matching section header through BaseTab._scroll_to_section()."
+    - "Scroll-to-section behavior continues to land close to the intended header even when the header lives inside nested frames."
+    - "Long tabs remain vertically scrollable after the refresh, including Voice favorites/recent lists and Advanced cache/status content."
+
+tab_coverage_matrix:
+  - tab: Appearance
+    pattern: standard-form
+    surface_mode: direct shared shell/base helpers
+    manual_adapters:
+      - "None beyond section wrapper hookup."
+    verification_depth: standard
+    focus:
+      - "Keep Appearance Mode → Visible Buttons order."
+  - tab: Audio Output
+    pattern: textbox-heavy
+    surface_mode: shared helpers plus local readability alignment
+    manual_adapters:
+      - "Device Information textbox surface/readability"
+      - "VB-Cable warning readability within the section container"
+    verification_depth: deep
+    focus:
+      - "Keep Output Device → Device Information → Audio Normalization → Microphone Passthrough order."
+  - tab: Abbreviations
+    pattern: textbox-heavy
+    surface_mode: shared helpers plus textbox/readability adapter
+    manual_adapters:
+      - "Abbreviation editor textbox surface"
+      - "Usage Tips readability inside refreshed surfaces"
+    verification_depth: deep
+    focus:
+      - "Keep Abbreviations → Usage Tips order."
+  - tab: Keybinds
+    pattern: row-heavy
+    surface_mode: shared helpers plus lightweight row-spacing adapter
+    manual_adapters:
+      - "Keybind row spacing and alignment"
+    verification_depth: deep
+    focus:
+      - "Preserve single Keybinds section and row widths."
+  - tab: Behavior
+    pattern: standard-form
+    surface_mode: direct shared shell/base helpers
+    manual_adapters:
+      - "Only if descriptive copy needs spacing tuning."
+    verification_depth: standard
+    focus:
+      - "Keep Behavior → Text Transcription → Transcription Refinement → Audio Pre-processing → Word Corrections order."
+  - tab: Soundboard
+    pattern: row-heavy
+    surface_mode: shared helpers plus lightweight row-spacing adapter
+    manual_adapters:
+      - "Soundboard utility row spacing"
+    verification_depth: deep
+    focus:
+      - "Preserve single Soundboard section without boxing every inner row."
+  - tab: Voice
+    pattern: dynamic-and-scroll-heavy
+    surface_mode: shared helpers plus manual adapters
+    manual_adapters:
+      - "Voice info panel nested surface"
+      - "Favorites and recent scrollable frames"
+      - "Search/selection/preview sections where plain labels currently define structure"
+    verification_depth: deep
+    focus:
+      - "Keep sidebar anchors ★ Favorite Voices → Recent Voices and preserve long-tab scrolling."
+  - tab: VRChat OSC
+    pattern: stacked-mixed-controls
+    surface_mode: shared helpers plus manual adapters
+    manual_adapters:
+      - "Complex subsection spacing across chatbox, viseme, and typing indicator controls"
+    verification_depth: deep
+    focus:
+      - "Keep VRChat OSC Chatbox → VRChat Viseme Lip-Sync → Typing Indicator order."
+  - tab: Advanced
+    pattern: dynamic-and-textbox-heavy
+    surface_mode: shared helpers plus manual adapters
+    manual_adapters:
+      - "Cache stats textbox"
+      - "Dynamic cache/status panel readability"
+    verification_depth: deep
+    focus:
+      - "Keep Cache Management → Network Privacy → Performance Settings → Experimental Features order and preserve cache stats readability."
+  - tab: TTS Provider
+    pattern: conditional
+    surface_mode: shared helpers plus manual adapters
+    manual_adapters:
+      - "Provider description surface"
+      - "Conditional Coqui settings frame"
+      - "Info-note treatment without turning notes into extra cards"
+    verification_depth: deep
+    focus:
+      - "Keep Active Provider → Provider Details anchors and preserve Coqui-only visibility behavior."
+
+pattern_risk_matrix:
+  - pattern: standard-form
+    coverage: "Direct shared shell/base helper adoption with stable section-header order and restrained top-level card treatment."
+    primary_risk: "Shared wrappers could still alter spacing rhythm or section-header readability if applied too mechanically."
+  - pattern: row-heavy
+    coverage: "Only outer section containers change; inner utility rows stay transparent and keep current widths/alignment."
+    primary_risk: "Row clusters can become cramped or noisy if inner controls inherit card styling."
+  - pattern: textbox-heavy
+    coverage: "Shared sections plus targeted textbox/readability alignment."
+    primary_risk: "Textbox and warning surfaces may lose contrast or nested-surface readability after the refresh."
+  - pattern: dynamic-and-scroll-heavy
+    coverage: "Shared top-level surfaces plus explicit adapters for nested scrollables, info panels, and long-tab behavior."
+    primary_risk: "Nested scroll areas or sidebar jumps can regress even if the static layout looks correct."
+  - pattern: stacked-mixed-controls
+    coverage: "Shared section framing with minimal subsection spacing adapters."
+    primary_risk: "Mixed controls can look over-grouped if every subsection receives equal card emphasis."
+  - pattern: conditional
+    coverage: "Shared section framing with explicit preservation of Coqui-only visibility and anchor boundaries."
+    primary_risk: "Conditional sections can accidentally gain anchors, shift placement, or feel double-boxed."
+
+pre_mortem:
+  overall_risk_level: medium
+  critical_failure_modes:
+    - scenario: "The foundation assumes shared helpers can solve every tab, so row-heavy, textbox-heavy, conditional, or dynamic tabs regress because they needed explicit adapters."
+      likelihood: medium
+      impact: high
+      mitigation: "Make the wave-1 foundation produce a tab/pattern adoption audit and route wave-2 work through that audit instead of treating helper reuse as universal."
+    - scenario: "Card treatment expands to every nested frame, row, or note, making the refresh louder than the main window and creating double-boxed sections."
+      likelihood: medium
+      impact: medium
+      mitigation: "Define card boundaries up front: wrap top-level sections only, keep inner rows transparent by default, and retain secondary surfaces only where they already communicate structure."
+    - scenario: "Surface-color or focus-treatment updates reduce contrast, obscure focus state, or make nested surfaces hard to distinguish."
+      likelihood: medium
+      impact: high
+      mitigation: "Add explicit accessibility validation for contrast, focus visibility, readability, and nested-surface differentiation before the refresh is approved."
+    - scenario: "New wrappers or padding shifts break sidebar anchor targeting, conditional Coqui placement, or long-tab scroll behavior."
+      likelihood: medium
+      impact: high
+      mitigation: "Validate tab order, sidebar anchor count/order, section-header order, Coqui visibility, scroll-to-section behavior, and long-tab scrolling in the final review gate."
+  assumptions:
+    - "docs/PRD.yaml is the source of truth for scope and limits."
+    - "src/gui/main_window.py and src/gui/theme_constants.py define the main-window spacing and surface language that settings should follow closely."
+    - "The current tab order and section-header order in src/gui/settings_window.py and src/gui/settings_tabs/*.py are the invariants that must be preserved."
+    - "README.md should only change if the shipped settings wording or navigation description becomes inaccurate after the refresh."
+
+implementation_specification:
+  code_structure: "Centralize the modernization in shared styling leverage points first, but treat that foundation as both a styling layer and an audit artifact. Wave 1 should deliver shared shell/base helpers, a tab/pattern adoption map saying which tabs can consume them directly versus which need manual adapters, and explicit card-boundary rules limiting card treatment to top-level section containers. Wave 2 should then apply direct reuse where safe and targeted adapters where needed, preserving plain inner rows, textboxes, lists, notes, and conditional blocks unless an existing secondary surface already provides meaning."
+  affected_areas:
+    - "src/gui/theme_constants.py"
+    - "src/gui/settings_window.py"
+    - "src/gui/settings_tabs/base_tab.py"
+    - "src/gui/settings_tabs/"
+    - "README.md (conditional only if validation finds wording drift)"
+  component_details:
+    - component: "Settings window shell"
+      responsibility: "Align the top-level settings window, tabview chrome, and action-bar spacing with the main window's quieter surfaces and spacing without changing the tab model or button behavior."
+      interfaces:
+        - "SettingsWindow._create_window()"
+        - "CustomTkinter tabview and container styling"
+    - component: "Shared settings section surface helpers"
+      responsibility: "Provide reusable section wrappers, section-heading treatment, muted description styling, separator behavior, and spacing tokens that tabs can share without rewriting content order."
+      interfaces:
+        - "BaseTab.setup_layout()"
+        - "BaseTab.create_section_header()"
+        - "BaseTab.create_description()"
+        - "BaseTab.create_separator()"
+    - component: "Adoption audit and adapter map"
+      responsibility: "Classify each tab and section pattern as direct shared-styling reuse versus manual-adapter work so downstream tasks do not assume the helpers are sufficient everywhere."
+      interfaces:
+        - "Tab coverage matrix for Appearance, Audio Output, Abbreviations, Keybinds, Behavior, Soundboard, Voice, VRChat OSC, Advanced, and TTS Provider"
+        - "Card-boundary rules for top-level versus nested surfaces"
+    - component: "Tab-specific adapters"
+      responsibility: "Apply minimal manual restructuring only where nested frames, textboxes, row-heavy layouts, conditional content, or dynamic panels need explicit styling alignment after the shared foundation lands."
+      interfaces:
+        - "VoiceTab._create_*_section()"
+        - "AdvancedTab._create_*_section()"
+        - "TTSProviderTab._create_content()"
+        - "VRChatOSCTab._create_*_section()"
+        - "Representative row/textbox-heavy builders in src/gui/settings_tabs/"
+  dependencies:
+    - component: "Shared settings section surface helpers"
+      relationship: "Depend on main-window theme tokens so settings can reuse existing spacing and surface decisions instead of introducing a second visual language."
+    - component: "Adoption audit and adapter map"
+      relationship: "Depends on the current settings tab implementations so the plan can preserve existing header order, sidebar anchors, and conditional visibility while deciding where helpers are enough."
+    - component: "Tab-specific adapters"
+      relationship: "Depend on both the shared helper contract and the adoption audit so only tabs that need manual handling receive it."
+  integration_points:
+    - "Settings window creation and tabview layout in src/gui/settings_window.py"
+    - "Shared tab layout primitives in src/gui/settings_tabs/base_tab.py"
+    - "Main-window style tokens in src/gui/theme_constants.py"
+    - "Individual settings tab section builders in src/gui/settings_tabs/"
+    - "README Settings section only if validation confirms a documentation mismatch"
+
+contracts:
+  - from_task: settings-surface-foundation
+    to_task: settings-standard-tabs-alignment
+    interface: "Shared shell/base primitives plus an adoption audit marking which standard, row-heavy, and textbox-heavy tabs can use the shared treatment directly and which need lightweight adapters."
+    format: "Python helper contract plus tab coverage matrix and card-boundary rules"
+  - from_task: settings-surface-foundation
+    to_task: settings-special-tabs-alignment
+    interface: "Shared shell/base primitives plus a manual-adapter map for Voice, VRChat OSC, Advanced, and TTS Provider, including nested-surface boundaries and conditional-visibility invariants."
+    format: "Python helper contract plus complex-tab adapter checklist"
+  - from_task: settings-standard-tabs-alignment
+    to_task: settings-visual-review
+    interface: "Updated standard/row-heavy/textbox-heavy tabs with recorded section-order invariants and any adapter decisions that affected readability or nesting."
+    format: "Desktop UI walkthrough checklist and per-pattern verification notes"
+  - from_task: settings-special-tabs-alignment
+    to_task: settings-visual-review
+    interface: "Updated complex/conditional tabs with recorded Coqui visibility, sidebar-anchor, and long-tab scroll invariants."
+    format: "Desktop UI walkthrough checklist and per-pattern verification notes"
+  - from_task: settings-visual-review
+    to_task: settings-doc-sync
+    interface: "Either a no-doc-change-needed decision or a minimal documentation delta if README/settings wording no longer matches the shipped UI."
+    format: "Documentation delta decision with supporting validation notes"
+
+tasks:
+  - id: settings-surface-foundation
+    title: Establish shared settings-surface primitives and an adoption audit
+    description: |
+      Build the shared styling layer first in the settings shell and base tab helpers, then immediately audit how each tab should consume it.
+      Reuse main-window spacing, surface colors, and subtle card treatment so the settings window gains common section containers, calmer tab chrome, and consistent muted description styling without changing tabs, ordering, or behaviors.
+      This task must also define the adoption matrix and card-boundary rules so downstream work knows where shared helpers are enough and where manual adapters are still required.
+    wave: 1
+    agent: gem-implementer
+    prototype: false
+    covers: ["AC-007", "AC-008", "AC-009"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: src/gui/settings_window.py
+        description: "Owns the settings shell, tab order, title area, tabview, and action buttons."
+      - path: src/gui/settings_tabs/base_tab.py
+        description: "Owns the shared tab layout, sidebar, headers, descriptions, separators, and scroll-to-section behavior."
+      - path: src/gui/theme_constants.py
+        description: "Defines spacing and surface tokens already used by the main window."
+    planning_pass: 2
+    planning_history:
+      - pass: 2
+        reason: "The foundation still provides the best leverage, but it now has to output an explicit adoption audit and boundary rules so later tasks do not over-assume helper reuse."
+        timestamp: "2026-04-09T00:00:00Z"
+        estimated_effort: medium
+        estimated_files: 3
+        estimated_lines: 240
+        focus_area: "shared settings shell and adoption audit"
+        verification:
+          - "Open the settings window and confirm the shell, tab chrome, and section wrappers visually move closer to the main window."
+          - "Record which tabs/section patterns are direct shared-style consumers versus manual-adapter cases before cohort work begins."
+          - "Verify card boundaries wrap top-level sections only and do not turn every nested row, textbox, list, or note into its own card."
+          - "Confirm tab labels, tab order, save/apply/cancel/reset controls, and sidebar navigation still behave exactly as before."
+        acceptance_criteria:
+          - "Settings window shell uses shared spacing and surface decisions derived from the main window design tokens."
+          - "BaseTab exposes reusable section-surface helpers and the plan records which tabs can use them directly versus with adapters."
+          - "Card-treatment boundaries are explicit and keep nested rows, textboxes, lists, and notes from being double-boxed unless an existing secondary surface is already necessary."
+          - "No navigation, tab ordering, or content ordering changes are introduced by the foundation layer."
+        failure_modes:
+          - scenario: "The foundation assumes shared helpers solve every tab and leaves no explicit guidance for row-heavy, textbox-heavy, or conditional layouts."
+            likelihood: medium
+            impact: high
+            mitigation: "Require the adoption audit as a foundation deliverable before wave-2 implementation starts."
+          - scenario: "Base helper changes break wraplength updates, sidebar section scrolling, or nested-frame anchor targeting."
+            likelihood: medium
+            impact: high
+            mitigation: "Preserve the current resize binding and section-label tracking, and verify scroll-to-section behavior before cohort tasks begin."
+    tech_stack:
+      - "Python"
+      - "customtkinter"
+    test_coverage: "Manual desktop smoke coverage is required because this task defines a visual styling contract plus adoption/boundary rules rather than logic-only change."
+
+  - id: settings-standard-tabs-alignment
+    title: Apply audited surface treatment to standard, row-heavy, and textbox-heavy tabs
+    description: |
+      Restyle the straightforward tabs and the lightweight adapter cases using the wave-1 audit instead of assuming every tab needs identical wrapping.
+      Direct shared adoption should cover the simplest sections first, while Audio Output, Abbreviations, Keybinds, and Soundboard receive only the targeted adapters needed for textbox readability, row spacing, and subtle section framing.
+      Keep all tab names, section titles, section order, and control order stable, and avoid wrapping every inner row or control cluster in its own card.
+    wave: 2
+    agent: gem-implementer
+    prototype: false
+    covers: ["AC-007", "AC-008", "AC-009", "AC-010"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - settings-surface-foundation
+    conflicts_with: []
+    context_files:
+      - path: src/gui/settings_tabs/
+        description: "Contains the covered standard, row-heavy, and textbox-heavy tabs."
+      - path: src/gui/settings_tabs/audio_output_tab.py
+        description: "Representative textbox-heavy tab with a warning label, textbox, and multiple section blocks."
+      - path: src/gui/settings_tabs/keybinds_tab.py
+        description: "Representative row-heavy tab where spacing can regress if every inner row is boxed."
+    planning_pass: 2
+    planning_history:
+      - pass: 2
+        reason: "This cohort now follows the adoption audit: direct reuse where safe, targeted adapters where readability or row density would otherwise regress."
+        timestamp: "2026-04-09T00:00:00Z"
+        estimated_effort: medium
+        estimated_files: 3
+        estimated_lines: 290
+        focus_area: "standard, row-heavy, and textbox-heavy tabs"
+        verification:
+          - "Open Appearance, Audio Output, Behavior, Abbreviations, Keybinds, and Soundboard and confirm each top-level section uses a consistent surface treatment without boxing every inner row."
+          - "Confirm tab names/order are unchanged and the covered tabs keep their current section-header titles/order."
+          - "Check textbox-heavy tabs for contrast, focus visibility, readability, and clear nested-surface differentiation inside refreshed sections."
+          - "Check row-heavy tabs for width, spacing, and clipping regressions after the outer section treatment lands."
+        acceptance_criteria:
+          - "Appearance and Behavior consume the shared section-container treatment directly."
+          - "Audio Output, Abbreviations, Keybinds, and Soundboard use only the adapters identified by the audit instead of receiving blanket nested-card treatment."
+          - "Covered tabs preserve section-header and control order while staying visually close to the main window and restrained in tone."
+        failure_modes:
+          - scenario: "Dense row-based tabs such as Keybinds or Soundboard become cramped or visually noisy because inner rows pick up card styling."
+            likelihood: medium
+            impact: medium
+            mitigation: "Preserve existing row widths and transparency for inner rows, and tune only the outer section container plus spacing."
+          - scenario: "Textbox-heavy tabs such as Abbreviations and Audio Output keep old readability problems or become harder to distinguish from surrounding surfaces."
+            likelihood: medium
+            impact: medium
+            mitigation: "Explicitly align textbox and warning surfaces with the shared palette and validate readability/nested-surface separation during the cohort walkthrough."
+    tech_stack:
+      - "Python"
+      - "customtkinter"
+    test_coverage: "Manual walkthrough across the six covered tabs with emphasis on textbox readability, row density, section-header order, and subtle surface boundaries."
+
+  - id: settings-special-tabs-alignment
+    title: Apply audited adapters to dynamic and conditional settings tabs
+    description: |
+      Apply the shared section-container system to the tabs with nested frames, conditional content, scrollable lists, or dynamic status panels using the explicit adapter map from wave 1.
+      This cohort covers Voice, VRChat OSC, Advanced, and TTS Provider so the most complex tabs match the same surface system without changing functionality, section ordering, sidebar anchor order, or conditional visibility.
+      Manual restructuring must stay minimal and should only touch the boundaries needed to align surfaces, preserve readability, and avoid double-boxing.
+    wave: 2
+    agent: gem-implementer
+    prototype: false
+    covers: ["AC-007", "AC-008", "AC-009", "AC-010"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - settings-surface-foundation
+    conflicts_with: []
+    context_files:
+      - path: src/gui/settings_tabs/voice_tab.py
+        description: "Largest settings tab with nested frames, favorites and recent lists, sliders, and a custom info panel."
+      - path: src/gui/settings_tabs/advanced_tab.py
+        description: "Contains dynamic cache stats, multiple section types, and textbox-heavy panels."
+      - path: src/gui/settings_tabs/tts_provider_tab.py
+        description: "Includes conditional Coqui-only sections and descriptive blocks that must keep current visibility rules."
+    planning_pass: 2
+    planning_history:
+      - pass: 2
+        reason: "The complex tabs now have explicit adapter framing so nested, dynamic, and conditional surfaces can align without overshooting the subtle goal."
+        timestamp: "2026-04-09T00:00:00Z"
+        estimated_effort: medium
+        estimated_files: 3
+        estimated_lines: 300
+        focus_area: "dynamic and conditional tab cohort"
+        verification:
+          - "Open Voice, VRChat OSC, Advanced, and TTS Provider and confirm their custom frames, lists, and dynamic panels visually match the standard cohort without becoming louder than the main window."
+          - "Confirm the covered tabs keep their current sidebar anchor count/order and visible section-header order."
+          - "Verify Coqui-only sections still hide/show correctly and reappear in the same location after Provider Details."
+          - "Verify Voice and Advanced still support long-tab scrolling, nested scrollables, and sidebar scroll-to-section behavior after the visual pass."
+          - "Check focus visibility, contrast, and readability for nested panels, textboxes, and conditional content."
+        acceptance_criteria:
+          - "Complex tabs use the same top-level section-container language as the standard cohort with only the manual adapters identified in the audit."
+          - "Conditional and dynamic subsections keep their current visibility, ordering, and placement rules."
+          - "Scrollable lists, textboxes, and nested panels remain readable and clearly differentiated from their parent surfaces."
+        failure_modes:
+          - scenario: "Nested frames in Voice or VRChat OSC inherit card styling inconsistently and create double-boxed or visually noisy sections."
+            likelihood: medium
+            impact: medium
+            mitigation: "Apply card surfaces at the section boundary only and keep interior control rows transparent unless a secondary surface is already necessary."
+          - scenario: "Conditional TTS Provider sections or Advanced dynamic panels lose clarity, placement, or scroll behavior after the new section system lands."
+            likelihood: medium
+            impact: high
+            mitigation: "Validate Coqui show/hide flows, cache/status readability, scroll-to-section behavior, and long-tab scrolling as part of the cohort walkthrough rather than only checking static layout."
+    tech_stack:
+      - "Python"
+      - "customtkinter"
+    test_coverage: "Manual walkthrough across complex tabs with special attention to conditional sections, dynamic status text, nested surfaces, sidebar anchors, and long-tab scrolling."
+
+  - id: settings-visual-review
+    title: Validate visual parity, accessibility, and structural invariants
+    description: |
+      Perform a focused design and accessibility review after both implementation cohorts land.
+      Confirm the settings experience now feels cohesive with the main window while staying subtle, clean, readable, and structurally unchanged across all ten tabs.
+      This gate must explicitly verify contrast, focus visibility, readability, nested-surface differentiation, tab and section invariants, conditional Coqui visibility, scroll-to-section behavior, and long-tab scrolling.
+    wave: 3
+    agent: gem-designer
+    prototype: false
+    covers: ["AC-007", "AC-008", "AC-009", "AC-010"]
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - settings-standard-tabs-alignment
+      - settings-special-tabs-alignment
+    conflicts_with: []
+    context_files:
+      - path: src/gui/main_window.py
+        description: "Source of the target visual language for card surfaces, spacing rhythm, restrained tone, and readable surface contrast."
+      - path: src/gui/settings_window.py
+        description: "Defines the tab order that must remain unchanged."
+      - path: src/gui/settings_tabs/
+        description: "All ten tabs must be checked for consistency, stable ordering, accessibility, and correct anchor/scroll behavior."
+    planning_pass: 2
+    planning_history:
+      - pass: 2
+        reason: "The final gate now has to catch subtle design overshoot and accessibility/interaction regressions, not just broad visual inconsistency."
+        timestamp: "2026-04-09T00:00:00Z"
+        estimated_effort: small
+        estimated_files: 0
+        estimated_lines: 0
+        focus_area: "visual, accessibility, and invariant review"
+        verification:
+          - "Compare the settings shell and representative sections side by side with the main window."
+          - "Check all ten tabs for consistent section surfaces, spacing, tab order, sidebar anchor count/order, and unchanged section-header titles/order."
+          - "Verify contrast, focus visibility, readability of muted/descriptive text, and clear nested-surface differentiation after the refresh."
+          - "Exercise TTS Provider conditional visibility, sidebar scroll-to-section behavior, and long-tab scrolling in Voice and Advanced."
+          - "Flag any tab that still feels visually denser, louder, less readable, or structurally different than the intended subtle refresh."
+        acceptance_criteria:
+          - "The updated settings UI is clearly closer to the main window than the current baseline while remaining subtle and restrained."
+          - "Contrast, focus visibility, readability, and nested-surface differentiation remain acceptable across refreshed tabs."
+          - "Tab order, sidebar anchor order, section-header order, Coqui-only visibility, and long-tab scroll behavior remain unchanged."
+          - "Any remaining inconsistencies or documentation mismatches are recorded before documentation work is considered."
+        failure_modes:
+          - scenario: "The refresh is technically consistent but still feels visually disconnected from the main window or too loud for the subtle goal."
+            likelihood: medium
+            impact: medium
+            mitigation: "Review the shell and representative section cards against the main window rather than judging tabs in isolation."
+          - scenario: "A surface change passes visual review but quietly reduces focus visibility, contrast, readability, or scroll/anchor behavior."
+            likelihood: medium
+            impact: high
+            mitigation: "Treat accessibility and interaction invariants as first-class review checks alongside visual parity."
+    requires_review: true
+    review_depth: full
+    review_security_sensitive: false
+
+  - id: settings-doc-sync
+    title: Conditionally sync docs only if validation finds settings wording drift
+    description: |
+      Update maintainer-facing documentation only if the validation gate finds that README or other settings wording no longer matches the shipped UI.
+      If the refresh preserves the documented workflow and naming, record that no documentation delta is needed and leave docs unchanged.
+      Any approved doc change must stay minimal, describe the work as style alignment only, and avoid implying tab renames, reordered navigation, or new workflows.
+    wave: 4
+    agent: gem-documentation-writer
+    prototype: false
+    covers: ["AC-008"]
+    priority: low
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - settings-visual-review
+    conflicts_with: []
+    context_files:
+      - path: README.md
+        description: "Existing public-facing settings documentation should change only if validation finds wording drift."
+      - path: docs/PRD.yaml
+        description: "Source of truth for scope boundaries stating that this work is style alignment only."
+      - path: docs/plan/settings-modernize-20260409/plan.yaml
+        description: "Execution plan context for documenting whether a real docs delta exists."
+    planning_pass: 2
+    planning_history:
+      - pass: 2
+        reason: "Documentation should now be conditional so unchanged workflows are not rewritten unless the validation gate finds a real mismatch."
+        timestamp: "2026-04-09T00:00:00Z"
+        estimated_effort: small
+        estimated_files: 2
+        estimated_lines: 40
+        focus_area: "conditional settings documentation parity"
+        verification:
+          - "Only execute this task if settings-visual-review reports README or maintainer-facing wording drift."
+          - "If executed, update wording minimally so it reflects the refreshed visual presentation without suggesting tab rename, reorder, or navigation rewrite."
+          - "If no mismatch is found, explicitly record that no documentation delta was required."
+        acceptance_criteria:
+          - "No documentation change is made when the shipped UI still matches existing settings wording and workflows."
+          - "Any approved documentation delta describes the work as a styling alignment pass rather than a redesign."
+          - "Documentation does not imply new workflows, renamed tabs, reordered sections, or other out-of-scope behavior changes."
+        failure_modes:
+          - scenario: "Documentation overstates the change and implies new workflows or renamed settings sections."
+            likelihood: low
+            impact: medium
+            mitigation: "Keep the doc delta minimal and scope-locked to style-alignment terminology."
+    task_type: update
+    audience: developers
+    coverage_matrix:
+      - "README Settings section is checked only when validation flags wording drift."
+      - "Scope language must continue to match docs/PRD.yaml style-alignment constraints."
+      - "If no mismatch exists, documentation remains unchanged and that decision is recorded."

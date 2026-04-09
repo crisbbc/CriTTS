@@ -19,12 +19,12 @@ class AudioCache:
     Persistent audio cache for TTS generation.
     
     Stores generated audio files on disk with metadata for LRU eviction.
-    Cache keys are generated from text, voice, rate, volume, and pitch parameters.
+    Cache keys are generated from provider, text, voice, rate, volume, and pitch parameters.
     """
     
     DEFAULT_CACHE_DIR = Path.home() / ".critts" / "audio_cache"
     DEFAULT_MAX_SIZE_MB = 500
-    CACHE_VERSION = 1  # Increment when cache format changes
+    CACHE_VERSION = 2  # Increment when cache format changes
     
     # Batching configuration for index persistence
     FLUSH_INTERVAL_STORES = 10  # Flush index every N store operations
@@ -144,8 +144,8 @@ class AudioCache:
             
             # Check version compatibility
             if data.get("version", 0) != self.CACHE_VERSION:
-                logger.info("Cache version mismatch, rebuilding index")
-                self._rebuild_index()
+                logger.info("Cache version mismatch, clearing incompatible cache entries")
+                self._clear_incompatible_cache_entries()
                 return
             
             # Load entries
@@ -218,6 +218,7 @@ class AudioCache:
                     stat = audio_file.stat()
                     self._index[key] = {
                         "text": "",  # Unknown after rebuild
+                        "provider": "",  # Unknown after rebuild
                         "voice": "",  # Unknown after rebuild
                         "rate": 0,
                         "volume": 100,
@@ -248,12 +249,35 @@ class AudioCache:
         except Exception as e:
             logger.warning("Failed to rebuild cache index: %s", e)
     
-    def _generate_key(self, text: str, voice: str, rate: int, volume: int, pitch: int) -> str:
+    def _clear_incompatible_cache_entries(self):
+        """Remove cache entries that belong to an incompatible cache schema version."""
+        self._index = OrderedDict()
+        self._total_size_bytes = 0
+
+        for pattern in ("*.mp3", "*.meta.json"):
+            for cache_file in self.cache_dir.glob(pattern):
+                try:
+                    cache_file.unlink()
+                except OSError:
+                    pass
+
+        self._save_index()
+
+    def _generate_key(
+        self,
+        text: str,
+        voice: str,
+        rate: int,
+        volume: int,
+        pitch: int,
+        provider: str = "",
+    ) -> str:
         """
         Generate a cache key from TTS parameters.
         
         Args:
             text: Text to synthesize
+            provider: TTS provider identifier
             voice: Voice identifier
             rate: Speech rate
             volume: Volume level
@@ -264,19 +288,29 @@ class AudioCache:
         """
         # Normalize text
         normalized_text = text.strip().lower()
+        normalized_provider = provider.strip().lower()
         
         # Create key string
-        key_string = f"{normalized_text}|{voice}|{rate}|{volume}|{pitch}"
+        key_string = f"{normalized_provider}|{normalized_text}|{voice}|{rate}|{volume}|{pitch}"
         
         # Generate hash
         return hashlib.sha256(key_string.encode('utf-8')).hexdigest()[:32]
     
-    def lookup(self, text: str, voice: str, rate: int = 0, volume: int = 100, pitch: int = 0) -> Optional[bytes]:
+    def lookup(
+        self,
+        text: str,
+        voice: str,
+        rate: int = 0,
+        volume: int = 100,
+        pitch: int = 0,
+        provider: str = "",
+    ) -> Optional[bytes]:
         """
         Look up cached audio for the given parameters.
         
         Args:
             text: Text to synthesize
+            provider: TTS provider identifier
             voice: Voice identifier
             rate: Speech rate
             volume: Volume level
@@ -289,7 +323,7 @@ class AudioCache:
             return None
         
         with self._lock:
-            key = self._generate_key(text, voice, rate, volume, pitch)
+            key = self._generate_key(text, voice, rate, volume, pitch, provider)
             
             if key not in self._index:
                 self._misses += 1
@@ -329,6 +363,7 @@ class AudioCache:
         rate: int = 0,
         volume: int = 100,
         pitch: int = 0,
+        provider: str = "",
         generation_time: float = 0.0
     ) -> bool:
         """
@@ -337,6 +372,7 @@ class AudioCache:
         Args:
             audio_data: Audio bytes to cache
             text: Text that was synthesized
+            provider: TTS provider identifier
             voice: Voice identifier
             rate: Speech rate
             volume: Volume level
@@ -350,7 +386,7 @@ class AudioCache:
             return False
         
         with self._lock:
-            key = self._generate_key(text, voice, rate, volume, pitch)
+            key = self._generate_key(text, voice, rate, volume, pitch, provider)
             
             try:
                 # Save audio file
@@ -361,6 +397,7 @@ class AudioCache:
                 # Create metadata (stored in centralized index, not individual files)
                 meta = {
                     "text": text[:200],  # Truncate for storage
+                    "provider": provider,
                     "voice": voice,
                     "rate": rate,
                     "volume": volume,
