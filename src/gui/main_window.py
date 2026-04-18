@@ -2199,16 +2199,25 @@ class MainWindow:
         self._qc_volume_label.configure(text_color=colors["text_secondary"])
         self._qc_pitch_label.configure(text_color=colors["text_secondary"])
 
-        if self._quick_controls_visible:
-            self.controls_toggle_button.configure(
-                fg_color=colors["button_active"],
-                hover_color=colors["button_active_hover"],
+        self.controls_toggle_button.configure(
+            **self._get_toggle_button_theme_colors(
+                colors=colors,
+                is_active=self._quick_controls_visible,
             )
-        else:
-            self.controls_toggle_button.configure(
-                fg_color=colors["button_neutral"],
-                hover_color=colors["button_neutral_hover"],
-            )
+        )
+
+    @staticmethod
+    def _get_toggle_button_theme_colors(colors: dict, is_active: bool) -> dict:
+        """Return the active or neutral theme colors for toggle-style control buttons."""
+        if is_active:
+            return {
+                "fg_color": colors["button_active"],
+                "hover_color": colors["button_active_hover"],
+            }
+        return {
+            "fg_color": colors["button_neutral"],
+            "hover_color": colors["button_neutral_hover"],
+        }
     
     def refresh_status(self):
         """Refresh status display (called after settings change)."""
@@ -2363,34 +2372,50 @@ class MainWindow:
 
     def _update_quick_controls_provider(self):
         """Show pitch slider for all providers (Coqui does not use temperature controls)."""
+        if self._qc_pitch_group.winfo_manager() == "pack":
+            return
         self._qc_pitch_group.pack(side="left", fill="x", expand=True, padx=(SPACING_SM, 0))
 
     def refresh_quick_controls(self):
         """Sync quick controls sliders from current settings (called after settings save)."""
         try:
-            self._qc_rate_var.set(self.settings.get("rate", 0))
-            self._qc_rate_label.configure(text=f"Speed: {self._qc_rate_var.get():+d}%")
+            rate = self.settings.get("rate", 0)
+            if self._qc_rate_var.get() != rate:
+                self._qc_rate_var.set(rate)
+                self._qc_rate_label.configure(text=f"Speed: {rate:+d}%")
 
-            self._qc_volume_var.set(self.settings.get("volume", 100))
-            self._qc_volume_label.configure(text=f"Volume: {self._qc_volume_var.get()}%")
+            volume = self.settings.get("volume", 100)
+            if self._qc_volume_var.get() != volume:
+                self._qc_volume_var.set(volume)
+                self._qc_volume_label.configure(text=f"Volume: {volume}%")
 
-            self._qc_pitch_var.set(self.settings.get("pitch", 0))
-            self._qc_pitch_label.configure(text=f"Pitch: {self._qc_pitch_var.get():+d}%")
+            pitch = self.settings.get("pitch", 0)
+            if self._qc_pitch_var.get() != pitch:
+                self._qc_pitch_var.set(pitch)
+                self._qc_pitch_label.configure(text=f"Pitch: {pitch:+d}%")
 
-            self._quick_controls_visible = self.settings.get("quick_controls_visible", False)
-            if self._quick_controls_visible:
-                self.quick_controls_frame.grid()
-            else:
-                self.quick_controls_frame.grid_remove()
+            next_visible = self.settings.get("quick_controls_visible", False)
+            visibility_changed = self._quick_controls_visible != next_visible
+            self._quick_controls_visible = next_visible
+            if visibility_changed:
+                if self._quick_controls_visible:
+                    self.quick_controls_frame.grid()
+                else:
+                    self.quick_controls_frame.grid_remove()
+                self._apply_quick_controls_theme(self.settings.get("appearance_mode", "Dark"))
 
-            self._update_quick_controls_provider()
-            self._apply_quick_controls_theme(self.settings.get("appearance_mode", "Dark"))
+            if self._qc_pitch_group.winfo_manager() != "pack":
+                self._update_quick_controls_provider()
         except Exception:
             pass
 
     def _persist_quick_control_value(self, key, value, variable, label, format_label):
         """Persist a quick-control setting and restore the previous value on failure."""
         previous_value = self.settings.get(key, value)
+        if previous_value == value:
+            if variable.get() != previous_value:
+                variable.set(previous_value)
+            return True
         self.settings.set(key, value)
         if self.settings.save_settings():
             label.configure(text=format_label(value))

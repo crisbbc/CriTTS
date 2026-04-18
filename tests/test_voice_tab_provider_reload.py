@@ -11,6 +11,12 @@ from src.gui import settings_window as settings_window_module
 from src.gui.settings_window import SettingsWindow
 from src.gui.settings_tabs.advanced_tab import AdvancedTab
 from src.gui.settings_tabs.voice_tab import VoiceTab
+from src.gui.theme_constants import (
+    WINDOW_SETTINGS_HEIGHT,
+    WINDOW_SETTINGS_MIN_HEIGHT,
+    WINDOW_SETTINGS_MIN_WIDTH,
+    WINDOW_SETTINGS_WIDTH,
+)
 
 
 import pytest
@@ -107,6 +113,92 @@ def test_settings_window_refreshes_advanced_tab_when_opening(monkeypatch):
     advanced_tab._load_data.assert_called_once_with()
 
 
+def test_settings_window_creation_applies_minimum_layout_guard_without_disabling_resize():
+    """SettingsWindow creation should keep the shell resizable while enforcing the shared minimum size."""
+
+    class _FakeWindowShell:
+        def __init__(self):
+            self.resizable_state = (True, True)
+            self.geometry_calls = []
+            self.minsize_call = None
+            self.transient_parent = None
+            self.grabbed = False
+
+        def title(self, _value):
+            return None
+
+        def geometry(self, value):
+            self.geometry_calls.append(value)
+
+        def minsize(self, width, height):
+            self.minsize_call = (width, height)
+
+        def resizable(self, width=None, height=None):
+            if width is None and height is None:
+                return self.resizable_state
+            self.resizable_state = (width, height)
+            return self.resizable_state
+
+        def transient(self, parent):
+            self.transient_parent = parent
+
+        def grab_set(self):
+            self.grabbed = True
+
+        def update_idletasks(self):
+            return None
+
+        def winfo_screenwidth(self):
+            return 1600
+
+        def winfo_screenheight(self):
+            return 900
+
+    settings_window_module.ctk.CTkToplevel.reset_mock()
+    window_shell = _FakeWindowShell()
+    settings_window_module.ctk.CTkToplevel.return_value = window_shell
+
+    window = object.__new__(SettingsWindow)
+    window.parent = MagicMock()
+    window._build_window_content = MagicMock()
+
+    SettingsWindow._create_window(window)
+
+    settings_window_module.ctk.CTkToplevel.assert_called_once_with(window.parent)
+    assert f"{WINDOW_SETTINGS_WIDTH}x{WINDOW_SETTINGS_HEIGHT}" in window_shell.geometry_calls
+    assert (
+        window_shell.minsize_call
+        == (WINDOW_SETTINGS_MIN_WIDTH, WINDOW_SETTINGS_MIN_HEIGHT)
+    )
+    assert window_shell.resizable() == (True, True)
+    assert window_shell.transient_parent is window.parent
+    assert window_shell.grabbed is True
+    window._build_window_content.assert_called_once_with()
+
+
+def test_refresh_theme_rebuilds_in_place_without_recreating_settings_shell():
+    """Theme refresh should preserve the existing settings toplevel while rebuilding its children."""
+    settings_window_module.ctk.CTkToplevel.reset_mock()
+    child = MagicMock()
+    window = object.__new__(SettingsWindow)
+    window.tabs = []
+    window.tabview = MagicMock()
+    window.tabview.get.return_value = "Behavior"
+    window.window = MagicMock()
+    window.window.winfo_children.return_value = [child]
+    window._build_window_content = MagicMock()
+    window._on_refresh = MagicMock()
+
+    SettingsWindow.refresh_theme(window)
+
+    settings_window_module.ctk.CTkToplevel.assert_not_called()
+    child.destroy.assert_called_once_with()
+    window._build_window_content.assert_called_once_with(selected_tab="Behavior")
+    window._on_refresh.assert_called_once_with()
+    window.window.transient.assert_not_called()
+    window.window.grab_set.assert_not_called()
+
+
 def test_collect_and_save_defers_settings_shell_refresh_until_after_apply_callback_returns():
     """Apply should schedule shell rebuilding after the button callback frame unwinds."""
     window = object.__new__(SettingsWindow)
@@ -136,6 +228,53 @@ def test_collect_and_save_defers_settings_shell_refresh_until_after_apply_callba
     window.refresh_theme.assert_called_once_with()
     assert call_order == ["on_save", "refresh_theme"]
     window.window.destroy.assert_not_called()
+
+
+def test_collect_and_save_skips_apply_refresh_schedule_for_true_noop():
+    """Apply should not rebuild the settings shell when the collected values already match runtime settings."""
+    window = object.__new__(SettingsWindow)
+    tab = MagicMock()
+    tab.get_settings.return_value = {"appearance_mode": "Dark"}
+    tab.validate.return_value = []
+    window.tabs = [tab]
+    window.settings = MagicMock()
+    window.settings.get_all.return_value = {"appearance_mode": "Dark"}
+    window.settings.save_settings.return_value = True
+    window.on_save = MagicMock()
+    window.window = MagicMock()
+    window.refresh_theme = MagicMock()
+
+    SettingsWindow._collect_and_save(window, close=False)
+
+    window.settings.set.assert_called_once_with("appearance_mode", "Dark")
+    window.settings.save_settings.assert_called_once_with()
+    window.on_save.assert_called_once_with()
+    window.window.after.assert_not_called()
+    window.refresh_theme.assert_not_called()
+    window.window.destroy.assert_not_called()
+
+
+def test_schedule_refresh_theme_deduplicates_pending_apply_refresh():
+    """Apply refresh scheduling should coalesce duplicate requests until the deferred rebuild runs."""
+    window = object.__new__(SettingsWindow)
+    scheduled_callbacks = []
+    window.window = MagicMock()
+    window.window.after.side_effect = lambda delay, callback: scheduled_callbacks.append(callback)
+    window.refresh_theme = MagicMock()
+
+    SettingsWindow._schedule_refresh_theme(window)
+    SettingsWindow._schedule_refresh_theme(window)
+
+    window.window.after.assert_called_once()
+    assert len(scheduled_callbacks) == 1
+
+    scheduled_callbacks[0]()
+
+    window.refresh_theme.assert_called_once_with()
+
+    SettingsWindow._schedule_refresh_theme(window)
+
+    assert window.window.after.call_count == 2
 
 
 def test_refresh_theme_stops_active_voice_preview_before_rebuilding():
@@ -244,6 +383,46 @@ def test_cancel_and_refresh_buttons_use_surface_theme_neutral_tokens_in_light_mo
         assert button_kw[btn_name]["hover_color"] == surface_theme["button_neutral_hover"], (
             f"{btn_name} hover_color should equal surface_theme['button_neutral_hover'] in Light mode"
         )
+
+
+def test_build_window_content_resolves_surface_theme_once_for_tabview_style(monkeypatch):
+    """Settings shell rebuilds should reuse one surface-theme snapshot for tabview chrome."""
+    import src.gui.settings_window as sw_module
+
+    ctk = sw_module.ctk
+    ctk.get_appearance_mode.return_value = "Light"
+
+    for name in (
+        "VoiceTab", "AudioOutputTab", "AppearanceTab", "AbbreviationsTab",
+        "KeybindsTab", "BehaviorTab", "SoundboardTab", "VRChatOSCTab",
+        "AdvancedTab", "TTSProviderTab",
+    ):
+        monkeypatch.setattr(sw_module, name, MagicMock())
+
+    real_get_settings_surface_theme = sw_module.get_settings_surface_theme
+    resolved_modes = []
+
+    def tracking_get_settings_surface_theme(mode=None):
+        resolved_modes.append(mode)
+        return real_get_settings_surface_theme(mode)
+
+    monkeypatch.setattr(
+        sw_module,
+        "get_settings_surface_theme",
+        tracking_get_settings_surface_theme,
+    )
+
+    window = object.__new__(SettingsWindow)
+    window.window = MagicMock()
+    window.parent = MagicMock()
+    window.settings = MagicMock()
+    window.tts_engine = MagicMock()
+    window.audio_router = MagicMock()
+    window.on_save = MagicMock()
+
+    SettingsWindow._build_window_content(window)
+
+    assert resolved_modes == ["Light"]
 
 
 def test_on_cancel_invalidates_async_callbacks_before_destroy():

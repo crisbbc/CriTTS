@@ -8,7 +8,7 @@ from typing import Any, Callable, Optional, List, Dict, Tuple
 
 from ..theme_constants import (
     SPACING_XS, SPACING_SM, SPACING_MD, SPACING_LG,
-    FONT_SM, FONT_LG, FONT_WEIGHT_BOLD,
+    FONT_SM, FONT_MD, FONT_LG, FONT_WEIGHT_BOLD,
     RADIUS_MD, RADIUS_LG,
     get_color_for_state,
     get_settings_surface_theme,
@@ -173,13 +173,20 @@ class BaseTab(ABC):
     @staticmethod
     def get_input_surface_style() -> Dict[str, Any]:
         """Return reusable styling for nested textboxes and read-only text surfaces."""
+        return {
+            **BaseTab.get_nested_surface_style(),
+            "text_color": BaseTab.get_active_surface_theme()["text_primary"],
+        }
+
+    @staticmethod
+    def get_nested_surface_style() -> Dict[str, Any]:
+        """Return reusable styling for nested informational/read-only surfaces."""
         surface_theme = BaseTab.get_active_surface_theme()
         return {
             "fg_color": surface_theme["pane_fg"],
             "corner_radius": RADIUS_MD,
             "border_width": 1,
             "border_color": surface_theme["border_color"],
-            "text_color": surface_theme["text_primary"],
         }
 
     @staticmethod
@@ -461,6 +468,58 @@ class BaseTab(ABC):
         self._wraplength_labels.append(label)
         return label
 
+    def create_inline_frame(
+        self,
+        parent: ctk.CTkFrame = None,
+        *,
+        fill: str = "x",
+        pady: Any = 5,
+        padx: Any = 0,
+    ) -> ctk.CTkFrame:
+        """Create and pack a transparent inline frame for dense settings rows."""
+        frame = ctk.CTkFrame(parent or self.tab, fg_color="transparent")
+        frame.pack(fill=fill, pady=pady, padx=padx)
+        return frame
+
+    def create_setting_label(
+        self,
+        text: str,
+        parent: ctk.CTkFrame = None,
+        *,
+        font_size: int = FONT_MD,
+        font_weight: Optional[str] = None,
+        width: Optional[int] = None,
+        anchor: str = "w",
+    ) -> ctk.CTkLabel:
+        """Create a standard field label for inputs inside section cards."""
+        font_kwargs: Dict[str, Any] = {"size": font_size}
+        if font_weight is not None:
+            font_kwargs["weight"] = font_weight
+        label_kwargs: Dict[str, Any] = {
+            "text": text,
+            "font": ctk.CTkFont(**font_kwargs),
+            "anchor": anchor,
+        }
+        if width is not None:
+            label_kwargs["width"] = width
+        return ctk.CTkLabel(parent or self.tab, **label_kwargs)
+
+    def create_nested_surface_frame(
+        self,
+        parent: ctk.CTkFrame = None,
+        **kwargs: Any,
+    ) -> ctk.CTkFrame:
+        """Create a nested frame using the shared settings surface treatment."""
+        return ctk.CTkFrame(parent or self.tab, **(self.get_nested_surface_style() | kwargs))
+
+    def create_nested_scrollable_surface(
+        self,
+        parent: ctk.CTkFrame = None,
+        **kwargs: Any,
+    ) -> ctk.CTkScrollableFrame:
+        """Create a nested scrollable surface using the shared settings surface treatment."""
+        return ctk.CTkScrollableFrame(parent or self.tab, **(self.get_nested_surface_style() | kwargs))
+
     def create_helper_text(
         self,
         text: str,
@@ -478,6 +537,26 @@ class BaseTab(ABC):
             font=ctk.CTkFont(size=font_size),
             text_color=text_color or surface_theme["text_supporting"],
             wraplength=100,
+            justify=justify,
+        )
+        self._wraplength_labels.append(label)
+        return label
+
+    def create_surface_status_label(
+        self,
+        parent: ctk.CTkFrame = None,
+        *,
+        text: str = "",
+        wraplength: int = 500,
+        justify: str = "left",
+    ) -> ctk.CTkLabel:
+        """Create a readable status label for use inside section cards."""
+        label = ctk.CTkLabel(
+            parent or self.tab,
+            text=text,
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color=self.get_surface_status_text_color(),
+            wraplength=wraplength,
             justify=justify,
         )
         self._wraplength_labels.append(label)

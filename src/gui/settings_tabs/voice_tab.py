@@ -162,8 +162,7 @@ class VoiceTab(BaseTab):
     
     def _create_filters_section(self, parent):
         """Create the filters section."""
-        self.filters_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        self.filters_frame.pack(fill="x", pady=5)
+        self.filters_frame = self.create_inline_frame(parent)
         
         # Language filter
         self.language_filter_var = ctk.StringVar(value=self.settings.get("voice_filter_language", "All"))
@@ -219,11 +218,7 @@ class VoiceTab(BaseTab):
     
     def _create_search_section(self, parent):
         """Create the search section."""
-        self.search_label = ctk.CTkLabel(
-            parent,
-            text="Search Voices:",
-            font=ctk.CTkFont(size=FONT_MD)
-        )
+        self.search_label = self.create_setting_label("Search Voices:", parent)
         self.search_label.pack(anchor="w", pady=(10, 5))
         
         self.search_entry = ctk.CTkEntry(
@@ -248,8 +243,7 @@ class VoiceTab(BaseTab):
         """Create the voice selection section."""
         self.create_separator(parent).pack(fill="x", pady=5)
         
-        self.voice_selection_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        self.voice_selection_frame.pack(fill="x", pady=5)
+        self.voice_selection_frame = self.create_inline_frame(parent)
         
         self.voice_label = ctk.CTkLabel(
             self.voice_selection_frame,
@@ -286,8 +280,7 @@ class VoiceTab(BaseTab):
         """Create the preview section."""
         self.create_separator(parent).pack(fill="x", pady=10)
         
-        self.preview_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        self.preview_frame.pack(fill="x", pady=10)
+        self.preview_frame = self.create_inline_frame(parent, pady=10)
         
         # Preview text entry
         preview_text_value = self.settings.get("voice_preview_text", DEFAULT_PREVIEW_TEXT)
@@ -341,24 +334,16 @@ class VoiceTab(BaseTab):
         )
         
         # Loading indicator
-        self.preview_loading_label = ctk.CTkLabel(
+        self.preview_loading_label = self.create_surface_status_label(
             self.preview_frame,
-            text="",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color=self.get_surface_status_text_color(),
+            wraplength=220,
         )
         self.preview_loading_label.pack(side="left", padx=10)
     
     def _create_voice_info_section(self, parent):
         """Create the voice info panel."""
         surface_theme = self.get_active_surface_theme()
-        self.voice_info_frame = ctk.CTkFrame(
-            parent,
-            fg_color=surface_theme["pane_fg"],
-            corner_radius=self.get_section_surface_style()["corner_radius"],
-            border_width=1,
-            border_color=surface_theme["border_color"],
-        )
+        self.voice_info_frame = self.create_nested_surface_frame(parent)
         self.voice_info_frame.pack(fill="x", pady=15)
         
         self.voice_info_title = ctk.CTkLabel(
@@ -443,11 +428,7 @@ class VoiceTab(BaseTab):
     def _create_favorites_section(self, parent):
         """Create the favorites section."""
         surface_theme = self.get_active_surface_theme()
-        self.favorites_frame = ctk.CTkScrollableFrame(
-            parent,
-            height=100,
-            fg_color=surface_theme["pane_fg"],
-        )
+        self.favorites_frame = self.create_nested_scrollable_surface(parent, height=100)
         self.favorites_frame.pack(fill="x", pady=5)
         prevent_scroll_propagation(self.favorites_frame)
         
@@ -462,11 +443,7 @@ class VoiceTab(BaseTab):
     def _create_recent_section(self, parent):
         """Create the recent voices section."""
         surface_theme = self.get_active_surface_theme()
-        self.recent_frame = ctk.CTkScrollableFrame(
-            parent,
-            height=80,
-            fg_color=surface_theme["pane_fg"],
-        )
+        self.recent_frame = self.create_nested_scrollable_surface(parent, height=80)
         self.recent_frame.pack(fill="x", pady=5)
         prevent_scroll_propagation(self.recent_frame)
         

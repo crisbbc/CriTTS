@@ -123,16 +123,12 @@ class TTSProviderTab(BaseTab):
         )
         details_section.pack(fill="x", pady=(0, SPACING_MD))
 
-        self._desc_label = ctk.CTkLabel(
-            details_content,
+        self._desc_label = self.create_helper_text(
             text=_PROVIDER_DESCRIPTIONS.get(current, ""),
-            font=ctk.CTkFont(size=FONT_SM),
-            justify="left",
-            wraplength=500,
+            parent=details_content,
             text_color=surface_theme["text_primary"],
         )
         self._desc_label.pack(anchor="w", pady=(5, 10))
-        self.add_wraplength_label(self._desc_label)
 
         # Store a reference so we can insert the Coqui frame right after this separator.
         self._desc_sep = self.create_separator(details_content)
@@ -141,13 +137,7 @@ class TTSProviderTab(BaseTab):
         # --- Coqui-specific settings (hidden when Edge is selected) ---
         # Plain header label — NOT create_section_header() — so no sidebar button
         # is added for this conditional section.
-        self._coqui_settings_frame = ctk.CTkFrame(
-            details_content,
-            fg_color=surface_theme["pane_fg"],
-            corner_radius=self.get_section_surface_style()["corner_radius"],
-            border_width=1,
-            border_color=surface_theme["border_color"],
-        )
+        self._coqui_settings_frame = self.create_nested_surface_frame(details_content)
 
         ctk.CTkLabel(
             self._coqui_settings_frame,

@@ -72,6 +72,7 @@ class _StubSettings:
     def __init__(self, values=None):
         self._values = values or {}
         self._save_result = True
+        self.save_calls = 0
 
     def get(self, key, default=None):
         return self._values.get(key, default)
@@ -80,6 +81,7 @@ class _StubSettings:
         self._values[key] = value
 
     def save_settings(self):
+        self.save_calls += 1
         return self._save_result
 
     def set_save_result(self, result):
@@ -286,6 +288,36 @@ def test_refresh_quick_controls_resyncs_visibility_from_settings():
     window.controls_toggle_button.configure.assert_called_once()
 
 
+def test_refresh_quick_controls_skips_no_op_visibility_and_theme_work():
+    window = MainWindow.__new__(MainWindow)
+    window.settings = _StubSettings(
+        {
+            "rate": 15,
+            "volume": 80,
+            "pitch": -10,
+            "quick_controls_visible": False,
+            "appearance_mode": "Light",
+        }
+    )
+    window._quick_controls_visible = False
+    window.quick_controls_frame = MagicMock()
+    window.controls_toggle_button = MagicMock()
+    window._qc_rate_var = _StubVariable(15)
+    window._qc_volume_var = _StubVariable(80)
+    window._qc_pitch_var = _StubVariable(-10)
+    window._qc_rate_label = MagicMock()
+    window._qc_volume_label = MagicMock()
+    window._qc_pitch_label = MagicMock()
+    window._update_quick_controls_provider = MagicMock()
+
+    MainWindow.refresh_quick_controls(window)
+
+    window.quick_controls_frame.grid.assert_not_called()
+    window.quick_controls_frame.grid_remove.assert_not_called()
+    window.controls_toggle_button.configure.assert_not_called()
+    window._update_quick_controls_provider.assert_not_called()
+
+
 def test_toggle_quick_controls_rolls_back_when_persistence_fails():
     window = MainWindow.__new__(MainWindow)
     window.settings = _StubSettings({"quick_controls_visible": False, "appearance_mode": "Light"})
@@ -354,6 +386,51 @@ def test_quick_control_slider_rolls_back_when_persistence_fails(
     assert getattr(window, f"_qc_{setting_key}_var").get() == initial_value
     getattr(window, label_attr).configure.assert_called_with(text=label_text)
     window._show_error.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "setting_key", "stored_value", "incoming_value", "label_attr"),
+    [
+        ("_on_quick_rate_change", "rate", 15, 15.4, "_qc_rate_label"),
+        ("_on_quick_volume_change", "volume", 80, 80.49, "_qc_volume_label"),
+        ("_on_quick_pitch_change", "pitch", -10, -10.2, "_qc_pitch_label"),
+    ],
+)
+def test_quick_control_slider_skips_redundant_save_when_rounded_value_is_unchanged(
+    handler_name, setting_key, stored_value, incoming_value, label_attr
+):
+    window = MainWindow.__new__(MainWindow)
+    window.settings = _StubSettings(
+        {
+            "rate": 15 if setting_key == "rate" else 0,
+            "volume": 80 if setting_key == "volume" else 100,
+            "pitch": -10 if setting_key == "pitch" else 0,
+        }
+    )
+    window._qc_rate_var = _StubVariable(window.settings.get("rate"))
+    window._qc_volume_var = _StubVariable(window.settings.get("volume"))
+    window._qc_pitch_var = _StubVariable(window.settings.get("pitch"))
+    window._qc_rate_label = MagicMock()
+    window._qc_volume_label = MagicMock()
+    window._qc_pitch_label = MagicMock()
+    window._show_error = MagicMock()
+
+    getattr(MainWindow, handler_name)(window, incoming_value)
+
+    assert window.settings.get(setting_key) == stored_value
+    assert window.settings.save_calls == 0
+    getattr(window, label_attr).configure.assert_not_called()
+    window._show_error.assert_not_called()
+
+
+def test_update_quick_controls_provider_skips_repack_when_layout_already_matches():
+    window = MainWindow.__new__(MainWindow)
+    window._qc_pitch_group = MagicMock()
+    window._qc_pitch_group.winfo_manager.return_value = "pack"
+
+    MainWindow._update_quick_controls_provider(window)
+
+    window._qc_pitch_group.pack.assert_not_called()
 
 
 def test_toggle_overlay_rolls_back_when_persistence_fails():

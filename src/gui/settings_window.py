@@ -1,11 +1,11 @@
 """
-Settings Window GUI Module - Fixed Layout
+Settings Window GUI Module
 Modal settings dialog for voice, audio device, and appearance configuration.
 """
 import copy
 import logging
 import customtkinter as ctk
-from typing import Optional, Callable, List, Dict
+from typing import Optional, Callable, List, Dict, Any
 
 from .settings_tabs import (
     VoiceTab, AudioOutputTab, AppearanceTab, AbbreviationsTab,
@@ -48,21 +48,44 @@ SETTINGS_TAB_ORDER = (
     "TTS Provider",
 )
 
+SETTINGS_TAB_OBJECT_ATTRIBUTES = {
+    "Voice": "voice_tab_obj",
+    "Audio Output": "audio_tab_obj",
+    "Appearance": "appearance_tab_obj",
+    "Abbreviations": "abbreviations_tab_obj",
+    "Keybinds": "keybinds_tab_obj",
+    "Behavior": "behavior_tab_obj",
+    "Soundboard": "soundboard_tab_obj",
+    "VRChat OSC": "vrchat_osc_tab_obj",
+    "Advanced": "advanced_tab_obj",
+    "TTS Provider": "provider_tab_obj",
+}
 
-def get_settings_tabview_style(mode: Optional[str] = None) -> Dict[str, object]:
+EAGER_SETTINGS_TABS = frozenset(("Voice", "Advanced", "TTS Provider"))
+
+
+def get_settings_tabview_style(
+    mode: Optional[str] = None,
+    *,
+    surface_theme: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
     """Return the shared style used by the settings tab chrome."""
-    surface_theme = get_settings_surface_theme(mode)
+    resolved_surface_theme = (
+        surface_theme
+        if surface_theme is not None
+        else get_settings_surface_theme(mode)
+    )
     return {
-        "fg_color": surface_theme["pane_fg"],
-        "corner_radius": surface_theme["shell_corner_radius"],
+        "fg_color": resolved_surface_theme["pane_fg"],
+        "corner_radius": resolved_surface_theme["shell_corner_radius"],
         "border_width": 1,
-        "border_color": surface_theme["border_color"],
-        "segmented_button_fg_color": surface_theme["section_fg"],
-        "segmented_button_selected_color": surface_theme["tab_selected_color"],
-        "segmented_button_selected_hover_color": surface_theme["tab_selected_hover"],
-        "segmented_button_unselected_color": surface_theme["pane_fg"],
-        "segmented_button_unselected_hover_color": surface_theme["tab_unselected_hover"],
-        "text_color": surface_theme["tab_text_color"],
+        "border_color": resolved_surface_theme["border_color"],
+        "segmented_button_fg_color": resolved_surface_theme["section_fg"],
+        "segmented_button_selected_color": resolved_surface_theme["tab_selected_color"],
+        "segmented_button_selected_hover_color": resolved_surface_theme["tab_selected_hover"],
+        "segmented_button_unselected_color": resolved_surface_theme["pane_fg"],
+        "segmented_button_unselected_hover_color": resolved_surface_theme["tab_unselected_hover"],
+        "text_color": resolved_surface_theme["tab_text_color"],
     }
 
 
@@ -89,7 +112,7 @@ class SettingsWindow:
 
     
     def _create_window(self):
-        """Create the settings window with fixed layout."""
+        """Create the settings window with a minimum safe layout size."""
         self.window = ctk.CTkToplevel(self.parent)
         self.window.title("Settings - CriTTS Recoded")
         self.window.geometry(f"{WINDOW_SETTINGS_WIDTH}x{WINDOW_SETTINGS_HEIGHT}")
@@ -137,82 +160,34 @@ class SettingsWindow:
         # Create tabbed interface with consistent padding
         self.tabview = ctk.CTkTabview(
             self.main_frame,
-            **get_settings_tabview_style(appearance_mode),
+            command=self._on_tab_selected,
+            **get_settings_tabview_style(
+                appearance_mode,
+                surface_theme=surface_theme,
+            ),
         )
         self.tabview.grid(row=1, column=0, padx=SPACING_LG, pady=SPACING_LG, sticky="nsew")
-         
-        # List of tab instances to easily call validate() and get_settings() later
-        self.tabs = []
-
-        # Voice Settings Tab
-        voice_frame = self.tabview.add("Voice")
-        voice_frame.configure(fg_color="transparent")
-        self.voice_tab_obj = VoiceTab(voice_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder, parent_window=self.window)
-        self.tabs.append(self.voice_tab_obj)
-         
-        # Audio Output Tab
-        audio_frame = self.tabview.add("Audio Output")
-        audio_frame.configure(fg_color="transparent")
-        self.audio_tab_obj = AudioOutputTab(audio_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
-        self.tabs.append(self.audio_tab_obj)
-         
-        # Appearance Tab
-        appearance_frame = self.tabview.add("Appearance")
-        appearance_frame.configure(fg_color="transparent")
-        self.appearance_tab_obj = AppearanceTab(appearance_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
-        self.tabs.append(self.appearance_tab_obj)
- 
-        # Abbreviations Tab
-        abbrev_frame = self.tabview.add("Abbreviations")
-        abbrev_frame.configure(fg_color="transparent")
-        self.abbreviations_tab_obj = AbbreviationsTab(abbrev_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
-        self.tabs.append(self.abbreviations_tab_obj)
- 
-        # Keybinds Tab
-        keybinds_frame = self.tabview.add("Keybinds")
-        keybinds_frame.configure(fg_color="transparent")
-        self.keybinds_tab_obj = KeybindsTab(keybinds_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
-        self.tabs.append(self.keybinds_tab_obj)
- 
-        # Behavior Tab
-        behavior_frame = self.tabview.add("Behavior")
-        behavior_frame.configure(fg_color="transparent")
-        self.behavior_tab_obj = BehaviorTab(behavior_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
-        self.tabs.append(self.behavior_tab_obj)
- 
-        # Soundboard Tab
-        soundboard_frame = self.tabview.add("Soundboard")
-        soundboard_frame.configure(fg_color="transparent")
-        self.soundboard_tab_obj = SoundboardTab(soundboard_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
-        self.tabs.append(self.soundboard_tab_obj)
- 
-        # VRChat OSC Tab
-        vrchat_frame = self.tabview.add("VRChat OSC")
-        vrchat_frame.configure(fg_color="transparent")
-        self.vrchat_osc_tab_obj = VRChatOSCTab(
-            vrchat_frame,
-            self.settings,
-            self.tts_engine,
-            self.audio_router,
-            self._on_change_placeholder,
-            parent_window=self.parent
+        
+        self._initialize_tab_hydration_state()
+        self._register_tab_factory(
+            "Voice",
+            VoiceTab,
+            parent_window=self.window,
         )
-        self.tabs.append(self.vrchat_osc_tab_obj)
-         
-        # Advanced Tab
-        advanced_frame = self.tabview.add("Advanced")
-        advanced_frame.configure(fg_color="transparent")
-        self.advanced_tab_obj = AdvancedTab(advanced_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
-        self.tabs.append(self.advanced_tab_obj)
-         
-        # TTS Provider Tab
-        provider_frame = self.tabview.add("TTS Provider")
-        provider_frame.configure(fg_color="transparent")
-        self.provider_tab_obj = TTSProviderTab(provider_frame, self.settings, self.tts_engine, self.audio_router, self._on_change_placeholder)
-        self.tabs.append(self.provider_tab_obj)
-
-        # Wire up: when provider changes in TTS Provider tab, reload Voice tab options live
-        self.provider_tab_obj.set_voice_tab_callback(self.voice_tab_obj.reload_for_provider)
+        self._register_tab_factory("Audio Output", AudioOutputTab)
+        self._register_tab_factory("Appearance", AppearanceTab)
+        self._register_tab_factory("Abbreviations", AbbreviationsTab)
+        self._register_tab_factory("Keybinds", KeybindsTab)
+        self._register_tab_factory("Behavior", BehaviorTab)
+        self._register_tab_factory("Soundboard", SoundboardTab)
+        self._register_tab_factory(
+            "VRChat OSC",
+            VRChatOSCTab,
+            parent_window=self.parent,
+        )
+        self._register_tab_factory("Advanced", AdvancedTab)
+        self._register_tab_factory("TTS Provider", TTSProviderTab)
+        self._hydrate_initial_tabs(selected_tab)
         
         # Buttons frame - fixed at bottom with standardized padding
         self.buttons_frame = ctk.CTkFrame(
@@ -327,6 +302,110 @@ class SettingsWindow:
             if callable(invalidate):
                 invalidate()
 
+    def _initialize_tab_hydration_state(self) -> None:
+        """Reset tab bookkeeping before registering the current shell's tab factories."""
+        self.tabs = []
+        self._tab_objects: Dict[str, Any] = {}
+        self._tab_factories: Dict[str, Callable[[], Any]] = {}
+
+        for tab_name in SETTINGS_TAB_ORDER:
+            setattr(self, SETTINGS_TAB_OBJECT_ATTRIBUTES[tab_name], None)
+
+    def _register_tab_factory(
+        self,
+        tab_name: str,
+        tab_class: Any,
+        *,
+        parent_window: Optional[ctk.CTk] = None,
+    ) -> None:
+        """Create a tab container immediately but defer tab-object construction until needed."""
+        tab_frame = self.tabview.add(tab_name)
+        tab_frame.configure(fg_color="transparent")
+
+        def build_tab() -> Any:
+            init_kwargs = {}
+            if parent_window is not None:
+                init_kwargs["parent_window"] = parent_window
+
+            return tab_class(
+                tab_frame,
+                self.settings,
+                self.tts_engine,
+                self.audio_router,
+                self._on_change_placeholder,
+                **init_kwargs,
+            )
+
+        self._tab_factories[tab_name] = build_tab
+
+    def _sync_tabs_in_display_order(self) -> None:
+        """Keep the hydrated-tab list aligned with SETTINGS_TAB_ORDER."""
+        self.tabs = [
+            self._tab_objects[tab_name]
+            for tab_name in SETTINGS_TAB_ORDER
+            if tab_name in self._tab_objects
+        ]
+
+    def _wire_provider_voice_callback(self) -> None:
+        """Reconnect provider -> voice live updates once both tabs exist."""
+        provider_tab = self._tab_objects.get("TTS Provider")
+        voice_tab = self._tab_objects.get("Voice")
+        if provider_tab is None or voice_tab is None:
+            return
+
+        set_voice_tab_callback = getattr(provider_tab, "set_voice_tab_callback", None)
+        reload_for_provider = getattr(voice_tab, "reload_for_provider", None)
+        if callable(set_voice_tab_callback) and callable(reload_for_provider):
+            set_voice_tab_callback(reload_for_provider)
+
+    def _ensure_tab_hydrated(self, tab_name: str) -> Optional[Any]:
+        """Instantiate a tab object once, keeping tab order and callbacks intact."""
+        if tab_name not in SETTINGS_TAB_ORDER:
+            return None
+
+        if tab_name in self._tab_objects:
+            return self._tab_objects[tab_name]
+
+        tab_factory = self._tab_factories.get(tab_name)
+        if tab_factory is None:
+            return None
+
+        tab_object = tab_factory()
+        self._tab_objects[tab_name] = tab_object
+        setattr(self, SETTINGS_TAB_OBJECT_ATTRIBUTES[tab_name], tab_object)
+        self._sync_tabs_in_display_order()
+        self._wire_provider_voice_callback()
+        return tab_object
+
+    def _hydrate_initial_tabs(self, selected_tab: Optional[str]) -> None:
+        """Eagerly build dependency-critical tabs plus the visible tab."""
+        initial_tab = selected_tab if selected_tab in SETTINGS_TAB_ORDER else SETTINGS_TAB_ORDER[0]
+        for tab_name in SETTINGS_TAB_ORDER:
+            if tab_name in EAGER_SETTINGS_TABS or tab_name == initial_tab:
+                self._ensure_tab_hydrated(tab_name)
+
+    def _ensure_all_tabs_hydrated(self) -> None:
+        """Materialize all tabs before save/validate paths that require full parity."""
+        if not hasattr(self, "_tab_factories") or not hasattr(self, "_tab_objects"):
+            return
+
+        for tab_name in SETTINGS_TAB_ORDER:
+            self._ensure_tab_hydrated(tab_name)
+
+    def _on_tab_selected(self) -> None:
+        """Hydrate tabs lazily the first time users navigate to them."""
+        tabview = getattr(self, "tabview", None)
+        if tabview is None:
+            return
+
+        try:
+            selected_tab = tabview.get()
+        except Exception:
+            return
+
+        if selected_tab in SETTINGS_TAB_ORDER:
+            self._ensure_tab_hydrated(selected_tab)
+
     def _on_refresh(self):
         """Reload data for all tabs."""
         for tab in self.tabs:
@@ -341,13 +420,36 @@ class SettingsWindow:
         if self.on_save:
             self.on_save()
 
+    def _tab_settings_change_current_state(self, all_tab_settings: List[Dict[str, object]]) -> bool:
+        """Return True when Apply would change the current in-memory settings state."""
+        get_all_settings = getattr(self.settings, "get_all", None)
+        if not callable(get_all_settings):
+            return True
+
+        current_settings = get_all_settings()
+        if not isinstance(current_settings, dict):
+            return True
+
+        for tab_settings in all_tab_settings:
+            for key, value in tab_settings.items():
+                if current_settings.get(key) != value:
+                    return True
+
+        return False
+
     def _schedule_refresh_theme(self) -> None:
         """Defer settings shell rebuilding until the current UI callback frame has finished."""
         window = getattr(self, "window", None)
         if window is None:
             return
 
+        if getattr(self, "_refresh_theme_scheduled", False):
+            return
+
+        self._refresh_theme_scheduled = True
+
         def refresh_if_window_alive() -> None:
+            self._refresh_theme_scheduled = False
             try:
                 winfo_exists = getattr(window, "winfo_exists", None)
                 if callable(winfo_exists) and not winfo_exists():
@@ -360,6 +462,7 @@ class SettingsWindow:
         try:
             window.after(0, refresh_if_window_alive)
         except Exception:
+            self._refresh_theme_scheduled = False
             logger.debug("Unable to schedule deferred settings refresh", exc_info=True)
 
     def _restore_last_persisted_settings(self, fallback_settings: Optional[Dict[str, object]] = None) -> None:
@@ -413,8 +516,11 @@ class SettingsWindow:
 
     def _collect_and_save(self, close: bool):
         """Collect settings from all tabs, validate, then save. Closes window only if close=True."""
+        self._ensure_all_tabs_hydrated()
+
         # Collect from all tabs first, before touching in-memory state
         all_tab_settings = [tab.get_settings() for tab in self.tabs]
+        apply_changes_current_state = self._tab_settings_change_current_state(all_tab_settings)
 
         # Validate BEFORE mutating in-memory state
         validation_issues = []
@@ -470,7 +576,7 @@ class SettingsWindow:
 
         self._notify_settings_saved()
 
-        if not close:
+        if not close and apply_changes_current_state:
             self._schedule_refresh_theme()
 
         if close:

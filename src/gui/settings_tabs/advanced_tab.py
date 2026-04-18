@@ -8,7 +8,7 @@ from typing import Any, Callable, Optional, List, Dict
 
 from .base_tab import BaseTab
 from ..theme_constants import (
-    FONT_XS, FONT_SM, FONT_MD, FONT_LG, FONT_XL, FONT_WEIGHT_BOLD,
+    FONT_XS, FONT_SM, FONT_MD, FONT_XL, FONT_WEIGHT_BOLD,
     BUTTON_HEIGHT, BUTTON_WIDTH_DEFAULT,
     COLOR_DANGER, COLOR_DANGER_HOVER,
     SPACING_MD,
@@ -28,8 +28,6 @@ class AdvancedTab(BaseTab):
         """Create the advanced tab content."""
         self.setup_layout()
 
-        surface_theme = self.get_active_surface_theme()
-        
         # Main title
         ctk.CTkLabel(
             self.scroll,
@@ -50,7 +48,7 @@ class AdvancedTab(BaseTab):
             description="Audio cache stores generated speech to improve response times for repeated phrases.",
         )
         cache_section.pack(fill="x", pady=(0, SPACING_MD))
-        self._create_cache_section(cache_content, surface_theme)
+        self._create_cache_section(cache_content)
         
         # Network Privacy Section
         privacy_section, privacy_content = self.create_section_surface(
@@ -91,19 +89,11 @@ class AdvancedTab(BaseTab):
         self.proxy_enabled_check.pack(anchor="w", pady=5)
 
         # Proxy settings frame (to be toggled)
-        self.proxy_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        self.proxy_frame.pack(fill="x", pady=5)
+        self.proxy_frame = self.create_inline_frame(parent)
 
         # Proxy Type
-        type_frame = ctk.CTkFrame(self.proxy_frame, fg_color="transparent")
-        type_frame.pack(fill="x", pady=2)
-        ctk.CTkLabel(
-            type_frame,
-            text="Proxy Type:",
-            font=ctk.CTkFont(size=FONT_MD),
-            width=120,
-            anchor="w"
-        ).pack(side="left")
+        type_frame = self.create_inline_frame(self.proxy_frame, pady=2)
+        self.create_setting_label("Proxy Type:", type_frame, width=120).pack(side="left")
 
         self.proxy_type_var = ctk.StringVar(value=self.settings.get("proxy_type", "http"))
         self.proxy_type_dropdown = ctk.CTkComboBox(
@@ -117,15 +107,8 @@ class AdvancedTab(BaseTab):
         self.proxy_type_dropdown.pack(side="left", padx=5)
 
         # Proxy Server
-        server_frame = ctk.CTkFrame(self.proxy_frame, fg_color="transparent")
-        server_frame.pack(fill="x", pady=2)
-        ctk.CTkLabel(
-            server_frame,
-            text="Server (IP:Port):",
-            font=ctk.CTkFont(size=FONT_MD),
-            width=120,
-            anchor="w"
-        ).pack(side="left")
+        server_frame = self.create_inline_frame(self.proxy_frame, pady=2)
+        self.create_setting_label("Server (IP:Port):", server_frame, width=120).pack(side="left")
 
         self.proxy_server_var = ctk.StringVar(value=self.settings.get("proxy_server", ""))
         self.proxy_server_entry = ctk.CTkEntry(
@@ -138,15 +121,8 @@ class AdvancedTab(BaseTab):
         self.proxy_server_entry.pack(side="left", padx=5)
 
         # Proxy Username
-        user_frame = ctk.CTkFrame(self.proxy_frame, fg_color="transparent")
-        user_frame.pack(fill="x", pady=2)
-        ctk.CTkLabel(
-            user_frame,
-            text="Username (opt):",
-            font=ctk.CTkFont(size=FONT_MD),
-            width=120,
-            anchor="w"
-        ).pack(side="left")
+        user_frame = self.create_inline_frame(self.proxy_frame, pady=2)
+        self.create_setting_label("Username (opt):", user_frame, width=120).pack(side="left")
 
         self.proxy_username_var = ctk.StringVar(value=self.settings.get("proxy_username", ""))
         self.proxy_username_entry = ctk.CTkEntry(
@@ -159,15 +135,8 @@ class AdvancedTab(BaseTab):
         self.proxy_username_entry.pack(side="left", padx=5)
 
         # Proxy Password
-        pass_frame = ctk.CTkFrame(self.proxy_frame, fg_color="transparent")
-        pass_frame.pack(fill="x", pady=2)
-        ctk.CTkLabel(
-            pass_frame,
-            text="Password (opt):",
-            font=ctk.CTkFont(size=FONT_MD),
-            width=120,
-            anchor="w"
-        ).pack(side="left")
+        pass_frame = self.create_inline_frame(self.proxy_frame, pady=2)
+        self.create_setting_label("Password (opt):", pass_frame, width=120).pack(side="left")
 
         self.proxy_password_var = ctk.StringVar(value=self.settings.get("proxy_password", ""))
         self.proxy_password_entry = ctk.CTkEntry(
@@ -191,7 +160,7 @@ class AdvancedTab(BaseTab):
         self.proxy_username_entry.configure(state=state)
         self.proxy_password_entry.configure(state=state)
 
-    def _create_cache_section(self, parent, surface_theme):
+    def _create_cache_section(self, parent, surface_theme=None):
         """Create the cache management section."""
         # Cache statistics display
         self.cache_stats_text = ctk.CTkTextbox(
@@ -200,14 +169,12 @@ class AdvancedTab(BaseTab):
             height=120,
             wrap="word",
             state="disabled",
-            fg_color=surface_theme["pane_fg"],
-            text_color=surface_theme["text_primary"],
+            **self.get_input_surface_style(),
         )
         self.cache_stats_text.pack(fill="x", pady=5)
         
         # Cache buttons frame
-        cache_buttons_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        cache_buttons_frame.pack(fill="x", pady=10)
+        cache_buttons_frame = self.create_inline_frame(parent, pady=10)
         
         self.clear_cache_button = ctk.CTkButton(
             cache_buttons_frame,
@@ -242,14 +209,9 @@ class AdvancedTab(BaseTab):
         self.cache_enabled_check.pack(anchor="w", pady=5)
         
         # Max cache size slider
-        ctk.CTkLabel(
-            parent,
-            text="Maximum Cache Size:",
-            font=ctk.CTkFont(size=FONT_MD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Maximum Cache Size:", parent).pack(anchor="w", pady=(10, 5))
         
-        cache_size_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        cache_size_frame.pack(fill="x", pady=5)
+        cache_size_frame = self.create_inline_frame(parent)
         
         self.cache_max_size_var = ctk.IntVar(value=self.settings.get("audio_cache_max_size_mb", 500))
         self.cache_size_slider = ctk.CTkSlider(
@@ -275,11 +237,7 @@ class AdvancedTab(BaseTab):
     def _create_performance_section(self, parent):
         """Create the performance settings section."""
         # Processing profile dropdown
-        ctk.CTkLabel(
-            parent,
-            text="Processing Profile:",
-            font=ctk.CTkFont(size=FONT_MD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Processing Profile:", parent).pack(anchor="w", pady=(10, 5))
         
         self.processing_profile_var = ctk.StringVar(value=self.settings.get("processing_profile", "balanced"))
         self.processing_profile_dropdown = ctk.CTkComboBox(
@@ -299,14 +257,9 @@ class AdvancedTab(BaseTab):
         ).pack(anchor="w", pady=(0, 10))
         
         # Text cache size
-        ctk.CTkLabel(
-            parent,
-            text="Text Cache Size:",
-            font=ctk.CTkFont(size=FONT_MD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Text Cache Size:", parent).pack(anchor="w", pady=(10, 5))
         
-        text_cache_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        text_cache_frame.pack(fill="x", pady=5)
+        text_cache_frame = self.create_inline_frame(parent)
         
         self.text_cache_size_var = ctk.StringVar(value=str(self.settings.get("text_cache_size", 1000)))
         self.text_cache_entry = ctk.CTkEntry(

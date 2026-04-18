@@ -8,7 +8,7 @@ from typing import Any, Callable, Optional, List, Dict
 
 from .base_tab import BaseTab
 from ..theme_constants import (
-    FONT_SM, FONT_MD, FONT_LG, FONT_WEIGHT_BOLD,
+    FONT_MD,
     BUTTON_HEIGHT,
     SPACING_MD,
 )
@@ -77,21 +77,13 @@ class VRChatOSCTab(BaseTab):
         )
         self.osc_enabled_check.pack(anchor="w", pady=5)
         
-        ctk.CTkLabel(
-            parent,
-            text="IP:", 
-            font=ctk.CTkFont(size=FONT_MD)
-        ).pack(anchor="w", pady=(10, 2))
+        self.create_setting_label("IP:", parent).pack(anchor="w", pady=(10, 2))
         
         self.osc_ip_var = ctk.StringVar(value=self.settings.get("vrchat_osc_ip", "127.0.0.1"))
         self.osc_ip_entry = ctk.CTkEntry(parent, textvariable=self.osc_ip_var, width=200)
         self.osc_ip_entry.pack(anchor="w", pady=2)
         
-        ctk.CTkLabel(
-            parent,
-            text="Port (default 9000):", 
-            font=ctk.CTkFont(size=FONT_MD)
-        ).pack(anchor="w", pady=(10, 2))
+        self.create_setting_label("Port (default 9000):", parent).pack(anchor="w", pady=(10, 2))
         
         self.osc_port_var = ctk.StringVar(value=str(self.settings.get("vrchat_osc_port", 9000)))
         self.osc_port_entry = ctk.CTkEntry(parent, textvariable=self.osc_port_var, width=120)
@@ -129,13 +121,7 @@ class VRChatOSCTab(BaseTab):
             height=BUTTON_HEIGHT
         ).pack(anchor="w", pady=15)
         
-        self.osc_status_label = ctk.CTkLabel(
-            parent,
-            text="", 
-            font=ctk.CTkFont(size=FONT_SM), 
-            text_color=self.get_surface_status_text_color(),
-            wraplength=500
-        )
+        self.osc_status_label = self.create_surface_status_label(parent)
         self.osc_status_label.pack(anchor="w", pady=5)
     
     def _create_viseme_section(self, parent):
@@ -155,14 +141,9 @@ class VRChatOSCTab(BaseTab):
         )
         self.viseme_enabled_check.pack(anchor="w", pady=5)
         
-        ctk.CTkLabel(
-            parent,
-            text="Viseme Smoothing:",
-            font=ctk.CTkFont(size=FONT_MD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Viseme Smoothing:", parent).pack(anchor="w", pady=(10, 5))
         
-        viseme_smoothing_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        viseme_smoothing_frame.pack(fill="x", pady=5)
+        viseme_smoothing_frame = self.create_inline_frame(parent)
         
         current_smoothing = int(self.settings.get("vrchat_viseme_smoothing", 0.1) * 100)
         self.viseme_smoothing_var = ctk.IntVar(value=current_smoothing)
@@ -219,14 +200,9 @@ class VRChatOSCTab(BaseTab):
         )
         self.typing_animation_check.pack(anchor="w", pady=5)
         
-        ctk.CTkLabel(
-            parent,
-            text="Typing Indicator Timeout:",
-            font=ctk.CTkFont(size=FONT_MD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Typing Indicator Timeout:", parent).pack(anchor="w", pady=(10, 5))
         
-        typing_timeout_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        typing_timeout_frame.pack(fill="x", pady=5)
+        typing_timeout_frame = self.create_inline_frame(parent)
         
         current_timeout = self.settings.get("vrchat_osc_typing_timeout", 2.0)
         self.typing_timeout_var = ctk.DoubleVar(value=current_timeout)
@@ -249,14 +225,9 @@ class VRChatOSCTab(BaseTab):
         )
         self.typing_timeout_value_label.pack(side="right", padx=5)
         
-        ctk.CTkLabel(
-            parent,
-            text="Message Cooldown:",
-            font=ctk.CTkFont(size=FONT_MD)
-        ).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Message Cooldown:", parent).pack(anchor="w", pady=(10, 5))
         
-        message_cooldown_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        message_cooldown_frame.pack(fill="x", pady=5)
+        message_cooldown_frame = self.create_inline_frame(parent)
         
         current_cooldown = self.settings.get("vrchat_osc_message_cooldown", 3.0)
         self.message_cooldown_var = ctk.DoubleVar(value=current_cooldown)
