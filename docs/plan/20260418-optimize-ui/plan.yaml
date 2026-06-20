@@ -1,0 +1,474 @@
+plan_id: 20260418-optimize-ui
+objective: Behavior-preserving UI optimization for the desktop app.
+created_at: "2026-04-18T00:00:00Z"
+created_by: gem-team:gem-planner
+status: pending
+research_confidence: high
+plan_metrics:
+  wave_1_task_count: 2
+  total_dependencies: 8
+  risk_score: medium
+tldr: |
+  Keep Phase 5 surgical and behavior-preserving.
+  Wave 1 removes avoidable main-window and settings-shell work without changing control sets, tab order, section order, or latest-wins editor behavior.
+  The approved low-risk Wave 1 scope keeps quick controls eagerly created, and treats Voice, Advanced, and TTS Provider as dependency-critical tabs that hydrate during shell build while other tabs remain lazy-on-selection.
+  Wave 2 only gates redundant Apply-triggered refresh scheduling around true no-op cases while keeping refresh_theme as the canonical rebuild path.
+  Wave 3 simplifies special-tab adapter paths through shared helpers without expanding scope beyond the current PRD and existing regression envelope.
+  Final validation runs only the existing pytest suites that already lock contrast, 44px controls, tab/section order, persistence rollback, and latest-wins behavior.
+open_questions: []
+gaps: []
+pre_mortem:
+  overall_risk_level: medium
+  critical_failure_modes:
+    - scenario: Wave 1 hydration omits a dependency-critical tab and breaks first-load side effects for Voice, Advanced, or TTS Provider content.
+      likelihood: medium
+      impact: high
+      mitigation: Preserve SETTINGS_TAB_ORDER, eagerly hydrate Voice, Advanced, and TTS Provider during shell build, hydrate the initially selected tab if different, and keep the current opening refresh/provider-callback contract covered by existing settings-window tests.
+    - scenario: Apply/no-op refresh gating suppresses a rebuild that refresh_theme still needs to perform for settings content.
+      likelihood: medium
+      impact: high
+      mitigation: Limit optimization to deduplicating Apply-triggered refresh scheduling for true no-op cases, keep selected-tab preservation intact, and preserve refresh_theme as the unchanged destroy-children plus _build_window_content(selected_tab=...) rebuild path validated by the existing regression suite.
+    - scenario: Main-window quick-control shortcuts accidentally change persistence rollback or visible control behavior.
+      likelihood: medium
+      impact: high
+      mitigation: Keep rollback semantics unchanged, short-circuit only true no-op saves/layout work, and rerun the existing latest-wins and quick-control persistence tests.
+  assumptions:
+    - docs/PRD.yaml remains the source of truth for behavior preservation, subtle styling, and no-restructure scope.
+    - src/gui/theme_constants.py and src/gui/settings_tabs/base_tab.py are the canonical shared token/helper layers for desktop UI styling.
+    - Existing pytest suites already encode the critical invariants for tab order, section order, contrast, 44px button height, latest-wins editor behavior, and persistence rollback.
+    - The optimization should not add tabs, reorder sections, rename controls, or introduce new user-facing settings.
+implementation_specification:
+  code_structure: Keep changes localized to the existing desktop UI composition points. Main-window optimization should stay inside MainWindow quick-controls/control-bar helpers without introducing lazy quick-controls creation. Settings optimization should preserve SETTINGS_TAB_ORDER while eagerly hydrating dependency-critical Voice, Advanced, and TTS Provider tabs, lazily hydrating non-critical tabs on selection, gating Apply-triggered refresh scheduling only around true no-op cases, and resolving shared surface tokens once per relevant render path; refresh_theme remains the canonical rebuild path with unchanged destroy-children plus _build_window_content(selected_tab=...) semantics.
+  affected_areas:
+    - src/gui/main_window.py
+    - src/gui/settings_window.py
+    - src/gui/settings_tabs/base_tab.py
+    - src/gui/settings_tabs/voice_tab.py
+    - src/gui/settings_tabs/advanced_tab.py
+    - src/gui/settings_tabs/vrchat_osc_tab.py
+    - src/gui/settings_tabs/tts_provider_tab.py
+    - tests/test_main_window_latest_wins.py
+    - tests/test_voice_tab_provider_reload.py
+    - tests/test_settings_surface_foundation.py
+    - tests/test_settings_special_tabs_alignment.py
+    - tests/test_settings_wave2_retry3_regressions.py
+  component_details:
+    - component: Main window control bar and quick controls
+      responsibility: Remove duplicated and no-op work from the quick-controls/control-bar path while preserving the same visible controls, toggle behavior, slider semantics, and latest-wins text analysis behavior.
+      interfaces:
+        - MainWindow._create_quick_controls()
+        - MainWindow.refresh_quick_controls()
+        - MainWindow.refresh_status()
+        - MainWindow._persist_quick_control_value()
+        - MainWindow._update_quick_controls_provider()
+        - MainWindow.apply_theme()
+      dependencies:
+        - component: SettingsManager persistence
+          relationship: Persists quick-control and overlay settings and must keep rollback behavior intact on save failure.
+      integration_points:
+        - Main window control bar button creation
+        - Quick-controls toggle and slider callbacks
+        - Existing latest-wins and persistence rollback tests
+    - component: Settings window shell
+      responsibility: Preserve tab order and control structure while eagerly hydrating dependency-critical Voice, Advanced, and TTS Provider tabs, lazily deferring only non-critical tab creation, and deduplicating only redundant Apply-triggered refresh scheduling for behavior-preserving no-op flows.
+      interfaces:
+        - SettingsWindow._build_window_content()
+        - SettingsWindow._collect_and_save()
+        - SettingsWindow.refresh_theme()
+      dependencies:
+        - component: Shared settings tab helpers
+          relationship: Supplies shared section surfaces, spacing, and appearance-aware theme tokens to hydrated tabs.
+      integration_points:
+        - SETTINGS_TAB_ORDER contract
+        - VoiceTab live provider callback wiring
+        - AdvancedTab opening refresh flow
+    - component: Shared settings surface helpers
+      responsibility: Resolve reusable surface/theme/spacing data once per render path and expose helper hooks that special tabs can adopt without changing section anchors or control content.
+      interfaces:
+        - BaseTab.get_active_surface_theme()
+        - BaseTab.get_section_surface_style()
+        - BaseTab.create_section_header()
+        - BaseTab.create_description()
+        - BaseTab.create_helper_text()
+      dependencies:
+        - component: Theme constants
+          relationship: Provides centralized appearance-aware tokens for settings shells, sections, and nested readable surfaces.
+      integration_points:
+        - Standard settings tabs
+        - Voice, Advanced, VRChat OSC, and TTS Provider special adapters
+contracts:
+  - from_task: ui-main-window-fast-path
+    to_task: ui-regression-validation
+    interface: Quick controls and control-bar buttons keep the same visible control set, rollback semantics, and latest-wins editor behavior while eliminating only no-op or duplicated work and keeping quick-controls creation eager.
+    format: Existing main-window pytest assertions and behavior-preservation checklist
+  - from_task: ui-settings-tab-hydration
+    to_task: ui-settings-apply-fast-path
+    interface: Settings tabs are created in SETTINGS_TAB_ORDER, Voice/Advanced/TTS Provider hydrate during shell build as dependency-critical tabs, the initially selected tab is also hydrated if different, and existing opening refresh/provider-callback behavior remains available to later Apply-triggered refresh gating without changing refresh_theme rebuild semantics.
+    format: SettingsWindow hydration contract and current regression tests
+  - from_task: ui-settings-apply-fast-path
+    to_task: ui-special-tab-adapters-dynamic
+    interface: Shared settings-shell/theme helpers expose stable appearance-aware section tokens so special tabs can reduce manual adapter churn without changing anchors or section order.
+    format: BaseTab helper contract and settings-surface regression tests
+  - from_task: ui-settings-apply-fast-path
+    to_task: ui-special-tab-adapter-provider
+    interface: Provider-tab styling updates must preserve the two top-level sidebar anchors and conditional Coqui visibility rules while consuming shared helper styles.
+    format: TTS Provider anchor/visibility contract
+tasks:
+  - id: ui-main-window-fast-path
+    title: Narrow main-window quick-controls and control-bar work to real state changes
+    description: |
+      Keep the main window behavior identical while removing avoidable UI churn from the quick-controls path.
+      Target the researched hot spots together: centralize duplicated button styling for the control bar, short-circuit broad refresh calls when only unrelated status data changed, skip provider-layout work when the visible slider layout is already correct, and avoid redundant slider persistence when the rounded value did not actually change.
+    wave: 1
+    agent: gem-team:gem-implementer
+    prototype: false
+    covers:
+      - behavior-preserving
+      - latest-wins
+      - 44px-controls
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: src/gui/main_window.py
+        description: Owns the control bar, quick-controls panel, refresh path, theme application, and slider persistence hot path.
+      - path: tests/test_main_window_latest_wins.py
+        description: Locks quick-controls recolor, rollback, overlay toggle rollback, and latest-wins editor behavior.
+    diagnosis:
+      root_cause: Quick controls and related buttons still pay duplicated styling, broad refresh, no-op provider layout, and redundant save work inside the main window path.
+      fix_recommendations: Keep the current UI structure and eager quick-controls creation, but add no-op guards and shared styling helpers inside MainWindow rather than redesigning the control bar.
+      injected_at: "2026-04-18T00:00:00Z"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: MainWindow already contains most of the identified no-op churn in one place, making it the highest-impact low-risk fast path.
+        timestamp: "2026-04-18T00:00:00Z"
+    estimated_effort: medium
+    estimated_files: 2
+    estimated_lines: 240
+    focus_area: main window quick controls
+    verification:
+      - python -m pytest -q tests/test_main_window_latest_wins.py
+    acceptance_criteria:
+      - The main window still exposes the same control bar buttons and quick-controls sliders with no control additions, removals, or reordering.
+      - Quick-controls persistence rollback behavior stays unchanged when settings saves fail.
+      - Latest-wins voice-indicator scheduling and current user-visible typing behavior remain unchanged.
+    failure_modes:
+      - scenario: Main-window fast-path cleanup accidentally skips a required quick-controls theme or visibility sync after a real state change.
+        likelihood: medium
+        impact: high
+        mitigation: Keep the existing eager creation path, and preserve refresh_quick_controls as the single post-save source of truth for visibility and theming sync.
+      - scenario: No-op guards suppress a required refresh after a real provider or settings change.
+        likelihood: medium
+        impact: medium
+        mitigation: Gate only identical rounded values and identical visible-layout states, not semantic setting changes.
+    tech_stack:
+      - Python
+      - customtkinter
+    test_coverage: Run only the existing main-window regression suite covering latest-wins, quick-controls, and overlay rollback behavior.
+
+  - id: ui-settings-tab-hydration
+    title: Preserve settings tab order with dependency-critical eager hydration
+    description: |
+      Keep the settings tab chrome and tab order exactly as-is, but stop constructing every tab object eagerly when the shell opens.
+      Create tab containers in SETTINGS_TAB_ORDER, eagerly hydrate Voice, Advanced, and TTS Provider as dependency-critical tabs, hydrate the initially selected tab if different, and hydrate remaining tabs on first selection while preserving the current Advanced opening refresh behavior and live provider-to-Voice callback behavior.
+    wave: 1
+    agent: gem-team:gem-implementer
+    prototype: false
+    covers:
+      - tab-order-stability
+      - section-order-stability
+      - behavior-preserving
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies: []
+    conflicts_with: []
+    context_files:
+      - path: src/gui/settings_window.py
+        description: Builds the settings shell and owns dependency-critical eager hydration plus lazy-on-selection materialization for remaining tabs.
+      - path: tests/test_voice_tab_provider_reload.py
+        description: Locks opening refresh behavior, selected-tab preservation, and provider callback expectations.
+      - path: tests/test_settings_surface_foundation.py
+        description: Locks tab order and shared settings-surface invariants.
+    diagnosis:
+      root_cause: SettingsWindow._build_window_content currently constructs more tab objects up front than necessary even though only Voice, Advanced, and TTS Provider are dependency-critical at shell build time.
+      fix_recommendations: Preserve the existing tab shell and order but add a small tab-factory/hydration layer that eagerly instantiates Voice, Advanced, and TTS Provider, then lazily materializes the remaining tabs when selected.
+      injected_at: "2026-04-18T00:00:00Z"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Reducing shell-build cost by eagerly hydrating only dependency-critical tabs is a low-risk optimization if tab order and initial refresh contracts remain intact.
+        timestamp: "2026-04-18T00:00:00Z"
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 260
+    focus_area: settings shell hydration
+    verification:
+      - python -m pytest -q tests/test_voice_tab_provider_reload.py tests/test_settings_surface_foundation.py
+    acceptance_criteria:
+      - SETTINGS_TAB_ORDER remains unchanged and visible tab names stay identical.
+      - Opening the settings window still triggers the required initial Advanced refresh path.
+      - Voice/provider live callback behavior continues to work with eager Voice, Advanced, and TTS Provider hydration and lazy hydration only for the remaining tabs.
+    failure_modes:
+      - scenario: A dependency-critical tab is left out of eager hydration and its callback or opening refresh path is unavailable when the shell finishes building.
+        likelihood: medium
+        impact: high
+        mitigation: Materialize Voice, Advanced, and TTS Provider during shell build, hydrate the selected tab if different, and wire callbacks immediately after each dependency-critical tab is created.
+      - scenario: Selected-tab restoration breaks because the shell and tab object lifecycles diverge.
+        likelihood: low
+        impact: medium
+        mitigation: Continue using the existing selected-tab string contract from SETTINGS_TAB_ORDER when rebuilding or reopening content.
+    tech_stack:
+      - Python
+      - customtkinter
+    test_coverage: Use the existing settings-window and settings-surface suites only.
+
+  - id: ui-settings-apply-fast-path
+    title: Gate redundant Apply-triggered refresh scheduling without changing refresh_theme rebuilds
+    description: |
+      Keep Apply behavior and selected-tab stability the same, but only gate or deduplicate redundant refresh scheduling around Apply and true no-op save cases.
+      Reuse the hydration layer from wave 1 and snapshot shared surface-theme data once per relevant build path, while keeping refresh_theme as the canonical destroy-children plus _build_window_content(selected_tab=...) rebuild flow whenever a rebuild is required.
+    wave: 2
+    agent: gem-team:gem-implementer
+    prototype: false
+    covers:
+      - behavior-preserving
+      - tab-order-stability
+      - accessibility-contrast
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - ui-settings-tab-hydration
+    conflicts_with: []
+    context_files:
+      - path: src/gui/settings_window.py
+        description: Provides the canonical refresh_theme destroy-children and rebuild flow that Wave 2 must preserve while gating only redundant Apply-triggered calls.
+      - path: src/gui/settings_tabs/base_tab.py
+        description: Provides shared settings helper methods and repeated theme lookup points.
+      - path: tests/test_voice_tab_provider_reload.py
+        description: Locks apply ordering, refresh-theme behavior, and selected-tab preservation.
+    diagnosis:
+      root_cause: The current settings apply path can schedule redundant refresh_theme rebuilds even when Apply results in a true no-op or already-covered selected-tab state.
+      fix_recommendations: Gate and deduplicate only redundant Apply-triggered refresh scheduling, and keep refresh_theme as the default canonical rebuild path with unchanged destroy-children plus _build_window_content(selected_tab=...) behavior.
+      injected_at: "2026-04-18T00:00:00Z"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Apply churn is the largest remaining shell-level waste after lazy hydration and should be addressed before per-tab adapter cleanup.
+        timestamp: "2026-04-18T00:00:00Z"
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 280
+    focus_area: settings apply and shared theme refresh
+    verification:
+      - python -m pytest -q tests/test_voice_tab_provider_reload.py tests/test_settings_surface_foundation.py tests/test_settings_wave2_retry3_regressions.py
+    acceptance_criteria:
+      - Apply preserves the same saved behavior and selected-tab behavior while skipping only redundant refresh scheduling for true no-op cases, and refresh_theme remains the canonical full shell destruction/recreation path when a rebuild is required.
+      - Shared settings surface tokens are resolved once per relevant render/rebuild path rather than repeatedly per widget helper call.
+      - Existing contrast and 44px control invariants remain unchanged.
+    failure_modes:
+      - scenario: Apply gating suppresses a rebuild that refresh_theme should still execute, leaving selected content or theme state stale.
+        likelihood: medium
+        impact: high
+        mitigation: Keep refresh_theme unchanged as the canonical rebuild path and limit Wave 2 logic to deduplicating only redundant Apply-triggered refresh scheduling around verified no-op cases.
+      - scenario: Apply becomes order-sensitive and fires refreshes before save callbacks finish.
+        likelihood: low
+        impact: medium
+        mitigation: Preserve the current callback ordering contract already covered by the existing apply regression tests.
+    tech_stack:
+      - Python
+      - customtkinter
+    test_coverage: Run the existing settings refresh/theme and settings-surface regression suites only.
+
+  - id: ui-special-tab-adapters-dynamic
+    title: Thin dynamic special-tab adapters through shared settings helpers
+    description: |
+      Reduce per-tab surface and spacing churn in the highest-variance settings tabs without changing their anchors, sections, or control set.
+      Focus on the Voice, Advanced, and VRChat OSC tabs: reuse shared BaseTab surface helpers where possible, finish any remaining spacing tokenization in those tabs, and keep their audited sidebar anchor order and 44px control heights unchanged.
+    wave: 3
+    agent: gem-team:gem-implementer
+    prototype: false
+    covers:
+      - section-order-stability
+      - 44px-controls
+      - behavior-preserving
+    priority: medium
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - ui-settings-apply-fast-path
+    conflicts_with: []
+    context_files:
+      - path: src/gui/settings_tabs/voice_tab.py
+        description: Contains dynamic lists and several manual surface adapters.
+      - path: src/gui/settings_tabs/advanced_tab.py
+        description: Contains cache/status surfaces and dynamic content that should remain structurally stable.
+      - path: src/gui/settings_tabs/vrchat_osc_tab.py
+        description: Contains stacked mixed-control sections with explicit anchor-order invariants.
+    diagnosis:
+      root_cause: Dynamic tabs still rely on more one-off styling/spacing paths than standard tabs, increasing update churn and special-case maintenance.
+      fix_recommendations: Route only the audited reusable pieces through BaseTab helpers and keep dynamic content structure unchanged.
+      injected_at: "2026-04-18T00:00:00Z"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: These three tabs share the highest adapter complexity but can still be simplified in a behavior-preserving way after shared apply/theme fast paths land.
+        timestamp: "2026-04-18T00:00:00Z"
+    estimated_effort: medium
+    estimated_files: 3
+    estimated_lines: 260
+    focus_area: dynamic special settings tabs
+    verification:
+      - python -m pytest -q tests/test_settings_special_tabs_alignment.py tests/test_settings_wave2_retry3_regressions.py
+    acceptance_criteria:
+      - Voice, Advanced, and VRChat OSC section/sidebar anchor order remain unchanged.
+      - Audited controls in these tabs keep the shared 44px height baseline.
+      - Shared helper adoption reduces manual surface/spacing churn without introducing new wrappers that alter layout semantics.
+    failure_modes:
+      - scenario: Shared helper reuse adds extra wrappers and shifts scroll/anchor targeting in long or nested sections.
+        likelihood: medium
+        impact: high
+        mitigation: Reuse only existing top-level section surfaces and keep nested scrollables/rows structurally unchanged.
+      - scenario: Spacing token cleanup changes effective row density in dense control clusters.
+        likelihood: medium
+        impact: medium
+        mitigation: Tokenize only values already matching the current visual rhythm and verify against the existing special-tab alignment suite.
+    tech_stack:
+      - Python
+      - customtkinter
+    test_coverage: Use only the existing special-tab and Wave 2 retry regression suites.
+
+  - id: ui-special-tab-adapter-provider
+    title: Normalize TTS Provider tab adapters without changing its two-anchor structure
+    description: |
+      Keep the TTS Provider tab's exact two-anchor structure and conditional Coqui visibility behavior while reducing manual styling churn in the provider-specific surfaces.
+      Move provider description and conditional Coqui frame styling onto shared helper/token paths where safe, preserving the current order of Active Provider then Provider Details and avoiding any new sidebar anchors or content restructuring.
+    wave: 3
+    agent: gem-team:gem-implementer
+    prototype: false
+    covers:
+      - section-order-stability
+      - conditional-visibility-stability
+      - behavior-preserving
+    priority: medium
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - ui-settings-apply-fast-path
+    conflicts_with: []
+    context_files:
+      - path: src/gui/settings_tabs/tts_provider_tab.py
+        description: Owns the conditional Coqui frame and provider description surfaces.
+      - path: src/gui/settings_tabs/base_tab.py
+        description: Provides the shared section/helper styling hooks the provider tab should prefer.
+      - path: tests/test_settings_special_tabs_alignment.py
+        description: Locks the two-anchor contract and special-tab styling invariants.
+    diagnosis:
+      root_cause: The provider tab still depends on tab-local adapter logic around conditional content that should use the shared settings-helper layer where possible.
+      fix_recommendations: Keep the conditional visibility logic intact and replace only styling duplication with shared helper usage.
+      injected_at: "2026-04-18T00:00:00Z"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: TTS Provider has distinct conditional-risk boundaries and should be isolated from the other special-tab cleanup work.
+        timestamp: "2026-04-18T00:00:00Z"
+    estimated_effort: small
+    estimated_files: 3
+    estimated_lines: 180
+    focus_area: provider tab conditional styling
+    verification:
+      - python -m pytest -q tests/test_settings_special_tabs_alignment.py
+    acceptance_criteria:
+      - The TTS Provider tab still exposes exactly the Active Provider and Provider Details top-level sidebar anchors.
+      - Conditional Coqui content appears and disappears in the same place and order as before.
+      - Shared helper adoption does not introduce new cards, anchors, or content order changes.
+    failure_modes:
+      - scenario: Shared helper reuse accidentally promotes conditional content into a third anchorable section.
+        likelihood: medium
+        impact: high
+        mitigation: Keep anchor registration limited to the existing two top-level sections and treat conditional Coqui content as internal detail only.
+      - scenario: Provider description/info-note restyling reduces readability or changes visual emphasis more than intended.
+        likelihood: low
+        impact: medium
+        mitigation: Reuse the existing supporting-text tokens and avoid new accent-heavy decoration.
+    tech_stack:
+      - Python
+      - customtkinter
+    test_coverage: Validate with the existing special-tab alignment suite only.
+
+  - id: ui-regression-validation
+    title: Run existing desktop UI regression suites as the final release gate
+    description: |
+      Validate the full Phase 5 optimization only with the existing regression suites already present in the repository.
+      The gate should confirm no behavior drift in latest-wins text analysis, quick-controls rollback, settings tab order, section order, accessible contrast, 44px control heights, and special-tab anchor/conditional-visibility rules.
+    wave: 4
+    agent: gem-team:gem-reviewer
+    prototype: false
+    covers:
+      - behavior-preserving
+      - accessibility-contrast
+      - tab-order-stability
+    priority: high
+    status: pending
+    flags:
+      flaky: false
+      retries_used: 0
+    dependencies:
+      - ui-main-window-fast-path
+      - ui-settings-tab-hydration
+      - ui-settings-apply-fast-path
+      - ui-special-tab-adapters-dynamic
+      - ui-special-tab-adapter-provider
+    conflicts_with: []
+    context_files:
+      - path: tests/test_main_window_latest_wins.py
+        description: Covers quick-controls, overlay rollback, and latest-wins behavior.
+      - path: tests/test_voice_tab_provider_reload.py
+        description: Covers settings opening/apply/refresh behavior and selected-tab stability.
+      - path: tests/test_settings_surface_foundation.py
+        description: Covers contrast, tab order, and shared settings-surface invariants.
+      - path: tests/test_settings_special_tabs_alignment.py
+        description: Covers special-tab anchor order, 44px controls, and shared surface status styling.
+      - path: tests/test_settings_wave2_retry3_regressions.py
+        description: Covers remaining settings modernization regressions and touch-target invariants.
+    diagnosis:
+      root_cause: This optimization spans multiple UI surfaces, so release risk comes from subtle behavior drift rather than compile-time failure.
+      fix_recommendations: Use the current pytest suites as a single approval gate and reject the phase if any invariant fails.
+      injected_at: "2026-04-18T00:00:00Z"
+    planning_pass: 1
+    planning_history:
+      - pass: 1
+        reason: Existing tests already encode the required behavior-preserving contracts, so validation should stay read-only and reuse them directly.
+        timestamp: "2026-04-18T00:00:00Z"
+    estimated_effort: small
+    estimated_files: 3
+    estimated_lines: 0
+    focus_area: regression gate
+    verification:
+      - python -m pytest -q tests/test_main_window_latest_wins.py tests/test_voice_tab_provider_reload.py tests/test_settings_surface_foundation.py tests/test_settings_special_tabs_alignment.py tests/test_settings_wave2_retry3_regressions.py
+    acceptance_criteria:
+      - All existing targeted UI regression suites pass without adding new test files or new validation flows.
+      - Tab order, section order, contrast, 44px control heights, latest-wins behavior, and persistence rollback all remain intact.
+      - Any failing suite blocks approval for this phase.
+    failure_modes:
+      - scenario: A targeted optimization passes isolated smoke checks but breaks a cross-surface invariant already encoded in the current tests.
+        likelihood: medium
+        impact: high
+        mitigation: Treat the full existing UI pytest set as a single required gate rather than approving task-by-task in isolation.
+    requires_review: true
+    review_depth: full
+    review_security_sensitive: false
