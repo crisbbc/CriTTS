@@ -83,7 +83,9 @@ class LatestWinsTextAnalysisScheduler:
 
 class MainWindow:
     """Main application window for CriTTS Recoded."""
-    
+
+    _PROGRESS_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
     def __init__(
         self, 
         root: ctk.CTk,
@@ -2199,19 +2201,14 @@ class MainWindow:
         """Animate the progress indicator with cycling dots."""
         if not self._progress_animation_running:
             return
-        
-        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-        frame = frames[self._progress_animation_index]
-        
+        frame = self._PROGRESS_FRAMES[self._progress_animation_index]
         try:
             self.progress_label.configure(text=f"{frame} {self._progress_base_message}")
         except Exception:
             pass
-        
-        self._progress_animation_index = (self._progress_animation_index + 1) % len(frames)
-        
-        # Schedule next frame (80ms for smooth spinner)
-        self.root.after(80, self._animate_progress)
+        self._progress_animation_index = (self._progress_animation_index + 1) % len(self._PROGRESS_FRAMES)
+        # 150ms: smooth for a braille spinner while halving redraws vs the old 80ms.
+        self.root.after(150, self._animate_progress)
     
     def _stop_progress_animation(self):
         """Stop the progress animation."""
