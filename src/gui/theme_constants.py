@@ -182,13 +182,13 @@ ANIMATION_VERY_SLOW = 500   # ms - complex animations
 # =============================================================================
 WINDOW_MAIN_WIDTH = 1200
 WINDOW_MAIN_HEIGHT = 640
-WINDOW_MAIN_MIN_WIDTH = 1180
-WINDOW_MAIN_MIN_HEIGHT = 500
+WINDOW_MAIN_MIN_WIDTH = 640
+WINDOW_MAIN_MIN_HEIGHT = 420
 
 WINDOW_SETTINGS_WIDTH = 860
 WINDOW_SETTINGS_HEIGHT = 640
-WINDOW_SETTINGS_MIN_WIDTH = 820
-WINDOW_SETTINGS_MIN_HEIGHT = 540
+WINDOW_SETTINGS_MIN_WIDTH = 540
+WINDOW_SETTINGS_MIN_HEIGHT = 400
 
 # =============================================================================
 # SETTINGS SURFACE TOKENS
@@ -204,6 +204,39 @@ SETTINGS_TAB_SELECTED_COLOR = "#4338ca"
 SETTINGS_TAB_SELECTED_HOVER = "#3730a3"
 SETTINGS_TAB_UNSELECTED_HOVER = COLOR_NEUTRAL_MEDIUM
 SETTINGS_TAB_TEXT_COLOR = COLOR_NEUTRAL_LIGHTEST
+
+# =============================================================================
+# SCALE MANAGER
+# =============================================================================
+
+# Reference window width for 1.0 scale
+REFERENCE_WIDTH = 1200
+
+
+class ScaleManager:
+    """Compute size/scaling values based on current window width."""
+
+    def __init__(self, reference_width: int = REFERENCE_WIDTH):
+        self._reference_width = reference_width
+        self._scale = 1.0
+
+    @property
+    def scale(self) -> float:
+        return self._scale
+
+    def update(self, current_width: int, min_scale: float = 0.65, max_scale: float = 1.4):
+        self._scale = max(min_scale, min(max_scale, current_width / self._reference_width))
+
+    def font(self, base_size: int) -> int:
+        """Return a scaled font size, clamped to reasonable range."""
+        return max(9, int(base_size * self._scale))
+
+    def dimension(self, base_value: int) -> int:
+        """Scale an integer dimension."""
+        return max(1, int(base_value * self._scale))
+
+    def button_width(self) -> int:
+        return self.dimension(BUTTON_WIDTH_DEFAULT)
 
 
 def get_active_appearance_mode() -> str:
@@ -271,6 +304,12 @@ def get_settings_surface_theme(mode: str | None = None) -> dict:
         "shell_corner_radius": RADIUS_LG,
         "section_corner_radius": RADIUS_MD,
     }
+
+_scale_manager = ScaleManager()
+
+
+def get_scale_manager() -> ScaleManager:
+    return _scale_manager
 
 
 # =============================================================================

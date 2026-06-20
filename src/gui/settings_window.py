@@ -147,6 +147,7 @@ class SettingsWindow:
         self.main_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(1, weight=1)  # Tabview expands
+        self.window.bind("<Configure>", self._on_settings_resize)
         
         # Title with theme font
         self.title_label = ctk.CTkLabel(
@@ -294,6 +295,15 @@ class SettingsWindow:
 
         self._build_window_content(selected_tab=selected_tab)
         self._on_refresh()
+
+    def _on_settings_resize(self, event):
+        """Broadcast window resize to all hydrated tabs."""
+        if event.widget != self.window:
+            return
+        for tab in getattr(self, 'tabs', []):
+            scaler = getattr(tab, 'update_scale', None)
+            if callable(scaler):
+                scaler(event.width)
 
     def _teardown_tabs(self) -> None:
         """Invalidate async callbacks on every tab before the settings window is destroyed."""

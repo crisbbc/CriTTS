@@ -153,8 +153,8 @@ class RecordingOverlay(ctk.CTkToplevel):
         screen_height = self.winfo_screenheight()
         
         # Get overlay dimensions (updated for duration display)
-        overlay_width = 180
-        overlay_height = 60
+        overlay_width = self.winfo_width() or 180
+        overlay_height = self.winfo_height() or 60
         
         # Calculate position (bottom-right with margin)
         margin = 20
@@ -285,7 +285,23 @@ class RecordingOverlay(ctk.CTkToplevel):
         """Hide the overlay window and stop any recording state."""
         self.set_recording(False)
         self.withdraw()
-    
+
+    def apply_scale(self, scale_manager):
+        """Resize overlay based on current window scale."""
+        sm = scale_manager
+        w = sm.dimension(180)
+        h = sm.dimension(60)
+        self.geometry(f"{w}x{h}")
+
+        font_size = sm.font(FONT_MD)
+        font_size_small = sm.font(FONT_MD - 2)
+        try:
+            self._text_label.configure(font=ctk.CTkFont(size=font_size))
+            self._duration_label.configure(font=ctk.CTkFont(size=font_size_small))
+            self._dot_label.configure(font=ctk.CTkFont(size=sm.font(FONT_LG), weight=FONT_WEIGHT_BOLD))
+        except Exception:
+            pass
+
     def destroy(self):
         """Clean up timers before destroying the overlay."""
         self._cancel_pulse()

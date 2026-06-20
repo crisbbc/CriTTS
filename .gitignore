@@ -36,3 +36,7 @@ ENV/
 *.swo
 .claude
 plans/
+
+# Launcher state files
+.dep-hash
+.version

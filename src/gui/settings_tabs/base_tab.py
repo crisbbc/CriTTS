@@ -251,7 +251,15 @@ class BaseTab(ABC):
                     label.configure(wraplength=available_width)
             except Exception:
                 pass
-    
+
+    def update_scale(self, window_width: int):
+        """Update wrapped labels based on settings window width."""
+        from ..theme_constants import get_scale_manager
+        sm = get_scale_manager()
+        sm.update(window_width)
+        # Use the existing scroll resize handler to update wraplengths
+        self._on_scroll_resize(type('Event', (), {'width': max(1, window_width - 200)})())
+
     @abstractmethod
     def get_settings(self) -> Dict[str, Any]:
         """
