@@ -31,15 +31,17 @@ from .theme_constants import (
     COLOR_BG_PRIMARY, COLOR_BG_SECONDARY,
     COLOR_STATUS_IDLE,
     COLOR_TRANSCRIBING,
-    FONT_XS, FONT_SM, FONT_MD, FONT_WEIGHT_BOLD,
+    FONT_XS, FONT_SM, FONT_MD, FONT_LG, FONT_WEIGHT_BOLD,
     BUTTON_HEIGHT_LG, BUTTON_WIDTH_DEFAULT,
     FRAME_CONTROLS_HEIGHT, FRAME_STATUS_HEIGHT,
     RADIUS_MD, RADIUS_LG,
     ANIMATION_NORMAL,
     WINDOW_MAIN_MIN_WIDTH, WINDOW_MAIN_MIN_HEIGHT,
     WINDOW_MAIN_WIDTH, WINDOW_MAIN_HEIGHT,
-    get_theme_colors
+    get_theme_colors,
+    get_scale_manager
 )
+from .font_cache import FontCache
 
 
 # =============================================================================
@@ -116,6 +118,13 @@ class MainWindow:
         self._speaking_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
+
+        # Shared font cache + skip-when-unchanged guards for resize-driven
+        # font reconfigures. Allocated early so any method called during
+        # construction can reach them.
+        self._font_cache = FontCache()
+        self._last_text_font_size: int | None = None
+        self._last_control_font_sizes: tuple | None = None
         
         # TTS speaking animation state
         self._tts_speaking = False
@@ -171,6 +180,7 @@ class MainWindow:
         
         # Text preprocessor (reused across speak calls)
         self._text_preprocessor = TextPreprocessor()
+        self._scale_manager = get_scale_manager()
         self._text_context_menu: Optional[tk.Menu] = None
         self._text_sound_token_menu: Optional[tk.Menu] = None
         
@@ -293,8 +303,6 @@ class MainWindow:
             fg_color="transparent"
         )
         self.controls_frame.grid(row=2, column=0, padx=SPACING_MD, pady=(SPACING_MD, SPACING_MD), sticky="ew")
-        self.controls_frame.grid_propagate(False)
-        self.controls_frame.configure(height=FRAME_CONTROLS_HEIGHT)
         
         # Speak button (primary action) - prominent styling
         self.speak_button = ctk.CTkButton(
@@ -487,20 +495,141 @@ class MainWindow:
         self._schedule_voice_indicator_update()
     
     def _on_window_resize(self, event):
-        """Handle window resize to update dynamic elements like status label wraplength."""
-        # Only process resize for the root window
-        if event.widget == self.root:
-            # Calculate available width for status label
-            window_width = event.width
-            # Reserve space for progress, activity indicator, and padding
-            reserved_width = 150
-            new_wraplength = max(200, window_width - reserved_width)
-            
-            # Update status label wraplength
+        """Handle window resize to update dynamic elements."""
+        if event.widget != self.root:
+            return
+
+        window_width = event.width
+        self._scale_manager.update(window_width)
+        self._update_control_fonts()
+        self._update_button_dimensions()
+
+        # Update status label wraplength
+        reserved_width = 150
+        new_wraplength = max(200, window_width - reserved_width)
+        try:
+            self.status_label.configure(wraplength=new_wraplength)
+        except Exception:
+            pass
+
+        # Reflow controls row (narrow window guard)
+        self._reflow_controls(window_width)
+
+        # Resize overlay if visible
+        if self._overlay_visible and self._recording_overlay:
             try:
-                self.status_label.configure(wraplength=new_wraplength)
+                self._recording_overlay.apply_scale(self._scale_manager)
             except Exception:
-                pass  # Ignore errors during resize
+                pass
+
+        # Update text input font
+        self._update_text_font()
+
+    def _update_text_font(self):
+        """Scale text input font based on current window width.
+
+        Uses the shared FontCache and skips the reconfigure when the computed
+        size is unchanged since the last apply.
+        """
+        size = self._scale_manager.font(FONT_MD)
+        if size == self._last_text_font_size:
+            return
+        self._last_text_font_size = size
+        try:
+            self.text_input.configure(font=self._font_cache.get(size))
+        except Exception:
+            pass
+
+    def _update_control_fonts(self):
+        """Scale fonts on buttons, header, and status based on window width.
+
+        Uses the shared FontCache and skips all reconfiguration when the set
+        of computed sizes is unchanged since the last apply.
+        """
+        sm = self._scale_manager
+        size_sm = sm.font(FONT_SM)
+        size_md = sm.font(FONT_MD)
+        size_lg = sm.font(FONT_LG)
+
+        key = (size_sm, size_md, size_lg, size_lg)
+        if key == self._last_control_font_sizes:
+            return
+        self._last_control_font_sizes = key
+
+        font_sm = self._font_cache.get(size_sm)
+        font_md = self._font_cache.get(size_md)
+        font_bold_md = self._font_cache.get(size_md, weight=FONT_WEIGHT_BOLD)
+        font_bold_lg = self._font_cache.get(size_lg, weight=FONT_WEIGHT_BOLD)
+
+        try:
+            self.voice_indicator_label.configure(font=font_bold_md)
+            self.voice_indicator_value.configure(font=font_md)
+        except Exception:
+            pass
+
+        try:
+            self.text_label.configure(font=font_bold_lg)
+        except Exception:
+            pass
+
+        for btn in [self.speak_button, self.stop_button, self.clear_button,
+                    self.voice_button, self.overlay_button,
+                    self.controls_toggle_button, self.settings_button]:
+            try:
+                btn.configure(font=font_sm)
+            except Exception:
+                pass
+
+        try:
+            self.status_label.configure(font=font_md)
+            self.activity_indicator.configure(font=font_md)
+            self.progress_label.configure(font=self._font_cache.get(sm.font(FONT_XS)))
+        except Exception:
+            pass
+
+    def _update_button_dimensions(self):
+        """Scale button widths and heights."""
+        sm = self._scale_manager
+        bw = sm.button_width()
+        bh = sm.dimension(BUTTON_HEIGHT_LG)
+        for btn in [self.speak_button, self.stop_button, self.clear_button,
+                    self.voice_button, self.overlay_button,
+                    self.controls_toggle_button, self.settings_button]:
+            try:
+                btn.configure(width=bw, height=bh)
+            except Exception:
+                pass
+
+    def _reflow_controls(self, window_width: int):
+        """Reflow controls row: stack to two rows when narrow."""
+        threshold = 800
+
+        buttons = [
+            self.speak_button, self.stop_button, self.clear_button,
+            self.voice_button, self.overlay_button,
+            self.controls_toggle_button, self.settings_button,
+        ]
+
+        current_layout = getattr(self, '_controls_layout', None)
+        new_layout = 'stacked' if window_width < threshold else 'single'
+        if current_layout == new_layout:
+            return
+        self._controls_layout = new_layout
+
+        for b in buttons:
+            b.pack_forget()
+
+        if new_layout == 'single':
+            for b in buttons:
+                b.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        else:
+            row1 = [self.speak_button, self.stop_button, self.clear_button,
+                    self.voice_button, self.overlay_button]
+            row2 = [self.controls_toggle_button, self.settings_button]
+            for b in row1:
+                b.pack(side="left", padx=SPACING_SM, pady=(SPACING_SM, 0))
+            for b in row2:
+                b.pack(side="left", padx=SPACING_SM, pady=(0, SPACING_SM))
 
     
     def _bind_text_editing_shortcuts(self):
@@ -2269,8 +2398,8 @@ class MainWindow:
         # Each button occupies BUTTON_WIDTH_DEFAULT + 2 * SPACING_SM horizontal space.
         # Add 2 visible fixed buttons (controls_toggle + settings) to the count.
         n_visible = sum(1 for name, _ in toggleable_buttons if name in visible_buttons) + 2
-        required = n_visible * (BUTTON_WIDTH_DEFAULT + 2 * SPACING_SM) + 2 * SPACING_MD
-        self.root.minsize(max(required, WINDOW_MAIN_MIN_WIDTH), WINDOW_MAIN_MIN_HEIGHT)
+        self.root.minsize(600, WINDOW_MAIN_MIN_HEIGHT)
+        self._reflow_controls(self.root.winfo_width())
     
     # =========================================================================
     # QUICK CONTROLS PANEL
