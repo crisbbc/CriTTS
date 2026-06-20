@@ -2098,63 +2098,22 @@ class MainWindow:
         button.configure(text=text, state=state)
     
     def _animate_button_color(self, button, target_color: str, duration: float):
+        """Apply a button color change directly.
+
+        CustomTkinter does not support color interpolation, so the previous
+        stepped transition + width-pulse was a no-op that forced two layout
+        recalculations. Set the target color in one configure call.
         """
-        Animate button color transition.
-        
-        Uses a multi-step color transition for smoother animation.
-        """
-        # Get current color
         try:
             current_color = button.cget("fg_color")
         except Exception:
             current_color = target_color
-        
-        # If colors are the same, no animation needed
         if current_color == target_color:
             return
-        
-        # CustomTkinter doesn't support direct color interpolation,
-        # so we use a stepped transition effect
-        self._transition_button_color(button, current_color, target_color, 3, duration)
-    
-    def _transition_button_color(self, button, from_color: str, to_color: str, steps: int, total_duration: float):
-        """
-        Transition button color through intermediate steps.
-        
-        Creates a smoother visual transition by briefly flashing through
-        an intermediate state.
-        """
-        if steps <= 0:
-            button.configure(fg_color=to_color)
-            return
-        
-        # For the first step, set to target color immediately with pulse effect
-        button.configure(fg_color=to_color)
-        
-        # Add a subtle scale pulse effect
-        self._pulse_button(button, to_color, total_duration)
-    
-    def _pulse_button(self, button, target_color: str, duration: float):
-        """
-        Create a pulse effect for button animation.
-        
-        This adds visual feedback by briefly expanding the button width
-        then returning to normal size.
-        """
         try:
-            # Add a subtle scale effect by changing size slightly
-            # Use the constant to prevent width accumulation on rapid repeated calls
-            button.configure(width=BUTTON_WIDTH_DEFAULT + 4)
-            
-            def reset_size():
-                try:
-                    button.configure(width=BUTTON_WIDTH_DEFAULT)
-                except Exception:
-                    pass  # Button may have been destroyed or reconfigured
-            
-            self.root.after(int(duration * 300), reset_size)
+            button.configure(fg_color=target_color)
         except Exception:
-            pass  # Button may not support width configuration
+            pass
     
     def _set_status(self, message: str, icon: str = "", message_type: str = "info"):
         """Update status message with enhanced formatting and visual indicators."""
