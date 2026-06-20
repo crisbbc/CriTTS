@@ -177,7 +177,6 @@ class MainWindow:
         
         # Voice indicator debounce timer
         self._voice_indicator_timer = None
-        self._voice_indicator_animating = False
         self._voice_indicator_scheduler = LatestWinsTextAnalysisScheduler()
         
         # Text preprocessor (reused across speak calls)
@@ -1072,39 +1071,19 @@ class MainWindow:
         self._update_voice_indicator_for_text(request.text, request=request)
     
     def _animate_voice_indicator(self, new_text: str, new_color: str):
-        """Animate the voice indicator with smooth transitions."""
-        # Guard: Skip if already animating to prevent orphaned animation chains
-        if self._voice_indicator_animating:
+        """Update the voice indicator text and color.
+
+        CustomTkinter does not support alpha/opacity animation, so the previous
+        fade-out/fade-in machinery was a no-op that only churned timers and an
+        animating flag. Set the target state directly.
+        """
+        if self.voice_indicator_value.cget("text") == new_text:
             return
-        
-        current_text = self.voice_indicator_value.cget("text")
-        
-        # Only animate if the text actually changed
-        if current_text != new_text:
-            self._voice_indicator_animating = True
-            # Fade out current text
-            self._fade_out_text(0.15, lambda: self._fade_in_text_safe(new_text, new_color, 0.15))
-    
-    def _fade_in_text_safe(self, new_text: str, new_color: str, duration: float):
-        """Fade in the new text with animation state cleanup."""
         try:
-            self._fade_in_text(new_text, new_color, duration)
-        finally:
-            self._voice_indicator_animating = False
-    
-    def _fade_out_text(self, duration: float, callback):
-        """Fade out the current text (simplified to single-step clear)."""
-        # CustomTkinter doesn't support alpha/color interpolation, so just clear and callback
-        self.voice_indicator_value.configure(text="")
-        if callback:
-            callback()
-    
-    def _fade_in_text(self, new_text: str, new_color: str, duration: float):
-        """Fade in the new text."""
-        self.voice_indicator_value.configure(text=new_text, text_color=new_color)
-        # Simple fade in by changing opacity of the label
-        self._pulse_label(self.voice_indicator_value, duration)
-    
+            self.voice_indicator_value.configure(text=new_text, text_color=new_color)
+        except Exception:
+            pass
+
     def _pulse_label(self, label, duration: float):
         """Create a subtle pulse animation for a label.
         
