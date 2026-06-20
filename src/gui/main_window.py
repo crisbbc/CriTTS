@@ -125,6 +125,8 @@ class MainWindow:
         self._font_cache = FontCache()
         self._last_text_font_size: int | None = None
         self._last_control_font_sizes: tuple | None = None
+        # Debounce state for the <Configure> resize burst (see _on_window_resize).
+        self._resize_after_id: str | None = None
         
         # TTS speaking animation state
         self._tts_speaking = False
@@ -495,11 +497,31 @@ class MainWindow:
         self._schedule_voice_indicator_update()
     
     def _on_window_resize(self, event):
-        """Handle window resize to update dynamic elements."""
+        """Handle window resize: coalesce bursts into a single deferred apply.
+
+        <Configure> fires dozens of times per second during a window drag on
+        Windows. Doing font/dimension work inline per event starves the event
+        loop. Instead, schedule one deferred apply and cancel any pending one.
+        """
         if event.widget != self.root:
             return
+        if self._resize_after_id is not None:
+            try:
+                self.root.after_cancel(self._resize_after_id)
+            except Exception:
+                pass
 
-        window_width = event.width
+        def _deferred_apply():
+            # Clear the pending token first so a direct/monkeypatched
+            # _apply_resize still observes a clean state.
+            self._resize_after_id = None
+            self._apply_resize(event.width)
+
+        self._resize_after_id = self.root.after(80, _deferred_apply)
+
+    def _apply_resize(self, window_width: int):
+        """Apply all resize-driven updates once, after the burst coalesces."""
+        self._resize_after_id = None
         self._scale_manager.update(window_width)
         self._update_control_fonts()
         self._update_button_dimensions()
