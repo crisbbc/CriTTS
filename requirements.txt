@@ -10,4 +10,4 @@ scipy>=1.9.0
 pyloudnorm>=0.1.0
 python-osc>=1.8.0
 SpeechRecognition
-keyboard>=0.13.5
+pytest>=8.0
