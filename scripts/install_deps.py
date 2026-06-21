@@ -81,6 +81,7 @@ def install_requirements(python_exe: str, req_path: Path) -> int:
         if install_with_pip(python_exe, req_path) == 0:
             return 0
 
+    print("All install strategies failed (pip, uv, ensurepip).", file=sys.stderr)
     return 1
 
 
@@ -91,7 +92,11 @@ def main() -> int:
     parser.add_argument("--python", default=sys.executable,
                         help="target interpreter (default: current)")
     args = parser.parse_args()
-    return install_requirements(args.python, Path(args.requirements))
+    req_path = Path(args.requirements)
+    if not req_path.exists():
+        print(f"requirements file not found: {req_path}", file=sys.stderr)
+        return 1
+    return install_requirements(args.python, req_path)
 
 
 if __name__ == "__main__":

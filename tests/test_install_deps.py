@@ -83,3 +83,31 @@ def test_returns_nonzero_when_all_strategies_fail(monkeypatch):
     rc = mod.install_requirements("py.exe", Path("requirements.txt"))
 
     assert rc != 0
+
+
+def test_pip_and_uv_both_fail_then_ensurepip_and_pip_retry(monkeypatch):
+    """Full cascade: pip present+fails -> uv fails -> ensurepip -> pip retry succeeds."""
+    monkeypatch.setattr(mod, "has_pip", lambda exe: True)
+    monkeypatch.setattr(mod, "has_uv", lambda: True)
+    calls = []
+    pip_returns = [1, 0]  # first pip call fails, second (after ensurepip) succeeds
+
+    def _fake_pip(python_exe, req_path):
+        calls.append(("pip", python_exe))
+        return pip_returns.pop(0)
+
+    monkeypatch.setattr(mod, "install_with_pip", _fake_pip)
+    monkeypatch.setattr(mod, "install_with_uv",
+                        lambda exe, req: calls.append(("uv", exe)) or 1)
+    monkeypatch.setattr(mod, "ensurepip",
+                        lambda exe: calls.append(("ensurepip", exe)) or 0)
+
+    rc = mod.install_requirements("py.exe", Path("requirements.txt"))
+
+    assert rc == 0
+    assert calls == [
+        ("pip", "py.exe"),
+        ("uv", "py.exe"),
+        ("ensurepip", "py.exe"),
+        ("pip", "py.exe"),
+    ]
