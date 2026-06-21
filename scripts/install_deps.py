@@ -66,7 +66,21 @@ def install_requirements(python_exe: str, req_path: Path) -> int:
     Strategy (first success wins): pip -> uv -> ensurepip+pip.
     Returns 0 on success, non-zero if every strategy fails.
     """
-    # Implemented in Task 4.
+    # 1) pip -- standard venvs ship with it.
+    if has_pip(python_exe):
+        if install_with_pip(python_exe, req_path) == 0:
+            return 0
+
+    # 2) uv -- works on pip-less venvs (e.g. created with `uv venv`).
+    if has_uv():
+        if install_with_uv(python_exe, req_path) == 0:
+            return 0
+
+    # 3) Bootstrap pip into the venv, then retry pip.
+    if ensurepip(python_exe) == 0:
+        if install_with_pip(python_exe, req_path) == 0:
+            return 0
+
     return 1
 
 
