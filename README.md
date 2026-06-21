@@ -83,6 +83,18 @@ pip install -r requirements.txt
 python main.py
 ```
 
+### Troubleshooting dependency installation
+
+The launcher (`run.bat` / `run.sh`) installs dependencies with the first available
+of: `pip`, `uv`, or `ensurepip` + `pip`. If your virtual environment was created
+with `uv venv` (which does not seed `pip`), the launcher automatically uses `uv`
+instead — no manual steps needed.
+
+If installation still fails:
+
+- Install [uv](https://docs.astral.sh/uv/) (recommended), or
+- Recreate the venv with pip: `python -m venv --clear .venv`
+
 ### Dependencies
 
 ```
