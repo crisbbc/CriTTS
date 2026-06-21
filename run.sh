@@ -64,13 +64,25 @@ if [ -f "$SCRIPT_DIR/scripts/fingerprint.py" ]; then
         echo "[OK] Dependencies up to date."
     else
         echo "[INFO] Dependencies need updating..."
-        "$PYTHON" -m pip install -r "$SCRIPT_DIR/requirements.txt" --quiet
+        if ! "$PYTHON" "$SCRIPT_DIR/scripts/install_deps.py"; then
+            echo "[ERROR] Failed to install dependencies."
+            echo "  Tried pip, uv, and ensurepip. To resolve:"
+            echo "    - Install uv:  https://docs.astral.sh/uv/"
+            echo "    - Or recreate the venv with pip:  python -m venv --clear .venv"
+            exit 1
+        fi
         "$PYTHON" "$SCRIPT_DIR/scripts/fingerprint.py" --write >/dev/null 2>&1
         echo "[OK] Dependencies updated."
     fi
 else
     echo "[INFO] Installing dependencies (first run)..."
-    "$PYTHON" -m pip install -r "$SCRIPT_DIR/requirements.txt" --quiet
+    if ! "$PYTHON" "$SCRIPT_DIR/scripts/install_deps.py"; then
+        echo "[ERROR] Failed to install dependencies."
+        echo "  Tried pip, uv, and ensurepip. To resolve:"
+        echo "    - Install uv:  https://docs.astral.sh/uv/"
+        echo "    - Or recreate the venv with pip:  python -m venv --clear .venv"
+        exit 1
+    fi
     if [ -f "$SCRIPT_DIR/scripts/fingerprint.py" ]; then
         "$PYTHON" "$SCRIPT_DIR/scripts/fingerprint.py" --write >/dev/null 2>&1
     fi
