@@ -74,9 +74,13 @@ goto :check_updates
 
 :install_deps_update
 echo [INFO] Dependencies need updating...
-python -m pip install -r "%SCRIPT_DIR%requirements.txt" --quiet
+python "%SCRIPT_DIR%scripts\install_deps.py"
 if errorlevel 1 (
     echo [ERROR] Failed to install dependencies.
+    echo.
+    echo   Tried pip, uv, and ensurepip. To resolve:
+    echo     - Install uv:  https://docs.astral.sh/uv/
+    echo     - Or recreate the venv with pip:  python -m venv --clear .venv
     pause
     exit /b 1
 )
@@ -86,9 +90,13 @@ goto :check_updates
 
 :install_deps_no_check
 echo [INFO] Installing dependencies ^(first run^)...
-python -m pip install -r "%SCRIPT_DIR%requirements.txt" --quiet
+python "%SCRIPT_DIR%scripts\install_deps.py"
 if errorlevel 1 (
     echo [ERROR] Failed to install dependencies.
+    echo.
+    echo   Tried pip, uv, and ensurepip. To resolve:
+    echo     - Install uv:  https://docs.astral.sh/uv/
+    echo     - Or recreate the venv with pip:  python -m venv --clear .venv
     pause
     exit /b 1
 )
