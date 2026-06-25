@@ -1,8 +1,16 @@
-#!/bin/bash
-# CriTTS Launcher for Linux
-# Checks requirements and launches the application
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Get the directory where this script is located
+# ==============================================================================
+#  CriTTS Launcher for Linux / macOS
+#
+#  Fast path: skips redundant work on repeated launches.
+#  - Venv activated first
+#  - pip install only runs when requirements.txt changed (fingerprint)
+#  - Update check is fire-and-forget, never blocks startup
+#  - Works whether repo was git-cloned or ZIP-downloaded
+# ==============================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
@@ -12,133 +20,99 @@ echo "  CriTTS Launcher"
 echo "========================================"
 echo ""
 
-# Function to check if a command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# Check for Git and Auto-Update
-echo "[1/4] Checking for Git and updating scripts..."
-if ! command_exists git; then
-    echo "[WARN] Git is not installed. Attempting to install Git..."
-    if command_exists apt; then
-        sudo apt update && sudo apt install -y git
-    elif command_exists dnf; then
-        sudo dnf install -y git
-    elif command_exists pacman; then
-        sudo pacman -S --noconfirm git
-    else
-        echo "[WARN] Unsupported package manager. Could not install Git automatically."
-    fi
-fi
-
-if command_exists git; then
-    echo "[INFO] Checking for updates from remote repository..."
-
-    # Detect the current branch
-    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-    CURRENT_BRANCH="${CURRENT_BRANCH:-main}"
-
-    # Try to use the upstream tracking branch; fall back to current branch
-    TRACKING=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
-    if [ -n "$TRACKING" ]; then
-        REMOTE_BRANCH="${TRACKING#origin/}"
-    else
-        REMOTE_BRANCH="$CURRENT_BRANCH"
-    fi
-
-    git fetch origin "$REMOTE_BRANCH" >/dev/null 2>&1
-    if [ $? -eq 0 ]; then
-        LOCAL=$(git rev-parse HEAD 2>/dev/null)
-        REMOTE=$(git rev-parse "origin/$REMOTE_BRANCH" 2>/dev/null)
-
-        if [ -n "$LOCAL" ] && [ -n "$REMOTE" ]; then
-            if [ "$LOCAL" != "$REMOTE" ]; then
-                echo "[INFO] Updates found. Applying updates and replacing local changes..."
-                git reset --hard "origin/$REMOTE_BRANCH" >/dev/null 2>&1
-                if [ $? -eq 0 ]; then
-                    echo "[OK] Successfully updated to the latest $REMOTE_BRANCH branch."
-                    # Re-run the script to ensure we are using the updated version
-                    exec bash "$0" "$@"
-                else
-                    echo "[WARN] Failed to apply updates."
-                fi
-            else
-                echo "[OK] Scripts are up to date."
-            fi
-        else
-            echo "[WARN] Could not determine local or remote commit. Skipping update."
-        fi
-    else
-        echo "[WARN] Failed to fetch updates from remote repository."
-    fi
-else
-    echo "[WARN] Git could not be found or installed. Skipping update check."
-fi
-
-# Check if Python 3 is installed
-echo ""
-echo "[2/4] Checking Python installation..."
-if command_exists python3; then
-    PYTHON_CMD="python3"
-elif command_exists python; then
-    PYTHON_CMD="python"
-else
-    echo "[ERROR] Python is not installed."
-    echo ""
-    echo "Please install Python 3.8 or higher."
-    echo "On Debian/Ubuntu: sudo apt install python3 python3-pip"
-    echo "On Fedora: sudo dnf install python3 python3-pip"
-    echo "On Arch: sudo pacman -S python python-pip"
-    echo ""
-    exit 1
-fi
-
-# Display Python version
-PYTHON_VERSION=$($PYTHON_CMD --version 2>&1 | cut -d' ' -f2)
-echo "[OK] Python $PYTHON_VERSION found."
-
-# Check if pip is available
-echo ""
-echo "[3/4] Checking pip..."
-if ! $PYTHON_CMD -m pip --version >/dev/null 2>&1; then
-    echo "[ERROR] pip is not available."
-    echo "Please install pip for Python 3."
-    echo "On Debian/Ubuntu: sudo apt install python3-pip"
-    echo "On Fedora: sudo dnf install python3-pip"
-    echo "On Arch: sudo pacman -S python-pip"
-    exit 1
-fi
-echo "[OK] pip is available."
-
-# Install / update dependencies from requirements.txt
-echo ""
-echo "[4/4] Checking and installing dependencies..."
-
-# Activate virtual environment if it exists
+# ---------------------------------------------------------------------------
+# [1] Activate virtual environment if it exists
+# ---------------------------------------------------------------------------
 if [ -f "$SCRIPT_DIR/venv/bin/activate" ]; then
-    echo "[INFO] Virtual environment found. Activating..."
+    # shellcheck disable=SC1091
     source "$SCRIPT_DIR/venv/bin/activate"
+    PYTHON="python"
+    echo "[OK] Virtual environment ready."
+elif [ -f "$SCRIPT_DIR/.venv/bin/activate" ]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/.venv/bin/activate"
+    PYTHON="python"
+    echo "[OK] Virtual environment ready."
+else
+    # Resolve Python -- try python3 first (Linux convention), then python
+    if command -v python3 &>/dev/null; then
+        PYTHON="python3"
+    elif command -v python &>/dev/null; then
+        PYTHON="python"
+    else
+        echo "[ERROR] Python 3 is not installed."
+        echo ""
+        echo "Install it with your package manager:"
+        echo "  Debian/Ubuntu: sudo apt install python3 python3-pip"
+        echo "  Fedora:        sudo dnf install python3 python3-pip"
+        echo "  Arch:          sudo pacman -S python python-pip"
+        exit 1
+    fi
 fi
 
-$PYTHON_CMD -m pip install -r "$SCRIPT_DIR/requirements.txt" --quiet
-if [ $? -ne 0 ]; then
-    echo "[ERROR] Failed to install dependencies."
-    exit 1
-fi
-echo "[OK] Dependencies are satisfied."
+# ---------------------------------------------------------------------------
+# [2] Verify Python version
+# ---------------------------------------------------------------------------
+PY_VER="$("$PYTHON" --version 2>&1 | cut -d' ' -f2)"
+echo "[OK] Python $PY_VER found."
 
-# Launch the application
+# ---------------------------------------------------------------------------
+# [3] Install dependencies -- only when requirements.txt changed
+#     No hard pip gate: install_deps.py tries pip -> pip.exe -> uv -> ensurepip
+# ---------------------------------------------------------------------------
+if [ -f "$SCRIPT_DIR/scripts/fingerprint.py" ]; then
+    if "$PYTHON" "$SCRIPT_DIR/scripts/fingerprint.py" --check >/dev/null 2>&1; then
+        echo "[OK] Dependencies up to date."
+    else
+        echo "[INFO] Dependencies need updating..."
+        if ! "$PYTHON" "$SCRIPT_DIR/scripts/install_deps.py"; then
+            echo "[ERROR] Failed to install dependencies."
+            echo "  Tried pip, uv, and ensurepip. To resolve:"
+            echo "    - Install uv:  https://docs.astral.sh/uv/"
+            echo "    - Or recreate the venv with pip:  python -m venv --clear .venv"
+            exit 1
+        fi
+        "$PYTHON" "$SCRIPT_DIR/scripts/fingerprint.py" --write >/dev/null 2>&1
+        echo "[OK] Dependencies updated."
+    fi
+else
+    echo "[INFO] Installing dependencies (first run)..."
+    if ! "$PYTHON" "$SCRIPT_DIR/scripts/install_deps.py"; then
+        echo "[ERROR] Failed to install dependencies."
+        echo "  Tried pip, uv, and ensurepip. To resolve:"
+        echo "    - Install uv:  https://docs.astral.sh/uv/"
+        echo "    - Or recreate the venv with pip:  python -m venv --clear .venv"
+        exit 1
+    fi
+    if [ -f "$SCRIPT_DIR/scripts/fingerprint.py" ]; then
+        "$PYTHON" "$SCRIPT_DIR/scripts/fingerprint.py" --write >/dev/null 2>&1
+    fi
+    echo "[OK] Dependencies installed."
+fi
+
+# ---------------------------------------------------------------------------
+# [4] Background update check -- fire and forget
+# ---------------------------------------------------------------------------
+if [ -f "$SCRIPT_DIR/scripts/update_check.py" ]; then
+    "$PYTHON" "$SCRIPT_DIR/scripts/update_check.py" &>/dev/null &
+    disown 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+# [5] Launch
+# ---------------------------------------------------------------------------
 echo ""
 echo "========================================"
 echo "  Launching CriTTS..."
 echo "========================================"
 echo ""
 
-$PYTHON_CMD "$SCRIPT_DIR/main.py"
+"$PYTHON" "$SCRIPT_DIR/main.py"
+EXIT_CODE=$?
 
-# If the application exits with an error, notify
-if [ $? -ne 0 ]; then
+if [ $EXIT_CODE -ne 0 ]; then
     echo ""
-    echo "[ERROR] Application exited with an error."
+    echo "[ERROR] Application exited with code $EXIT_CODE."
 fi
+
+exit $EXIT_CODE

@@ -1,8 +1,23 @@
 @echo off
-REM CriTTS Launcher for Windows
-REM Checks requirements and launches the application
-
 setlocal enabledelayedexpansion
+
+REM ==============================================================================
+REM  CriTTS Launcher for Windows
+REM
+REM  Robust to:
+REM  - Microsoft Store Python (pip.exe alias without pip module)
+REM  - pip-less venvs (uv venv without --seed)
+REM  - PATH pollution (another app's python.exe first on PATH)
+REM
+REM  Fast path: skips redundant work on repeated launches.
+REM  - Venv activated first
+REM  - pip install only runs when requirements.txt changed (fingerprint)
+REM  - Update check is fire-and-forget, never blocks startup
+REM  - Works whether repo was git-cloned or ZIP-downloaded
+REM ==============================================================================
+
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
 
 echo.
 echo ========================================
@@ -10,131 +25,126 @@ echo   CriTTS Launcher
 echo ========================================
 echo.
 
-REM Get the directory where this batch file is located
-set "SCRIPT_DIR=%~dp0"
-cd /d "%SCRIPT_DIR%"
+REM ---------------------------------------------------------------------------
+REM [1] Activate virtual environment if it exists
+REM ---------------------------------------------------------------------------
+if exist "%SCRIPT_DIR%venv\Scripts\activate.bat" goto :activate_venv
+if exist "%SCRIPT_DIR%.venv\Scripts\activate.bat" goto :activate_dotvenv
+goto :find_python
 
-REM Check for Git and Auto-Update
-echo [1/4] Checking for Git and updating scripts...
-git --version >nul 2>&1
-if errorlevel 1 (
-    echo [WARN] Git is not installed. Attempting to install Git...
-    winget --version >nul 2>&1
-    if errorlevel 1 (
-        echo [WARN] winget is not available. Could not install Git automatically.
-    ) else (
-        winget install --id Git.Git -e --source winget
-        if errorlevel 1 (
-            echo [WARN] Failed to install Git automatically.
-        ) else (
-            echo [INFO] Git installed. Note: You may need to restart the script/terminal for Git to be recognized.
-        )
-    )
-)
-
-git --version >nul 2>&1
+:activate_venv
+call "%SCRIPT_DIR%venv\Scripts\activate.bat" >nul 2>&1
 if not errorlevel 1 (
-    echo [INFO] Checking for updates from remote repository...
-
-    REM Detect the current branch
-    set "CURRENT_BRANCH=main"
-    for /f "tokens=*" %%i in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set CURRENT_BRANCH=%%i
-
-    REM Try to use the upstream tracking branch; fall back to current branch
-    set "REMOTE_BRANCH=!CURRENT_BRANCH!"
-    for /f "tokens=*" %%i in ('git rev-parse --abbrev-ref --symbolic-full-name @{u} 2^>nul') do (
-        set "TRACKING=%%i"
-        set "REMOTE_BRANCH=!TRACKING:origin/=!"
-    )
-
-    git fetch origin "!REMOTE_BRANCH!" >nul 2>&1
-    if not errorlevel 1 (
-        for /f "tokens=*" %%i in ('git rev-parse HEAD 2^>nul') do set LOCAL=%%i
-        for /f "tokens=*" %%i in ('git rev-parse "origin/!REMOTE_BRANCH!" 2^>nul') do set REMOTE=%%i
-
-        if defined LOCAL if defined REMOTE (
-            if not "!LOCAL!"=="!REMOTE!" (
-                echo [INFO] Updates found. Applying updates and replacing local changes...
-                git reset --hard "origin/!REMOTE_BRANCH!" >nul 2>&1
-                if not errorlevel 1 (
-                    echo [OK] Successfully updated to the latest !REMOTE_BRANCH! branch.
-                    REM Re-run the script to ensure we are using the updated version
-                    call "%~f0" %*
-                    exit /b
-                ) else (
-                    echo [WARN] Failed to apply updates.
-                )
-            ) else (
-                echo [OK] Scripts are up to date.
-            )
-        ) else (
-            echo [WARN] Could not determine local or remote commit. Skipping update.
-        )
-    ) else (
-        echo [WARN] Failed to fetch updates from remote repository.
-    )
+    echo [OK] Virtual environment ready.
 ) else (
-    echo [WARN] Git could not be found or installed. Skipping update check.
+    echo [WARN] Virtual environment exists but activation failed.
+)
+goto :find_python
+
+:activate_dotvenv
+call "%SCRIPT_DIR%.venv\Scripts\activate.bat" >nul 2>&1
+if not errorlevel 1 (
+    echo [OK] Virtual environment ready.
+) else (
+    echo [WARN] .venv exists but activation failed.
 )
 
-REM Check if Python is installed
-echo.
-echo [2/4] Checking Python installation...
+REM ---------------------------------------------------------------------------
+REM [2] Find a working Python interpreter
+REM     Try `python` first; if it fails, try `py -3` (python.org launcher).
+REM     We do NOT require pip here -- install_deps.py handles pip-less envs.
+REM ---------------------------------------------------------------------------
+:find_python
 python --version >nul 2>&1
-if errorlevel 1 (
-    echo [ERROR] Python is not installed or not in PATH.
-    echo.
-    echo Please install Python 3.8 or higher from:
-    echo https://www.python.org/downloads/
-    echo.
-    pause
-    exit /b 1
+if not errorlevel 1 (
+    set "PYTHON_CMD=python"
+    goto :python_found
 )
 
-REM Display Python version
-for /f "tokens=2" %%i in ('python --version 2^>^&1') do set PYTHON_VERSION=%%i
-echo [OK] Python !PYTHON_VERSION! found.
+echo [INFO] `python` not found on PATH. Trying `py -3` launcher...
+py -3 --version >nul 2>&1
+if not errorlevel 1 (
+    set "PYTHON_CMD=py -3"
+    goto :python_found
+)
 
-REM Check if pip is available
+echo [ERROR] Python is not installed or not in PATH.
 echo.
-echo [3/4] Checking pip...
-python -m pip --version >nul 2>&1
-if errorlevel 1 (
-    echo [ERROR] pip is not available.
-    echo Please ensure pip is installed with your Python installation.
-    pause
-    exit /b 1
-)
-echo [OK] pip is available.
-
-REM Install / update dependencies from requirements.txt
+echo Please install Python 3.8+ from:
+echo     https://www.python.org/downloads/
+echo     (or search "Python" in the Microsoft Store)
 echo.
-echo [4/4] Checking and installing dependencies...
+pause
+exit /b 1
 
-REM Activate virtual environment if it exists
-if exist "%SCRIPT_DIR%venv\Scripts\activate.bat" (
-    echo [INFO] Virtual environment found. Activating...
-    call "%SCRIPT_DIR%venv\Scripts\activate.bat"
-)
+:python_found
+for /f "tokens=2" %%i in ('!PYTHON_CMD! --version 2^>^&1') do set "PYTHON_VERSION=%%i"
+echo [OK] Python %PYTHON_VERSION% found.
 
-python -m pip install -r "%SCRIPT_DIR%requirements.txt" --quiet
+REM ---------------------------------------------------------------------------
+REM [3] Install dependencies -- only when requirements.txt changed
+REM     No hard pip gate: install_deps.py tries pip -> pip.exe -> uv -> ensurepip
+REM ---------------------------------------------------------------------------
+if not exist "%SCRIPT_DIR%scripts\fingerprint.py" goto :install_deps_no_check
+
+!PYTHON_CMD! "%SCRIPT_DIR%scripts\fingerprint.py" --check >nul 2>&1
+if errorlevel 1 goto :install_deps_update
+echo [OK] Dependencies up to date.
+goto :check_updates
+
+:install_deps_update
+echo [INFO] Dependencies need updating...
+!PYTHON_CMD! "%SCRIPT_DIR%scripts\install_deps.py"
 if errorlevel 1 (
     echo [ERROR] Failed to install dependencies.
+    echo.
+    echo   Tried pip, pip.exe, uv, and ensurepip. To resolve:
+    echo     - Install uv:  https://docs.astral.sh/uv/
+    echo     - Or reinstall Python from python.org (includes pip)
+    echo     - Or recreate the venv with pip:  python -m venv --clear .venv
     pause
     exit /b 1
 )
-echo [OK] Dependencies are satisfied.
+!PYTHON_CMD! "%SCRIPT_DIR%scripts\fingerprint.py" --write >nul 2>&1
+echo [OK] Dependencies updated.
+goto :check_updates
 
-REM Launch the application
+:install_deps_no_check
+echo [INFO] Installing dependencies (first run)...
+!PYTHON_CMD! "%SCRIPT_DIR%scripts\install_deps.py"
+if errorlevel 1 (
+    echo [ERROR] Failed to install dependencies.
+    echo.
+    echo   Tried pip, pip.exe, uv, and ensurepip. To resolve:
+    echo     - Install uv:  https://docs.astral.sh/uv/
+    echo     - Or reinstall Python from python.org (includes pip)
+    echo     - Or recreate the venv with pip:  python -m venv --clear .venv
+    pause
+    exit /b 1
+)
+if exist "%SCRIPT_DIR%scripts\fingerprint.py" (
+    !PYTHON_CMD! "%SCRIPT_DIR%scripts\fingerprint.py" --write >nul 2>&1
+)
+echo [OK] Dependencies installed.
+
+REM ---------------------------------------------------------------------------
+REM [4] Background update check -- fire and forget
+REM ---------------------------------------------------------------------------
+:check_updates
+if exist "%SCRIPT_DIR%scripts\update_check.py" (
+    start /b !PYTHON_CMD! "%SCRIPT_DIR%scripts\update_check.py" >nul 2>&1
+)
+
+REM ---------------------------------------------------------------------------
+REM [5] Launch
+REM ---------------------------------------------------------------------------
 echo.
 echo ========================================
 echo   Launching CriTTS...
 echo ========================================
 echo.
 
-python "%SCRIPT_DIR%main.py"
-
-REM If the application exits with an error, pause to show the message
+!PYTHON_CMD! "%SCRIPT_DIR%main.py"
 if errorlevel 1 (
     echo.
     echo [ERROR] Application exited with an error.
