@@ -95,16 +95,19 @@ goto :check_updates
 :install_deps_update
 echo [INFO] Dependencies need updating...
 !PYTHON_CMD! "%SCRIPT_DIR%scripts\install_deps.py"
-if errorlevel 1 (
-    echo [ERROR] Failed to install dependencies.
-    echo.
-    echo   Tried pip, pip.exe, uv, and ensurepip. To resolve:
-    echo     - Install uv:  https://docs.astral.sh/uv/
-    echo     - Or reinstall Python from python.org (includes pip)
-    echo     - Or recreate the venv with pip:  python -m venv --clear .venv
-    pause
-    exit /b 1
-)
+set "INSTALL_RC=!ERRORLEVEL!"
+if "!INSTALL_RC!"=="0" goto :deps_updated
+
+echo [ERROR] Failed to install dependencies.
+echo.
+echo   Tried pip, pip.exe, uv, and ensurepip. To resolve:
+echo     - Install uv:  https://docs.astral.sh/uv/
+echo     - Or reinstall Python from python.org (includes pip)
+echo     - Or recreate the venv with pip:  python -m venv --clear .venv
+pause
+exit /b 1
+
+:deps_updated
 !PYTHON_CMD! "%SCRIPT_DIR%scripts\fingerprint.py" --write >nul 2>&1
 echo [OK] Dependencies updated.
 goto :check_updates
@@ -112,16 +115,19 @@ goto :check_updates
 :install_deps_no_check
 echo [INFO] Installing dependencies (first run)...
 !PYTHON_CMD! "%SCRIPT_DIR%scripts\install_deps.py"
-if errorlevel 1 (
-    echo [ERROR] Failed to install dependencies.
-    echo.
-    echo   Tried pip, pip.exe, uv, and ensurepip. To resolve:
-    echo     - Install uv:  https://docs.astral.sh/uv/
-    echo     - Or reinstall Python from python.org (includes pip)
-    echo     - Or recreate the venv with pip:  python -m venv --clear .venv
-    pause
-    exit /b 1
-)
+set "INSTALL_RC=!ERRORLEVEL!"
+if "!INSTALL_RC!"=="0" goto :deps_installed
+
+echo [ERROR] Failed to install dependencies.
+echo.
+echo   Tried pip, pip.exe, uv, and ensurepip. To resolve:
+echo     - Install uv:  https://docs.astral.sh/uv/
+echo     - Or reinstall Python from python.org (includes pip)
+echo     - Or recreate the venv with pip:  python -m venv --clear .venv
+pause
+exit /b 1
+
+:deps_installed
 if exist "%SCRIPT_DIR%scripts\fingerprint.py" (
     !PYTHON_CMD! "%SCRIPT_DIR%scripts\fingerprint.py" --write >nul 2>&1
 )
@@ -145,10 +151,12 @@ echo ========================================
 echo.
 
 !PYTHON_CMD! "%SCRIPT_DIR%main.py"
-if errorlevel 1 (
-    echo.
-    echo [ERROR] Application exited with an error.
-    pause
-)
+set "APP_RC=!ERRORLEVEL!"
+if "!APP_RC!"=="0" goto :launcher_done
 
+echo.
+echo [ERROR] Application exited with an error.
+pause
+
+:launcher_done
 endlocal
