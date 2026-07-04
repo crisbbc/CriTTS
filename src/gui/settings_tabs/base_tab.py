@@ -384,18 +384,32 @@ class BaseTab(ABC):
             pass
 
     # --------------------------------------------------------------------------
-    # Resize coalescing delay
+    # Resize coalescing rule
     # --------------------------------------------------------------------------
-    # The debounce before kicking off an ``apply`` round.  60ms is just
-    # long enough to coalesce a tight burst of ``<Configure>`` events
-    # during the initial 980x720 Settings-window layout pass while staying
-    # well under typical drag-resize frame timings (16ms at 60Hz).  The
-    # actual safety against the CustomTkinter redraw cascade is the
-    # re-entrance guard plus the ``_last_applied_wraplength`` cache, not
-    # this delay; a higher value would visibly lag the resize gesture
-    # without buying any extra protection.
-    _WRAPLENGTH_DEBOUNCE_MS: int = 60
-
+    # When ``<Configure>`` fires on ``self.scroll`` (bound below in
+    # ``setup_layout``), the CustomTkinter redraw path can emit a burst of
+    # nested Configure events during the initial 980x720 Settings-window
+    # layout pass.  Three layers protect against that cascade:
+    #
+    #   _pending_wraplength_job        -- the job ID returned by
+    #                                     ``scroll.after(0, apply)``.  While
+    #                                     a job is queued, a new
+    #                                     ``<Configure>`` event short-circuits
+    #                                     without scheduling another apply,
+    #                                     collapsing a Configure burst into a
+    #                                     single apply.  We use ``after``
+    #                                     deliberately, NOT ``after_idle``,
+    #                                     because Tk's ``after`` returns the
+    #                                     job ID and ``after_idle`` returns
+    #                                     ``None`` -- which would silently
+    #                                     disable this gate.
+    #   _wraplength_apply_in_progress  -- re-entrance guard so Configure
+    #                                     events fired *during* an apply
+    #                                     cannot pile on more scheduling.
+    #   _last_applied_wraplength       -- no-op short-circuit cache so a
+    #                                     resize to the same width we last
+    #                                     applied skips the schedule
+    #                                     entirely.
     def setup_layout(self):
         """Setup the two-pane layout with a sidebar on the left and scrollable content on the right."""
         surface_theme = self.get_active_surface_theme()
@@ -461,15 +475,6 @@ class BaseTab(ABC):
             ``CTkScrollableFrame``'s own internal handler.  Doing so is
             required -- without ``add="+"``, ``yview`` would stay at
             ``(0.0, 1.0)`` because CTk wouldn't update its scrollregion.
-            The trade-off is that every scroll-pane resize fires *both*
-            handlers, which can kick off dozens of `<Configure>` events
-            during the initial layout pass on the 980x720 Settings window.
-            We dampen that here with: (1) a 60ms ``after(...)`` debounce so
-            a tight burst of Configure events collapses into one apply,
-            (2) a re-entrance guard so resize events fired *during* an
-            apply can't pile on more scheduling, and (3) a cached
-            ``_last_applied_wraplength`` so a no-op event (resize to the
-            same width we last applied) short-circuits entirely.
         """
         new_wrap = max(100, event.width - 32)
         self._pending_wraplength = new_wrap
@@ -494,7 +499,7 @@ class BaseTab(ABC):
 
         try:
             self._pending_wraplength_job = scroll_widget.after(
-                self._WRAPLENGTH_DEBOUNCE_MS,
+                0,
                 self._apply_pending_wraplength,
             )
         except Exception:
@@ -537,7 +542,7 @@ class BaseTab(ABC):
             if scroll_widget is not None:
                 try:
                     self._pending_wraplength_job = scroll_widget.after(
-                        self._WRAPLENGTH_DEBOUNCE_MS,
+                        0,
                         self._apply_pending_wraplength,
                     )
                 except Exception:

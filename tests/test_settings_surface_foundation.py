@@ -292,7 +292,7 @@ def test_setup_layout_uses_shared_scrollbar_theme_tokens():
     assert scroll_calls[1].kwargs["scrollbar_button_hover_color"] == surface_theme["scrollbar_button_hover_color"]
 
 
-def test_scroll_resize_defers_wraplength_updates_via_short_after_debounce():
+def test_scroll_resize_defers_wraplength_updates_via_next_idle_after():
     """The first resize event schedules an `after()` apply on the next idle moment, not synchronously.
 
     ``after(0, ...)`` is what we want: a visible wraplength update reaches
@@ -321,7 +321,7 @@ def test_scroll_resize_defers_wraplength_updates_via_short_after_debounce():
     dummy_tab.scroll.after.assert_called_once()
     # Coalescing must be "next idle moment" only — no time-based debounce
     # that would perceptibly lag an interactive drag-resize.
-    assert dummy_tab.scroll.after.call_args.args[0] == BaseTab._WRAPLENGTH_DEBOUNCE_MS
+    assert dummy_tab.scroll.after.call_args.args[0] == 0
     assert len(scheduled_callbacks) == 1
 
     scheduled_callbacks[0]()
@@ -445,7 +445,7 @@ def test_apply_pending_wraplength_rearms_when_configure_captures_newer_pending()
     assert dummy_tab.scroll.after.call_count == 1
     # The re-arm schedule is also `after(0, ...)` -- otherwise the
     # resize-to-resize round-trip would perceptibly lag during drag.
-    assert dummy_tab.scroll.after.call_args.args[0] == BaseTab._WRAPLENGTH_DEBOUNCE_MS
+    assert dummy_tab.scroll.after.call_args.args[0] == 0
     assert dummy_tab._wraplength_apply_in_progress is False
 
     # Bound-method identity (`is`) is not stable across Python accesses to
