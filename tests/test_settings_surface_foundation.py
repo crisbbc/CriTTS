@@ -292,21 +292,36 @@ def test_setup_layout_uses_shared_scrollbar_theme_tokens():
     assert scroll_calls[1].kwargs["scrollbar_button_hover_color"] == surface_theme["scrollbar_button_hover_color"]
 
 
-def test_scroll_resize_defers_wraplength_updates_until_idle():
-    """Resize handling should schedule wrap updates after the current configure cycle settles."""
+def test_scroll_resize_defers_wraplength_updates_via_short_after_debounce():
+    """The first resize event schedules an `after()` apply on the next idle moment, not synchronously.
+
+    ``after(0, ...)`` is what we want: a visible wraplength update reaches
+    the labels as soon as the Tk event loop is idle, with no perceptible
+    delay during interactive window drag.  Anything longer would visibly
+    lag the resize gesture without buying extra protection; coalescing
+    beyond that is the responsibility of `_pending_wraplength_job` (already
+    scheduled), `_wraplength_apply_in_progress` (re-entrance guard), and
+    the `_last_applied_wraplength` cache (no-op short-circuit).
+    """
     scheduled_callbacks = []
     dummy_tab = object.__new__(_ConcreteBaseTab)
     dummy_tab.scroll = MagicMock()
-    dummy_tab.scroll.after_idle.side_effect = lambda callback: scheduled_callbacks.append(callback) or "after#1"
+    dummy_tab.scroll.after.side_effect = (
+        lambda delay_ms, callback: scheduled_callbacks.append(callback) or "after#1"
+    )
     dummy_tab.update_wraplength = MagicMock()
     dummy_tab._pending_wraplength = None
     dummy_tab._pending_wraplength_job = None
+    dummy_tab._wraplength_apply_in_progress = False
     dummy_tab._last_applied_wraplength = None
 
     BaseTab._on_scroll_resize(dummy_tab, SimpleNamespace(width=260))
 
     dummy_tab.update_wraplength.assert_not_called()
-    dummy_tab.scroll.after_idle.assert_called_once()
+    dummy_tab.scroll.after.assert_called_once()
+    # Coalescing must be "next idle moment" only — no time-based debounce
+    # that would perceptibly lag an interactive drag-resize.
+    assert dummy_tab.scroll.after.call_args.args[0] == BaseTab._WRAPLENGTH_DEBOUNCE_MS
     assert len(scheduled_callbacks) == 1
 
     scheduled_callbacks[0]()
@@ -315,6 +330,7 @@ def test_scroll_resize_defers_wraplength_updates_until_idle():
     assert dummy_tab._last_applied_wraplength == 228
     assert dummy_tab._pending_wraplength is None
     assert dummy_tab._pending_wraplength_job is None
+    assert dummy_tab._wraplength_apply_in_progress is False
 
 
 def test_scroll_resize_coalesces_pending_work_and_skips_redundant_wraplength():
@@ -322,25 +338,153 @@ def test_scroll_resize_coalesces_pending_work_and_skips_redundant_wraplength():
     scheduled_callbacks = []
     dummy_tab = object.__new__(_ConcreteBaseTab)
     dummy_tab.scroll = MagicMock()
-    dummy_tab.scroll.after_idle.side_effect = lambda callback: scheduled_callbacks.append(callback) or "after#1"
+    dummy_tab.scroll.after.side_effect = (
+        lambda delay_ms, callback: scheduled_callbacks.append(callback) or "after#1"
+    )
     dummy_tab.update_wraplength = MagicMock()
     dummy_tab._pending_wraplength = None
     dummy_tab._pending_wraplength_job = None
+    dummy_tab._wraplength_apply_in_progress = False
     dummy_tab._last_applied_wraplength = None
 
     BaseTab._on_scroll_resize(dummy_tab, SimpleNamespace(width=240))
     BaseTab._on_scroll_resize(dummy_tab, SimpleNamespace(width=320))
 
-    dummy_tab.scroll.after_idle.assert_called_once()
+    dummy_tab.scroll.after.assert_called_once()
     scheduled_callbacks[0]()
 
     dummy_tab.update_wraplength.assert_called_once_with(288)
 
-    dummy_tab.scroll.after_idle.reset_mock()
+    dummy_tab.scroll.after.reset_mock()
     BaseTab._on_scroll_resize(dummy_tab, SimpleNamespace(width=320))
 
-    dummy_tab.scroll.after_idle.assert_not_called()
+    dummy_tab.scroll.after.assert_not_called()
     dummy_tab.update_wraplength.assert_called_once_with(288)
+
+
+def test_scroll_resize_ignores_resize_events_while_apply_is_in_flight():
+    """Re-entrant resize events during `_apply_pending_wraplength` must NOT schedule additional work.
+
+    Without this guard, the cascade of `<Configure>` events fired by each
+    ``label.configure(wraplength=...)`` call would re-enter ``_on_scroll_resize``
+    while we're still iterating labels, which (with the old per-call
+    ``after_idle`` scheduling) would either pile up idle callbacks or, with
+    the pending-job check, leave the *latest* captured width stranded in
+    ``_pending_wraplength``.  The new behaviour: skip the schedule entirely
+    while the apply is running and rely on the re-arm hook at the end of the
+    apply.
+    """
+    scheduled_callbacks = []
+    dummy_tab = object.__new__(_ConcreteBaseTab)
+    dummy_tab.scroll = MagicMock()
+    dummy_tab.scroll.after.side_effect = (
+        lambda delay_ms, callback: scheduled_callbacks.append(callback) or f"after#{len(scheduled_callbacks)+1}"
+    )
+    dummy_tab.update_wraplength = MagicMock()
+    dummy_tab._pending_wraplength = 228
+    dummy_tab._pending_wraplength_job = "after#already-scheduled"
+    dummy_tab._wraplength_apply_in_progress = True  # simulate in-flight apply
+    dummy_tab._last_applied_wraplength = None
+
+    # Simulate two resize events arriving *during* a running apply.  Both
+    # must be ignored by the scheduling logic -- the in-flight apply already
+    # has the latest captured value.
+    BaseTab._on_scroll_resize(dummy_tab, SimpleNamespace(width=300))
+    BaseTab._on_scroll_resize(dummy_tab, SimpleNamespace(width=320))
+
+    dummy_tab.scroll.after.assert_not_called()
+    # The pending value picks up the latest resize event for the re-arm hook.
+    assert dummy_tab._pending_wraplength == 320 - 32
+
+
+def test_apply_pending_wraplength_rearms_when_configure_captures_newer_pending():
+    """If the configure()-pass itself causes `_pending_wraplength` to be
+    updated to a new widget width, we must schedule an additional apply so
+    we converge without waiting on another resize event.
+    """
+    scheduled_callbacks = []
+    dummy_tab = object.__new__(_ConcreteBaseTab)
+    dummy_tab.scroll = MagicMock()
+    dummy_tab.scroll.after.side_effect = (
+        lambda delay_ms, callback: scheduled_callbacks.append(callback) or "after#rearm"
+    )
+
+    # Mock update_wraplength so it can simulate the cascade: bumping the
+    # pending width *during* its run (e.g., label re-flow propagating up to
+    # a parent that fires another `<Configure>`).  Note: this fires the
+    # cascade only on the *first* update_wraplength call so the second
+    # apply converges cleanly (otherwise the side-effect would keep
+    # re-priming `_pending_wraplength` and mask whether re-arm actually
+    # converges the queue).
+    initial_pending_width = 240 - 32  # 208
+
+    update_calls = [0]
+
+    def _fake_update_wraplength(width: int) -> None:
+        update_calls[0] += 1
+        if update_calls[0] == 1:
+            # Capture the cascade on the first invoke only: pretend a parent
+            # `<Configure>` fired during the apply, capturing a yet-newer
+            # pending width so the re-arm hook kicks in.
+            dummy_tab._pending_wraplength = 320 - 32  # 288
+
+    dummy_tab.update_wraplength = MagicMock(side_effect=_fake_update_wraplength)
+    dummy_tab._pending_wraplength = initial_pending_width
+    dummy_tab._pending_wraplength_job = "after#original"
+    dummy_tab._wraplength_apply_in_progress = False
+    dummy_tab._last_applied_wraplength = None
+
+    BaseTab._apply_pending_wraplength(dummy_tab)
+
+    # The apply consumed the initial pending value and updated labels.
+    dummy_tab.update_wraplength.assert_called_once_with(initial_pending_width)
+    assert dummy_tab._last_applied_wraplength == initial_pending_width
+    # The configure-pass captured a newer pending value, so the apply must
+    # have re-armed itself exactly once.
+    assert dummy_tab._pending_wraplength == 288
+    assert dummy_tab.scroll.after.call_count == 1
+    # The re-arm schedule is also `after(0, ...)` -- otherwise the
+    # resize-to-resize round-trip would perceptibly lag during drag.
+    assert dummy_tab.scroll.after.call_args.args[0] == BaseTab._WRAPLENGTH_DEBOUNCE_MS
+    assert dummy_tab._wraplength_apply_in_progress is False
+
+    # Bound-method identity (`is`) is not stable across Python accesses to
+    # `self.method`, so invoke the rescheduled callback and verify it
+    # converges on the newer captured value -- this is the actual
+    # behavioural guarantee the production code provides.
+    dummy_tab.update_wraplength.reset_mock()
+    scheduled_callbacks[0]()
+    dummy_tab.update_wraplength.assert_called_once_with(288)
+    assert dummy_tab._last_applied_wraplength == 288
+    # The rescheduled apply consumed the captured value; nothing new was
+    # captured, so `_pending_wraplength` is back to None and no further
+    # re-arm is scheduled.
+    assert dummy_tab._pending_wraplength is None
+    assert dummy_tab.scroll.after.call_count == 1  # still the original re-arm
+
+
+def test_apply_pending_wraplength_clears_in_progress_flag_on_early_exits():
+    """The re-entrance guard must be cleared even when the apply short-circuits."""
+    dummy_tab = object.__new__(_ConcreteBaseTab)
+    dummy_tab.scroll = MagicMock()
+    dummy_tab.update_wraplength = MagicMock()
+    # Case 1: pending_wraplength is None.
+    dummy_tab._pending_wraplength = None
+    dummy_tab._pending_wraplength_job = "after#original"
+    dummy_tab._wraplength_apply_in_progress = False
+    dummy_tab._last_applied_wraplength = None
+    BaseTab._apply_pending_wraplength(dummy_tab)
+    assert dummy_tab._wraplength_apply_in_progress is False
+    assert dummy_tab.update_wraplength.call_count == 0
+
+    # Case 2: pending value matches last applied -- no work needed.
+    dummy_tab._pending_wraplength = 100
+    dummy_tab._last_applied_wraplength = 100
+    dummy_tab._pending_wraplength_job = "after#original"
+    dummy_tab._wraplength_apply_in_progress = False
+    BaseTab._apply_pending_wraplength(dummy_tab)
+    assert dummy_tab._wraplength_apply_in_progress is False
+    assert dummy_tab.update_wraplength.call_count == 0
 
 
 def test_wave2_tabs_use_section_surfaces_in_existing_order(monkeypatch):

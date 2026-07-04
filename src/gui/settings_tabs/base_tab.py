@@ -140,13 +140,30 @@ class BaseTab(ABC):
         self.audio_router = audio_router
         self.on_change = on_change
         
-        # Track labels that need dynamic wraplength
+        # Track labels that need dynamic wraplength.
+        #
+        # The three coalescing-related states cooperate to damp the
+        # CustomTkinter redraw cascade that would otherwise fire when the
+        # Settings window pops up at the new 980x720 dimensions:
+        #
+        #   *_pending_wraplength*    -- latest width captured from `_on_scroll_resize`;
+        #                               consumed by the debounced apply.
+        #   *_pending_wraplength_job* -- Tk `after()` job ID for the queued apply
+        #                               (None when nothing is scheduled).
+        #   *_wraplength_apply_in_progress*  -- True while a callback is actively
+        #                               running `update_wraplength`, gates
+        #                               `_on_scroll_resize` so a label.configure()
+        #                               cascade can't pile on more scheduling.
+        #   *_last_applied_wraplength*  -- last wraplength we actually pushed to
+        #                               the labels; lets us short-circuit no-op
+        #                               events and freshly-scheduled callbacks.
         self._wraplength_labels: List[ctk.CTkLabel] = []
         self._sections: List[Dict] = []
         self._pending_wraplength: Optional[int] = None
         self._pending_wraplength_job: Optional[str] = None
+        self._wraplength_apply_in_progress: bool = False
         self._last_applied_wraplength: Optional[int] = None
-        
+
         # Create the tab content
         self._create_content()
 
@@ -366,6 +383,19 @@ class BaseTab(ABC):
             print(f"Error scrolling: {e}")
             pass
 
+    # --------------------------------------------------------------------------
+    # Resize coalescing delay
+    # --------------------------------------------------------------------------
+    # The debounce before kicking off an ``apply`` round.  60ms is just
+    # long enough to coalesce a tight burst of ``<Configure>`` events
+    # during the initial 980x720 Settings-window layout pass while staying
+    # well under typical drag-resize frame timings (16ms at 60Hz).  The
+    # actual safety against the CustomTkinter redraw cascade is the
+    # re-entrance guard plus the ``_last_applied_wraplength`` cache, not
+    # this delay; a higher value would visibly lag the resize gesture
+    # without buying any extra protection.
+    _WRAPLENGTH_DEBOUNCE_MS: int = 60
+
     def setup_layout(self):
         """Setup the two-pane layout with a sidebar on the left and scrollable content on the right."""
         surface_theme = self.get_active_surface_theme()
@@ -422,16 +452,40 @@ class BaseTab(ABC):
         # that updates the scrollregion (without it, yview() stays (0.0,1.0)
         # and the mouse-wheel handler refuses to scroll).
         self.scroll.bind("<Configure>", self._on_scroll_resize, add="+")
-    
+
     def _on_scroll_resize(self, event):
-        """Update wraplength on all tracked labels when the scroll pane resizes."""
+        """Update wraplength on all tracked labels when the scroll pane resizes.
+
+        .. note::
+            This handler is bound on the same `<Configure>` event as
+            ``CTkScrollableFrame``'s own internal handler.  Doing so is
+            required -- without ``add="+"``, ``yview`` would stay at
+            ``(0.0, 1.0)`` because CTk wouldn't update its scrollregion.
+            The trade-off is that every scroll-pane resize fires *both*
+            handlers, which can kick off dozens of `<Configure>` events
+            during the initial layout pass on the 980x720 Settings window.
+            We dampen that here with: (1) a 60ms ``after(...)`` debounce so
+            a tight burst of Configure events collapses into one apply,
+            (2) a re-entrance guard so resize events fired *during* an
+            apply can't pile on more scheduling, and (3) a cached
+            ``_last_applied_wraplength`` so a no-op event (resize to the
+            same width we last applied) short-circuits entirely.
+        """
         new_wrap = max(100, event.width - 32)
         self._pending_wraplength = new_wrap
 
+        # No-op: same width we already applied.
         if new_wrap == getattr(self, "_last_applied_wraplength", None):
             return
 
+        # Re-entrance guard: a job is queued or an apply is running.  The
+        # latest captured pending value will be picked up by that job.  We
+        # don't want to schedule another -- that would only retrigger the
+        # CustomTkinter redraw cascade that this whole handler exists to
+        # avoid.
         if getattr(self, "_pending_wraplength_job", None) is not None:
+            return
+        if getattr(self, "_wraplength_apply_in_progress", False):
             return
 
         scroll_widget = getattr(self, "scroll", None)
@@ -439,12 +493,23 @@ class BaseTab(ABC):
             return
 
         try:
-            self._pending_wraplength_job = scroll_widget.after_idle(self._apply_pending_wraplength)
+            self._pending_wraplength_job = scroll_widget.after(
+                self._WRAPLENGTH_DEBOUNCE_MS,
+                self._apply_pending_wraplength,
+            )
         except Exception:
             self._pending_wraplength_job = None
 
     def _apply_pending_wraplength(self):
-        """Apply the latest pending wraplength update after the current resize churn settles."""
+        """Apply the latest pending wraplength update with coarser coalescing.
+
+        Sets ``_wraplength_apply_in_progress`` for the duration of the
+        ``update_wraplength`` call so that ``<Configure>`` events the labels
+        emit cannot destabilise the queue.  After the run, if a *newer*
+        value was captured while we were configuring labels, schedule one
+        more apply round so we converge to the latest pending width without
+        waiting for another resize event.
+        """
         pending_wrap = getattr(self, "_pending_wraplength", None)
         self._pending_wraplength = None
         self._pending_wraplength_job = None
@@ -452,8 +517,31 @@ class BaseTab(ABC):
         if pending_wrap is None or pending_wrap == getattr(self, "_last_applied_wraplength", None):
             return
 
-        self.update_wraplength(pending_wrap)
-        self._last_applied_wraplength = pending_wrap
+        self._wraplength_apply_in_progress = True
+        try:
+            # Snapshot the label list: a configure() cascade can re-enter
+            # the Tk event loop via `<Configure>` propagation, and a tab
+            # hydration hook could mutate `_wraplength_labels` concurrently.
+            self.update_wraplength(pending_wrap)
+            self._last_applied_wraplength = pending_wrap
+        finally:
+            self._wraplength_apply_in_progress = False
+
+        # If the apply's own configure() cascade captured a yet-newer pending
+        # width, schedule one more apply to converge -- otherwise that
+        # captured value would sit in `_pending_wraplength` until the next
+        # resize event, which on a settled layout may not come for a while.
+        newer_pending = getattr(self, "_pending_wraplength", None)
+        if newer_pending is not None and newer_pending != self._last_applied_wraplength:
+            scroll_widget = getattr(self, "scroll", None)
+            if scroll_widget is not None:
+                try:
+                    self._pending_wraplength_job = scroll_widget.after(
+                        self._WRAPLENGTH_DEBOUNCE_MS,
+                        self._apply_pending_wraplength,
+                    )
+                except Exception:
+                    self._pending_wraplength_job = None
 
     def create_description(self, text: str, parent: ctk.CTkFrame = None) -> ctk.CTkLabel:
         """Create a top-level section description label using shared text tokens."""
@@ -463,7 +551,7 @@ class BaseTab(ABC):
             text=text,
             font=ctk.CTkFont(size=FONT_SM),
             text_color=surface_theme["text_primary"],
-            wraplength=100
+            wraplength=540
         )
         self._wraplength_labels.append(label)
         return label
@@ -536,7 +624,7 @@ class BaseTab(ABC):
             text=text,
             font=ctk.CTkFont(size=font_size),
             text_color=text_color or surface_theme["text_supporting"],
-            wraplength=100,
+            wraplength=540,
             justify=justify,
         )
         self._wraplength_labels.append(label)
