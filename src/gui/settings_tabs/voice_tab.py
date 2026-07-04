@@ -871,12 +871,20 @@ class VoiceTab(BaseTab):
                         audio_data, 48000, None, enable_norm, norm_type
                     )
                 )
-                
-                if not self._preview_stop_event.is_set():
-                    if success:
-                        self._schedule_on_ui_thread(lambda: self._preview_done(None))
-                    else:
-                        self._schedule_on_ui_thread(lambda: self._preview_done("Playback failed."))
+
+                # IMPORTANT: a user-initiated Stop will have set
+                # self._preview_stop_event by the time play_audio_to_device
+                # returns. The previous "if not stop_event" guard short-circuited
+                # both the success and "Playback failed." branches, so
+                # _preview_done was never scheduled -- leaving _preview_playing
+                # stuck True and the Stop button visible. Treat intentional
+                # stops the same as a successful (no-error) completion so the UI
+                # state machine always reaches its terminal state.
+                stopped = self._preview_stop_event.is_set()
+                if stopped or success:
+                    self._schedule_on_ui_thread(lambda: self._preview_done(None))
+                else:
+                    self._schedule_on_ui_thread(lambda: self._preview_done("Playback failed."))
             
             except Exception as e:
                 logger.error("Preview exception: %s", e)

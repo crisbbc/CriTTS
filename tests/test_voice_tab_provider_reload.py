@@ -785,6 +785,186 @@ def test_voice_preview_uses_unsaved_provider_override(monkeypatch):
     )
 
 
+def test_voice_preview_resets_playing_flag_when_stop_pressed_during_playback(monkeypatch):
+    """Stop clicked during playback must reset _preview_playing (no UI lock-up)."""
+
+    class _ImmediateThread:
+        def __init__(self, target, daemon):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr("src.gui.settings_tabs.voice_tab.threading.Thread", _ImmediateThread)
+
+    tab = object.__new__(VoiceTab)
+    tab.settings = MagicMock()
+    tab.settings.get.side_effect = lambda key, default=None: (
+        "edge" if key == "tts_provider" else default
+    )
+    tab.tts_engine = MagicMock()
+    tab.tts_engine.generate_speech = AsyncMock(return_value=(b"audio-bytes", None))
+    tab.audio_router = MagicMock()
+
+    async def stop_then_fail(*args, **kwargs):
+        # Simulate the user clicking Stop while audio_router is mid-playback:
+        # this is the moment audio_router.stop_playback() would have set its own
+        # _stop_requested flag, so play_audio_to_device returns having already
+        # been interrupted.
+        tab._stop_voice_preview()
+        return False
+
+    tab.audio_router.play_audio_to_device = AsyncMock(side_effect=stop_then_fail)
+    tab._voice_name_to_short_name = {"Aria": "en-US-AriaNeural"}
+    tab.voice_var = MagicMock()
+    tab.voice_var.get.return_value = "Aria"
+    tab.preview_text_var = MagicMock()
+    tab.preview_text_var.get.return_value = "Preview me"
+    tab.rate_var = MagicMock()
+    tab.rate_var.get.return_value = 0
+    tab.volume_var = MagicMock()
+    tab.volume_var.get.return_value = 100
+    tab.pitch_var = MagicMock()
+    tab.pitch_var.get.return_value = 0
+    tab.preview_loading_label = MagicMock()
+    tab.preview_button = MagicMock()
+    tab.stop_preview_button = MagicMock()
+    tab.preview_text_entry = MagicMock()
+    tab._preview_playing = False
+    tab._preview_stop_event = threading.Event()
+    tab._active_provider_key = "edge"
+    tab._validate_preview_text = MagicMock(return_value=True)
+    # _preview_done's body touches these widget-helpers, so stub them out.
+    tab._set_preview_ui_loading = MagicMock()
+    tab._preview_loading_playing = MagicMock()
+    tab.configure_surface_status_label = MagicMock()
+    tab._schedule_on_ui_thread = lambda callback, delay_ms=0: callback()
+
+    VoiceTab._on_voice_preview(tab)
+
+    # Bug fix regression: previously the post-playback block's
+    # `if not self._preview_stop_event.is_set():` guard short-circuited both
+    # branches, so _preview_done was never scheduled, leaving the Stop button
+    # stuck visible and blocking the next Preview click.
+    assert tab._preview_playing is False
+    assert tab._preview_stop_event.is_set()
+    tab._set_preview_ui_loading.assert_any_call(False)
+    # Don't surface a spurious "Playback failed." message when the user
+    # pressed Stop on purpose.
+    error_calls = [
+        call_args
+        for call_args in tab.configure_surface_status_label.call_args_list
+        if call_args.args[:2] == (tab.preview_loading_label, "Playback failed.")
+    ]
+    assert error_calls == []
+
+
+def test_voice_preview_resets_playing_flag_when_playback_completes_normally(monkeypatch):
+    """Sanity check: success-without-stop still resets _preview_playing and surfaces no error."""
+
+    class _ImmediateThread:
+        def __init__(self, target, daemon):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr("src.gui.settings_tabs.voice_tab.threading.Thread", _ImmediateThread)
+
+    tab = object.__new__(VoiceTab)
+    tab.settings = MagicMock()
+    tab.settings.get.side_effect = lambda key, default=None: (
+        "edge" if key == "tts_provider" else default
+    )
+    tab.tts_engine = MagicMock()
+    tab.tts_engine.generate_speech = AsyncMock(return_value=(b"audio-bytes", None))
+    tab.audio_router = MagicMock()
+    tab.audio_router.play_audio_to_device = AsyncMock(return_value=True)
+    tab._voice_name_to_short_name = {"Aria": "en-US-AriaNeural"}
+    tab.voice_var = MagicMock()
+    tab.voice_var.get.return_value = "Aria"
+    tab.preview_text_var = MagicMock()
+    tab.preview_text_var.get.return_value = "Preview me"
+    tab.rate_var = MagicMock()
+    tab.rate_var.get.return_value = 0
+    tab.volume_var = MagicMock()
+    tab.volume_var.get.return_value = 100
+    tab.pitch_var = MagicMock()
+    tab.pitch_var.get.return_value = 0
+    tab.preview_loading_label = MagicMock()
+    tab.preview_button = MagicMock()
+    tab.stop_preview_button = MagicMock()
+    tab.preview_text_entry = MagicMock()
+    tab._preview_playing = False
+    tab._preview_stop_event = threading.Event()
+    tab._active_provider_key = "edge"
+    tab._validate_preview_text = MagicMock(return_value=True)
+    tab._set_preview_ui_loading = MagicMock()
+    tab._preview_loading_playing = MagicMock()
+    tab.configure_surface_status_label = MagicMock()
+    tab._schedule_on_ui_thread = lambda callback, delay_ms=0: callback()
+
+    VoiceTab._on_voice_preview(tab)
+
+    assert tab._preview_playing is False
+    assert not tab._preview_stop_event.is_set()
+    tab._set_preview_ui_loading.assert_any_call(False)
+
+
+def test_voice_preview_resets_playing_flag_when_playback_fails_without_stop(monkeypatch):
+    """Non-stop playback failure still surfaces "Playback failed." but also resets the flag."""
+
+    class _ImmediateThread:
+        def __init__(self, target, daemon):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr("src.gui.settings_tabs.voice_tab.threading.Thread", _ImmediateThread)
+
+    tab = object.__new__(VoiceTab)
+    tab.settings = MagicMock()
+    tab.settings.get.side_effect = lambda key, default=None: (
+        "edge" if key == "tts_provider" else default
+    )
+    tab.tts_engine = MagicMock()
+    tab.tts_engine.generate_speech = AsyncMock(return_value=(b"audio-bytes", None))
+    tab.audio_router = MagicMock()
+    tab.audio_router.play_audio_to_device = AsyncMock(return_value=False)
+    tab._voice_name_to_short_name = {"Aria": "en-US-AriaNeural"}
+    tab.voice_var = MagicMock()
+    tab.voice_var.get.return_value = "Aria"
+    tab.preview_text_var = MagicMock()
+    tab.preview_text_var.get.return_value = "Preview me"
+    tab.rate_var = MagicMock()
+    tab.rate_var.get.return_value = 0
+    tab.volume_var = MagicMock()
+    tab.volume_var.get.return_value = 100
+    tab.pitch_var = MagicMock()
+    tab.pitch_var.get.return_value = 0
+    tab.preview_loading_label = MagicMock()
+    tab.preview_button = MagicMock()
+    tab.stop_preview_button = MagicMock()
+    tab.preview_text_entry = MagicMock()
+    tab._preview_playing = False
+    tab._preview_stop_event = threading.Event()
+    tab._active_provider_key = "edge"
+    tab._validate_preview_text = MagicMock(return_value=True)
+    tab._set_preview_ui_loading = MagicMock()
+    tab._preview_loading_playing = MagicMock()
+    tab.configure_surface_status_label = MagicMock()
+    tab._schedule_on_ui_thread = lambda callback, delay_ms=0: callback()
+
+    VoiceTab._on_voice_preview(tab)
+
+    assert tab._preview_playing is False
+    tab._set_preview_ui_loading.assert_any_call(False)
+    tab.configure_surface_status_label.assert_any_call(
+        tab.preview_loading_label, "Playback failed.", "error"
+    )
+
+
 def test_reset_to_defaults_aborts_success_flow_when_persistence_fails():
     """Reset should surface persistence failures without notifying or closing the window."""
     settings_window_module.ctk.CTkButton.reset_mock()
