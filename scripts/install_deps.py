@@ -49,23 +49,36 @@ def has_uv() -> bool:
 
 
 def install_with_pip(python_exe: str, req_path: Path) -> int:
-    """``python -m pip install -r <req>``. Returns exit code."""
+    """``python -m pip install -r <req>``. Returns exit code.
+
+    Note: ``--quiet`` is intentionally NOT used.  The first time a user installs
+    this stack, ``coqui-tts`` alone is ~1.5GB and ``scipy`` / ``numpy`` add more;
+    seeing pip/uv's progress bars is the difference between an install that
+    appears hung and one that the user can monitor.  stderr is still merged into
+    stdout so any error message surfaces to the launcher immediately.
+    """
     return subprocess.call(
-        [python_exe, "-m", "pip", "install", "-r", str(req_path), "--quiet"]
+        [python_exe, "-m", "pip", "install", "-r", str(req_path)],
+        stdout=None,
+        stderr=subprocess.STDOUT,
     )
 
 
 def install_with_pip_exe(req_path: Path) -> int:
     """``pip install -r <req>`` via standalone pip.exe (MS Store). Returns exit code."""
     return subprocess.call(
-        ["pip", "install", "-r", str(req_path), "--quiet"]
+        ["pip", "install", "-r", str(req_path)],
+        stdout=None,
+        stderr=subprocess.STDOUT,
     )
 
 
 def install_with_uv(python_exe: str, req_path: Path) -> int:
     """``uv pip install --python <exe> -r <req>``. Returns exit code."""
     return subprocess.call(
-        ["uv", "pip", "install", "--python", python_exe, "-r", str(req_path), "--quiet"]
+        ["uv", "pip", "install", "--python", python_exe, "-r", str(req_path)],
+        stdout=None,
+        stderr=subprocess.STDOUT,
     )
 
 
@@ -89,6 +102,13 @@ def install_requirements(python_exe: str, req_path: Path) -> int:
 
     Returns 0 on success, non-zero if every strategy fails.
     """
+    print(
+        f"Installing Python dependencies from {req_path.name} "
+        "-- this can take several minutes on a fresh install "
+        "(coqui-tts alone is ~1.5GB, plus numpy/scipy wheels).",
+        flush=True,
+    )
+
     # 1) python -m pip -- standard venvs ship with it.
     if has_pip(python_exe):
         if install_with_pip(python_exe, req_path) == 0:

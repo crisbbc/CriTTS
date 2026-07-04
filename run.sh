@@ -14,6 +14,77 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# -----------------------------------------------------------------------------
+# Helpers: install Python on systems where it isn't already on PATH.
+# -----------------------------------------------------------------------------
+install_python_system() {
+    INSTALL_ATTEMPTS=$((${INSTALL_ATTEMPTS:-0} + 1))
+    local SUDO=""
+    if [ "$(id -u)" -ne 0 ]; then
+        SUDO="sudo"
+    fi
+    if command -v apt-get >/dev/null 2>&1; then
+        echo "[INFO] Detected apt-get (Debian/Ubuntu). Installing python3, python3-pip, python3-venv..."
+        # shellcheck disable=SC2086
+        $SUDO apt-get update -qq 2>&1 | tail -n 5 || true
+        # shellcheck disable=SC2086
+        $SUDO apt-get install -y python3 python3-pip python3-venv
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "[INFO] Detected dnf (Fedora/RHEL). Installing python3, python3-pip, python3-devel..."
+        # shellcheck disable=SC2086
+        $SUDO dnf install -y python3 python3-pip python3-devel
+    elif command -v pacman >/dev/null 2>&1; then
+        echo "[INFO] Detected pacman (Arch). Installing python, python-pip..."
+        # shellcheck disable=SC2086
+        $SUDO pacman -S --noconfirm python python-pip
+    elif command -v brew >/dev/null 2>&1; then
+        echo "[INFO] Detected Homebrew (macOS). Installing python@3.12..."
+        brew install python@3.12
+    else
+        echo "[ERROR] No supported package manager found (apt-get, dnf, pacman, brew)." >&2
+        return 1
+    fi
+}
+
+install_python_uv() {
+    INSTALL_ATTEMPTS=$((${INSTALL_ATTEMPTS:-0} + 1))
+    local UV_BIN_DIR="$HOME/.local/bin"
+    local UV=""
+    if command -v uv >/dev/null 2>&1; then
+        UV="$(command -v uv)"
+    elif [ -x "$UV_BIN_DIR/uv" ]; then
+        UV="$UV_BIN_DIR/uv"
+    else
+        echo "[INFO] Installing uv..."
+        if ! command -v curl >/dev/null 2>&1; then
+            echo "[ERROR] curl is required to bootstrap uv." >&2
+            return 1
+        fi
+        if ! curl -LsSf https://astral.sh/uv/install.sh | sh; then
+            echo "[ERROR] uv install failed." >&2
+            return 1
+        fi
+        UV="$UV_BIN_DIR/uv"
+    fi
+
+    echo "[INFO] Asking uv to install Python 3.12..."
+    if ! "$UV" python install 3.12; then
+        echo "[ERROR] uv python install failed." >&2
+        return 1
+    fi
+
+    # uv does NOT drop a python shim on PATH by default -- get the absolute path.
+    local PY_PATH
+    PY_PATH="$("$UV" python find 3.12 2>/dev/null || true)"
+    if [ -z "$PY_PATH" ] || [ ! -x "$PY_PATH" ]; then
+        echo "[ERROR] uv python find returned no usable interpreter path." >&2
+        return 1
+    fi
+    export CRITTS_PYTHON="$PY_PATH"
+    export PATH="$UV_BIN_DIR:$HOME/.cargo/bin:$PATH"
+    echo "[OK] Python installed via uv at: $PY_PATH"
+}
+
 echo ""
 echo "========================================"
 echo "  CriTTS Launcher"
@@ -34,20 +105,70 @@ elif [ -f "$SCRIPT_DIR/.venv/bin/activate" ]; then
     PYTHON="python"
     echo "[OK] Virtual environment ready."
 else
-    # Resolve Python -- try python3 first (Linux convention), then python
-    if command -v python3 &>/dev/null; then
-        PYTHON="python3"
-    elif command -v python &>/dev/null; then
-        PYTHON="python"
-    else
-        echo "[ERROR] Python 3 is not installed."
+    # Detect Python on PATH; if missing, prompt to install and retry once. After
+    # one install attempt where Python is STILL not on PATH, abort with a manual
+    # recovery message instead of re-prompting in a loop. INSTALL_ATTEMPTS is
+    # incremented at the top of each install_* helper so the counter reflects
+    # how many times we've asked install to do something.
+    INSTALL_ATTEMPTS=0
+    while true; do
+        if [ -n "${CRITTS_PYTHON:-}" ] && [ -x "$CRITTS_PYTHON" ]; then
+            PYTHON="$CRITTS_PYTHON"
+            break
+        fi
+        if command -v python3 &>/dev/null; then
+            PYTHON="python3"
+            break
+        fi
+        if command -v python &>/dev/null; then
+            PYTHON="python"
+            break
+        fi
+
+        # No Python on PATH. If install was already attempted once and we're back
+        # here, the install succeeded but Python still isn't exposed -- abort
+        # cleanly with a recovery message rather than re-prompting.
+        if [ "${INSTALL_ATTEMPTS:-0}" -ge 1 ]; then
+            echo "" >&2
+            echo "[ERROR] Python is still not on PATH after ${INSTALL_ATTEMPTS:-1} install attempt(s)." >&2
+            echo "" >&2
+            echo "To recover, install Python manually:" >&2
+            echo "  Debian/Ubuntu: sudo apt install python3 python3-pip python3-venv" >&2
+            echo "  Fedora:        sudo dnf install python3 python3-pip python3-devel" >&2
+            echo "  Arch:          sudo pacman -S python python-pip" >&2
+            echo "  macOS:         brew install python@3.12" >&2
+            echo "  Or use uv:     https://docs.astral.sh/uv/" >&2
+            echo "  Or the official installer: https://www.python.org/downloads/" >&2
+            exit 1
+        fi
+
         echo ""
-        echo "Install it with your package manager:"
-        echo "  Debian/Ubuntu: sudo apt install python3 python3-pip"
-        echo "  Fedora:        sudo dnf install python3 python3-pip"
-        echo "  Arch:          sudo pacman -S python python-pip"
-        exit 1
-    fi
+        echo "[WARN] Python 3 was not detected on PATH."
+        echo ""
+        echo "How would you like to install Python?"
+        echo "  [1] Install via system package manager (recommended; may need sudo)"
+        echo "      (supports apt, dnf, pacman, and Homebrew)"
+        echo "  [2] Install uv first, then uv installs Python (no sudo, lightweight)"
+        echo "  [3] Cancel -- I'll install Python myself"
+        echo ""
+        PY_INSTALL_CHOICE=""
+        read -r -p "Enter 1, 2, or 3 (default 3): " PY_INSTALL_CHOICE
+        PY_INSTALL_CHOICE="${PY_INSTALL_CHOICE:-3}"
+
+        case "$PY_INSTALL_CHOICE" in
+            1) install_python_system || { echo "[ERROR] install_python_system failed; see messages above." >&2; exit 1; } ;;
+            2) install_python_uv || { echo "[ERROR] install_python_uv failed; see messages above." >&2; exit 1; } ;;
+            *) echo ""
+               echo "Please install Python 3.8+ manually:"
+               echo "  Debian/Ubuntu: sudo apt install python3 python3-pip python3-venv"
+               echo "  Fedora:        sudo dnf install python3 python3-pip python3-devel"
+               echo "  Arch:          sudo pacman -S python python-pip"
+               echo "  macOS:         brew install python@3.12"
+               exit 1 ;;
+        esac
+        # Loop continues: re-detects. If found, breaks. If still nothing, the
+        # abort block above fires on the next iteration.
+    done
 fi
 
 # ---------------------------------------------------------------------------

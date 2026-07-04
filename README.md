@@ -71,7 +71,15 @@ run.bat
 ./run.sh
 ```
 
-The launcher scripts automatically check for Python, install dependencies, and launch the app.
+The launcher scripts are zero-step on fresh installs:
+
+1. **Auto-detect / auto-install Python** — if `python` (and `py -3` on Windows) isn't on PATH, the launcher prompts you once and offers to install Python for you:
+   - On Windows: downloads the python.org installer silently (per-user, with pip and PATH), or bootstraps via uv.
+   - On Linux/macOS: uses the system package manager (`apt`, `dnf`, `pacman`, or Homebrew), or falls back to uv.
+2. **Install Python dependencies** against `requirements.txt` via `scripts/install_deps.py`, which already cascades through `pip` → `pip.exe` → `uv` → `ensurepip` to handle Microsoft Store Python, pip-less venvs, and other oddities.
+3. **Launch** `main.py`.
+
+The launcher caches a fingerprint of `requirements.txt` so subsequent runs only re-install when dependencies change.
 
 **Manual installation:**
 
