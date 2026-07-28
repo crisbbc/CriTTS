@@ -354,7 +354,7 @@ class CriTTSApp(ctk.CTk):
             self.stt_engine.shutdown()
 
         # Clean up Linux PulseAudio/PipeWire modules created by CriTTS
-        if hasattr(self, 'audio_router'):
+        if sys.platform.startswith("linux") and hasattr(self, 'audio_router'):
             self.audio_router.cleanup_linux_sink_modules()
 
 

@@ -101,70 +101,6 @@ class TTSEngine:
         'ko': ['', '천', '이천', '삼천', '사천', '오천', '육천', '칠천', '팔천', '구천'],
     }
 
-    # Common abbreviations and their expansions (class-level constant, built once)
-    _COMMON_ABBREVIATIONS = {
-        'mr.': 'mister',
-        'mrs.': 'missus',
-        'ms.': 'miss',
-        'dr.': 'doctor',
-        'vs.': 'versus',
-        'etc.': 'et cetera',
-        'i.e.': 'that is',
-        'e.g.': 'for example',
-        'u.s.': 'united states',
-        'u.k.': 'united kingdom',
-        'a.m.': 'am',
-        'p.m.': 'pm',
-        'ft.': 'foot',
-        'in.': 'inch',
-        'oz.': 'ounce',
-        'lb.': 'pound',
-    }
-
-    # Compiled regex for all common abbreviations (longest match first, case-insensitive)
-    _COMMON_ABBREV_PATTERN = re.compile(
-        '|'.join(re.escape(k) for k in sorted(_COMMON_ABBREVIATIONS, key=len, reverse=True)),
-        re.IGNORECASE
-    )
-
-    # Chat/gaming slang that TTS engines frequently mispronounce.
-    # Uses word-boundary matching so partial matches inside longer words are avoided.
-    _GAMING_ABBREVIATIONS = {
-        'glhf': 'good luck have fun',
-        'asap': 'as soon as possible',
-        'iirc': 'if I recall correctly',
-        'afaik': 'as far as I know',
-        'afk': 'away from keyboard',
-        'brb': 'be right back',
-        'irl': 'in real life',
-        'tbh': 'to be honest',
-        'ngl': 'not gonna lie',
-        'idk': "I don't know",
-        'imo': 'in my opinion',
-        'smh': 'shaking my head',
-        'lmk': 'let me know',
-        'fyi': 'for your information',
-        'omg': 'oh my gosh',
-        'lol': 'laughing out loud',
-        'gg': 'good game',
-        'wp': 'well played',
-        'gl': 'good luck',
-        'hf': 'have fun',
-        'npc': 'en pee see',
-        'ty': 'thank you',
-        'rn': 'right now',
-        'np': 'no problem',
-        'bc': 'because',
-        'tho': 'though',
-        'btw': 'by the way',
-        'ikr': 'I know right',
-    }
-
-    _GAMING_ABBREV_PATTERN = re.compile(
-        r'\b(?:' + '|'.join(re.escape(k) for k in sorted(_GAMING_ABBREVIATIONS, key=len, reverse=True)) + r')\b',
-        re.IGNORECASE
-    )
-
     # Regex patterns used by _clean_symbols (compiled once at class level)
     _URL_PATTERN = re.compile(r'https?://\S+|www\.\S+')
     _MARKDOWN_BOLD_ITALIC = re.compile(r'\*{1,3}(.+?)\*{1,3}', re.DOTALL)
@@ -660,10 +596,7 @@ class TTSEngine:
         # Strip symbols/URLs/emojis/markdown that TTS handles poorly
         processed_text = self._clean_symbols(processed_text)
 
-        # Handle language-aware abbreviations and numbers
-        if language == 'en':
-            processed_text = self._expand_common_abbreviations(processed_text)
-            processed_text = self._expand_gaming_abbreviations(processed_text)
+        # Handle language-aware number formatting
         processed_text = self._format_numbers(processed_text, voice)
 
         # Add provider-aware pauses after preserving paragraph breaks
@@ -714,20 +647,6 @@ class TTSEngine:
         text = re.sub(r' {2,}', ' ', text).strip()
         return text
 
-    def _expand_common_abbreviations(self, text: str) -> str:
-        """Expand common abbreviations for better pronunciation."""
-        abbrev_map = self._COMMON_ABBREVIATIONS
-        return self._COMMON_ABBREV_PATTERN.sub(
-            lambda m: abbrev_map.get(m.group(0).lower(), m.group(0)), text
-        )
-
-    def _expand_gaming_abbreviations(self, text: str) -> str:
-        """Expand chat/gaming slang for clearer TTS pronunciation."""
-        abbrev_map = self._GAMING_ABBREVIATIONS
-        return self._GAMING_ABBREV_PATTERN.sub(
-            lambda m: abbrev_map.get(m.group(0).lower(), m.group(0)), text
-        )
-    
     def _format_numbers(self, text: str, voice: Optional[str] = None) -> str:
         """Format numbers for better TTS pronunciation with language-aware conversion.
         

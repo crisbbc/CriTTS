@@ -29,14 +29,7 @@ class SettingsManager:
         "enable_normalization": True,
         "normalization_type": "Peak",
 
-        "abbreviations": {
-            "idk": "I don't know",
-            "brb": "be right back",
-            "omg": "oh my god",
-            "btw": "by the way",
-            "imo": "in my opinion",
-            "tbh": "to be honest"
-        },
+        "abbreviations": {},
         "soundboard_enabled": True,
         "soundboard_slots": {
             "1": "",
