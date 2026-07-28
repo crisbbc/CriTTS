@@ -141,7 +141,7 @@ class CriTTSApp(ctk.CTk):
         # Wire STT auto-stop callback to main_window's handler
         self.stt_engine._on_auto_stop = self.main_window.on_stt_auto_stop
         
-        # Schedule VBCable check after window is rendered
+        # Schedule virtual-audio-device check after window is rendered
         self.after(500, self._check_vbcable)
         
         # Start microphone passthrough if enabled
@@ -160,8 +160,13 @@ class CriTTSApp(ctk.CTk):
                 self._show_passthrough_error(error_msg)
     
     def _check_vbcable(self):
-        """Check if VBCable is installed and prompt user if not."""
-        if not self.audio_router.is_vbcable_installed():
+        """Check if a virtual audio device is available and prompt user if not.
+
+        On Windows this checks for VB-Cable.  On Linux/macOS virtual audio
+        routing works differently (null sinks, BlackHole, etc.) so we skip the
+        dialog as long as any output device exists.
+        """
+        if self.audio_router.is_windows and not self.audio_router.is_vbcable_installed():
             self._show_vbcable_dialog()
     
     def _show_vbcable_dialog(self):
@@ -347,6 +352,10 @@ class CriTTSApp(ctk.CTk):
         # Shutdown STT engine if it exists (stops any active recording stream)
         if hasattr(self, 'stt_engine'):
             self.stt_engine.shutdown()
+
+        # Clean up Linux PulseAudio/PipeWire modules created by CriTTS
+        if hasattr(self, 'audio_router'):
+            self.audio_router.cleanup_linux_sink_modules()
 
 
 def main():

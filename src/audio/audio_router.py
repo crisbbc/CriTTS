@@ -2,15 +2,19 @@
 Audio Router Module
 Handles audio device enumeration and routing audio to specific output devices.
 """
+import os
 import threading
+import time
 import queue
 import re
+import sys
 from dataclasses import dataclass
 import sounddevice as sd
 import numpy as np
 import io
 import asyncio
 import logging
+import shutil
 import subprocess
 from typing import List, Dict, Optional, Tuple
 from scipy import signal
@@ -62,6 +66,12 @@ class AudioRouter:
         self._passthrough_queue: queue.Queue = queue.Queue()
         self._passthrough_active: bool = False
         self._passthrough_lock = threading.Lock()  # Protects passthrough state transitions
+
+        # Lazy-cached Linux audio system detection
+        self._cached_linux_audio_system: Optional[str] = None
+
+        # Linux PulseAudio sink routing (set externally before playback)
+        self._linux_sink_name: str = ""
 
     @staticmethod
     def _deduplicate_devices(devices: List[Dict]) -> List[Dict]:
@@ -622,6 +632,7 @@ class AudioRouter:
         device_index: Optional[int] = None,
         amplitude_callback=None,
         wait_interval: float = 0.1,
+        skip_sink_routing: bool = False,
     ) -> bool:
         """Play a previously prepared non-streaming payload."""
         self._stop_requested.clear()
@@ -665,6 +676,7 @@ class AudioRouter:
                 raise sd.CallbackStop()
 
         channels = data.shape[1] if len(data.shape) > 1 else 1
+
         self._current_stream = sd.OutputStream(
             device=device_index,
             samplerate=effective_sr,
@@ -672,6 +684,11 @@ class AudioRouter:
             callback=callback,
             finished_callback=self._stream_finished
         )
+
+        # Linux: spawn background poller to route to the configured sink.
+        # Skip for previews so the user can hear the voice test through speakers.
+        if not skip_sink_routing:
+            self._route_to_linux_sink()
 
         with self._current_stream:
             while self._current_stream.active and not self._stop_requested.is_set():
@@ -689,6 +706,7 @@ class AudioRouter:
         processing_profile: str = "balanced",
         enable_clarity_eq: bool = True,
         prepared_audio: Optional[PreparedAudioPayload] = None,
+        skip_sink_routing: bool = False,
     ) -> bool:
 
         """
@@ -701,6 +719,8 @@ class AudioRouter:
             enable_normalization: Whether to apply normalization (overridden by processing_profile)
             normalization_type: Type of normalization (overridden by processing_profile)
             processing_profile: Processing profile ("fast_preview", "balanced", "high_quality")
+            skip_sink_routing: If True, do not move the stream to the Linux sink
+                               (useful for voice previews that should play through speakers).
 
         Returns:
             True if playback succeeded, False otherwise.
@@ -723,6 +743,7 @@ class AudioRouter:
                 prepared_audio,
                 device_index=device_index,
                 wait_interval=0.1,
+                skip_sink_routing=skip_sink_routing,
             )
 
         except sd.PortAudioError:
@@ -817,28 +838,197 @@ class AudioRouter:
             except Exception:
                 pass
 
+    def set_linux_sink_name(self, name: str) -> None:
+        """Set the PulseAudio sink name to auto-route TTS audio to (Linux only)."""
+        self._linux_sink_name = (name or "").strip()
+
+    @staticmethod
+    def cleanup_linux_sink_modules() -> None:
+        """Unload any PulseAudio/PipeWire modules created by CriTTS (idempotent).
+
+        Scans ``pactl list short modules`` for entries containing our marker
+        strings and unloads them by module ID.  Safe to call even if no
+        modules exist — does nothing and never raises.
+        """
+        if not sys.platform.startswith("linux"):
+            return
+        try:
+            result = subprocess.run(
+                ["pactl", "list", "short", "modules"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except Exception:
+            return
+
+        for line in result.stdout.splitlines():
+            # Look for modules we created: CriTTS_Null_Sink / CriTTS_Virtual_Mic
+            if "CriTTS_Null_Sink" not in line and "CriTTS_Virtual_Mic" not in line:
+                continue
+            module_id = line.split("\t", 1)[0].strip()
+            if not module_id.isdigit():
+                continue
+            try:
+                subprocess.run(
+                    ["pactl", "unload-module", module_id],
+                    capture_output=True, timeout=3,
+                )
+                logger.debug("Unloaded PulseAudio module %s", module_id)
+            except Exception:
+                pass
+
+    def _route_to_linux_sink(self) -> None:
+        """Spawn a daemon thread that polls for the just-created sink input
+        and moves it to the configured PulseAudio/PipeWire sink.
+
+        Uses ``pactl list sink-inputs`` (one call per poll) and matches our
+        stream by either process ID (PulseAudio-native clients) or application
+        name (ALSA clients, which lack a PID field on PipeWire).
+        Polls every 80 ms with a 3 s deadline.
+        """
+        if not self.is_linux or not self._linux_sink_name:
+            return
+        sink_name = self._linux_sink_name
+
+        # Match tokens: PID for PulseAudio-native, app name for ALSA.
+        pid_token = f'application.process.id = "{os.getpid()}"'
+        try:
+            py_exe = os.path.basename(os.path.realpath(sys.executable))
+        except OSError:
+            py_exe = os.path.basename(sys.executable)
+        alsa_token = f'PipeWire ALSA [{py_exe}]'
+
+        def _route():
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                time.sleep(0.08)
+                try:
+                    result = subprocess.run(
+                        ["pactl", "list", "sink-inputs"],
+                        capture_output=True, text=True, timeout=3,
+                    )
+                except Exception:
+                    continue
+
+                blocks = result.stdout.split("Sink Input #")
+                for block in blocks[1:]:
+                    # Skip blocks not belonging to our process
+                    if pid_token not in block and alsa_token not in block:
+                        continue
+                    first_line = block.split("\n", 1)[0]
+                    sink_input_id = first_line.strip().split()[0]
+                    if not sink_input_id.isdigit():
+                        continue
+                    try:
+                        subprocess.run(
+                            ["pactl", "move-sink-input", sink_input_id, sink_name],
+                            capture_output=True, timeout=3,
+                        )
+                        logger.debug(
+                            "Routed sink-input %s to sink '%s'",
+                            sink_input_id, sink_name,
+                        )
+                    except Exception:
+                        pass
+                    return  # routed successfully — stop polling
+
+        threading.Thread(target=_route, daemon=True).start()
+
     def is_playing(self) -> bool:
         """Check if audio is currently playing."""
         stream = self._current_stream
         return stream is not None and stream.active
 
-    def is_vbcable_installed(self) -> bool:
+    @property
+    def is_linux(self) -> bool:
+        """Return True if running on Linux."""
+        return sys.platform.startswith("linux")
+
+    @property
+    def is_windows(self) -> bool:
+        """Return True if running on Windows."""
+        return sys.platform == "win32"
+
+    @property
+    def is_macos(self) -> bool:
+        """Return True if running on macOS."""
+        return sys.platform == "darwin"
+
+    def detect_linux_audio_system(self) -> str:
         """
-        Check if VB-Cable or similar virtual audio cable is installed.
+        Detect which audio system is running on Linux.
+
+        The result is cached after the first call to avoid repeated
+        subprocess invocations during GUI rendering.
 
         Returns:
-            True if a virtual audio cable device is found, False otherwise.
+            One of 'pipewire', 'pulseaudio', or 'unknown'.
         """
-        # Keywords that identify VB-Cable and similar virtual audio devices
-        vbcable_keywords = ["cable", "vb-audio", "vbaudio", "vb cable"]
+        if self._cached_linux_audio_system is not None:
+            return self._cached_linux_audio_system
 
+        if not sys.platform.startswith("linux"):
+            self._cached_linux_audio_system = "unknown"
+            return "unknown"
+
+        detected = "unknown"
+        try:
+            pactl = shutil.which("pactl")
+            if pactl:
+                result = subprocess.run(
+                    [pactl, "info"], capture_output=True, text=True, timeout=3
+                )
+                server = result.stdout
+                if "PipeWire" in server:
+                    detected = "pipewire"
+                elif "PulseAudio" in server or "pulseaudio" in server.lower():
+                    detected = "pulseaudio"
+        except Exception:
+            pass
+
+        if detected == "unknown":
+            # Check for PipeWire via pw-cli as fallback
+            try:
+                if shutil.which("pw-cli"):
+                    result = subprocess.run(
+                        ["pw-cli", "info", "0"], capture_output=True, text=True, timeout=3
+                    )
+                    if result.returncode == 0:
+                        detected = "pipewire"
+            except Exception:
+                pass
+
+        self._cached_linux_audio_system = detected
+        return detected
+
+    def is_vbcable_installed(self) -> bool:
+        """
+        Check if a virtual audio device is available for TTS routing.
+
+        On Windows this looks for VB-Cable or similar virtual audio cables.
+        On Linux this checks for PulseAudio null sinks / PipeWire virtual devices
+        and always returns True when at least one output device exists (users can
+        create virtual sinks on demand).  On macOS this simply checks whether any
+        output device is present.
+
+        Returns:
+            True if a suitable audio-routing device is found, False otherwise.
+        """
         devices = self.get_audio_devices()
-        for device in devices:
-            device_name_lower = device['name'].lower()
-            if any(keyword in device_name_lower for keyword in vbcable_keywords):
-                return True
 
-        return False
+        if self.is_windows:
+            # Keywords that identify VB-Cable and similar virtual audio devices
+            vbcable_keywords = ["cable", "vb-audio", "vbaudio", "vb cable"]
+            for device in devices:
+                device_name_lower = device['name'].lower()
+                if any(keyword in device_name_lower for keyword in vbcable_keywords):
+                    return True
+            return False
+
+        # Linux / macOS: virtual routing works differently.
+        # On Linux users can create null sinks with pactl/pw-cli.
+        # On macOS users can use BlackHole / Loopback.
+        # Consider it "installed" if any output device exists.
+        return len(devices) > 0
 
     async def play_audio_with_amplitude(
         self,
@@ -851,6 +1041,7 @@ class AudioRouter:
         processing_profile: str = "balanced",
         enable_clarity_eq: bool = True,
         prepared_audio: Optional[PreparedAudioPayload] = None,
+        skip_sink_routing: bool = False,
     ) -> bool:
         """
         Play audio data with real-time amplitude analysis.
@@ -863,6 +1054,7 @@ class AudioRouter:
             normalization_type: Type of normalization
             amplitude_callback: Callback function for amplitude updates
             processing_profile: Processing profile ("fast_preview", "balanced", "high_quality")
+            skip_sink_routing: If True, do not move the stream to the Linux sink.
 
         Returns:
             True if playback succeeded, False otherwise.
@@ -886,6 +1078,7 @@ class AudioRouter:
                 device_index=device_index,
                 amplitude_callback=amplitude_callback,
                 wait_interval=0.05,
+                skip_sink_routing=skip_sink_routing,
             )
 
         except sd.PortAudioError:
@@ -1172,6 +1365,9 @@ class AudioRouter:
                 callback=audio_callback,
                 finished_callback=lambda: playback_finished.set()
             )
+
+            # Linux: spawn background poller to route to the configured sink.
+            self._route_to_linux_sink()
 
             with self._current_stream:
                 while self._current_stream.active and not self._stop_requested.is_set():

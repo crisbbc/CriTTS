@@ -275,6 +275,7 @@ def test_audio_output_warning_label_uses_readable_surface_treatment():
     tab.audio_router = MagicMock()
     tab.audio_router.get_audio_devices.return_value = []
     tab.audio_router.get_input_devices.return_value = []
+    tab.audio_router.detect_linux_audio_system.return_value = "unknown"
     tab.device_dropdown = MagicMock()
     tab.device_var = MagicMock()
     tab.device_info_text = MagicMock()
@@ -283,6 +284,8 @@ def test_audio_output_warning_label_uses_readable_surface_treatment():
     tab.passthrough_output_dropdown = MagicMock()
     tab.passthrough_output_var = MagicMock()
     tab.vbcable_warning_label = MagicMock()
+    # Pin to Windows behaviour so the test is stable on any OS
+    tab._platform = "windows"
 
     AudioOutputTab._load_devices(tab)
 

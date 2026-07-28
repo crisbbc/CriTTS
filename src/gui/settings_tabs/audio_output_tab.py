@@ -2,6 +2,9 @@
 Audio Output Tab
 Settings for audio output devices, normalization, and microphone passthrough.
 """
+import sys
+import subprocess
+import threading
 import customtkinter as ctk
 from typing import Any, List, Dict
 
@@ -16,11 +19,12 @@ class AudioOutputTab(BaseTab):
         """Create the audio output tab content."""
         self.setup_layout()
 
-        output_section, output_content = self.create_section_surface("Output Device")
+        output_section, output_content = self.create_section_surface("Playback Device")
         output_section.pack(fill="x", pady=(0, 15))
 
+        self._platform = self._detect_platform()
         self.output_device_info_label = self.create_helper_text(
-            "Only VB-Cable virtual audio devices are shown. TTS audio must pass through VB-Cable to appear as a microphone in VRChat/Discord.",
+            self._get_playback_device_info_text(),
             parent=output_content,
         )
         self.output_device_info_label.pack(anchor="w", pady=(0, 8))
@@ -70,6 +74,12 @@ class AudioOutputTab(BaseTab):
         normalization_section.pack(fill="x", pady=(0, 15))
         self._create_normalization_section(normalization_content)
 
+        # Linux-only: PulseAudio sink auto-routing
+        if self._platform == "linux":
+            sink_section, sink_content = self.create_section_surface("PulseAudio Sink Routing")
+            sink_section.pack(fill="x", pady=(0, 15))
+            self._create_sink_routing_section(sink_content)
+
         passthrough_section, passthrough_content = self.create_section_surface("Microphone Passthrough")
         passthrough_section.pack(fill="x")
         self._create_passthrough_section(passthrough_content)
@@ -118,10 +128,199 @@ class AudioOutputTab(BaseTab):
         )
         self.enable_norm_check.pack(anchor="w")
 
+    def _create_sink_routing_section(self, parent: ctk.CTkFrame):
+        """Create the Linux PulseAudio sink auto-routing section."""
+        sink_info = self.create_helper_text(
+            "One-click setup: creates a null sink + virtual microphone "
+            "so TTS audio is routed directly to Discord/VRChat. "
+            "Cleanup on app exit is automatic.",
+            parent=parent,
+        )
+        sink_info.pack(anchor="w", pady=(0, 10))
+
+        # Hidden var to track the sink name for settings
+        self.sink_name_var = ctk.StringVar(
+            value=self.settings.get("linux_sink_name", "")
+        )
+
+        # Button row
+        button_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        button_frame.pack(anchor="w", pady=(0, 6))
+
+        self.create_sink_button = ctk.CTkButton(
+            button_frame,
+            text="🔧 Create Null Sink",
+            font=ctk.CTkFont(size=FONT_MD),
+            command=self._create_null_sink,
+            height=BUTTON_HEIGHT,
+        )
+        self.create_sink_button.pack(side="left", padx=(0, 8))
+
+        self.cleanup_sink_button = ctk.CTkButton(
+            button_frame,
+            text="🗑 Remove",
+            font=ctk.CTkFont(size=FONT_MD),
+            command=self._cleanup_null_sink,
+            height=BUTTON_HEIGHT,
+            fg_color="#e74c3c",
+            hover_color="#c0392b",
+        )
+        self.cleanup_sink_button.pack(side="left")
+
+        self.sink_status_label = self.create_helper_text(
+            "",
+            parent=parent,
+        )
+        self.sink_status_label.pack(anchor="w")
+
+    def _create_null_sink(self):
+        """One-click setup: create null sink + virtual mic with a fixed name.
+
+        Uses the hardcoded name ``crittssink`` so the user never needs to
+        type anything.  The virtual mic appears as "CriTTS_Virtual_Mic" in
+        Discord's input device list.
+        """
+        sink_name = "crittssink"
+        self.sink_name_var.set(sink_name)
+
+        self.create_sink_button.configure(state="disabled", text="⏳ Creating...")
+        self.cleanup_sink_button.configure(state="disabled")
+        self.sink_status_label.configure(text="")
+
+        def _run():
+            try:
+                import shutil
+                if not shutil.which("pactl"):
+                    self._after_sink_result(
+                        "⚠️ pactl not found. Is PipeWire installed?", error=True
+                    )
+                    return
+
+                # 1. Check / create the null sink (hardcoded name)
+                check = subprocess.run(
+                    ["pactl", "list", "short", "sinks"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                sink_exists = any(
+                    sink_name in (p.strip().lower() for p in line.split("\t"))
+                    for line in check.stdout.splitlines()
+                )
+
+                if not sink_exists:
+                    result = subprocess.run(
+                        ["pactl", "load-module", "module-null-sink",
+                         f"sink_name={sink_name}",
+                         "sink_properties=device.description=CriTTS_Null_Sink"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if result.returncode != 0:
+                        err = result.stderr.strip() or "Unknown error"
+                        self._after_sink_result(
+                            f"❌ Failed to create sink: {err}", error=True
+                        )
+                        return
+
+                # 2. Create virtual mic from the monitor (if not already there)
+                virtual_mic_desc = "CriTTS_Virtual_Mic"
+                virtual_mic_name = f"{sink_name}_mic"
+
+                sources_check = subprocess.run(
+                    ["pactl", "list", "short", "sources"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                mic_exists = any(
+                    virtual_mic_name in line.split("\t")
+                    or virtual_mic_desc in line.split("\t")
+                    for line in sources_check.stdout.splitlines()
+                )
+
+                if not mic_exists:
+                    mic_result = subprocess.run(
+                        ["pactl", "load-module", "module-remap-source",
+                         f"source_name={virtual_mic_name}",
+                         f"source_properties=device.description={virtual_mic_desc}",
+                         f"master={sink_name}.monitor"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if mic_result.returncode != 0:
+                        err = mic_result.stderr.strip() or "Unknown error"
+                        self._after_sink_result(
+                            f"✅ Null sink ready.\n"
+                            f"⚠️ Virtual mic failed ({err}).\n"
+                            f"   Check: pactl list sources short | grep {sink_name}",
+                            error=False,
+                        )
+                        return
+
+                # 3. Success
+                self._after_sink_result(
+                    f"✅ Ready! Set Discord input to:\n"
+                    f"   {virtual_mic_desc}",
+                    error=False,
+                )
+
+            except FileNotFoundError:
+                self._after_sink_result(
+                    "⚠️ pactl not found. Is PipeWire installed?", error=True
+                )
+            except subprocess.TimeoutExpired:
+                self._after_sink_result(
+                    "⚠️ pactl timed out. Check your audio system.", error=True
+                )
+            except Exception as e:
+                self._after_sink_result(
+                    f"❌ Unexpected error: {e}", error=True
+                )
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _cleanup_null_sink(self):
+        """Remove the null sink and virtual mic modules created by CriTTS."""
+        self.cleanup_sink_button.configure(state="disabled", text="⏳ Removing...")
+        self.create_sink_button.configure(state="disabled")
+
+        def _run():
+            try:
+                # Delegate to AudioRouter for the actual pactl work
+                if self.audio_router:
+                    self.audio_router.cleanup_linux_sink_modules()
+                self.sink_name_var.set("")
+                self._after_sink_result(
+                    "🗑 Removed CriTTS sink + virtual mic.", error=False
+                )
+
+            except Exception as e:
+                self._after_sink_result(
+                    f"❌ Cleanup error: {e}", error=True
+                )
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _after_sink_result(self, message: str, *, error: bool):
+        """Schedule a UI update from the background thread."""
+        def _apply():
+            self.create_sink_button.configure(state="normal", text="🔧 Create Null Sink")
+            self.cleanup_sink_button.configure(state="normal", text="🗑 Remove")
+            color = "#e74c3c" if error else "#27ae60"
+            self.sink_status_label.configure(text=message, text_color=color)
+        try:
+            if hasattr(self, "sink_status_label"):
+                self.sink_status_label.after(0, _apply)
+        except Exception:
+            try:
+                self.create_sink_button.configure(
+                    state="normal", text="🔧 Create Null Sink"
+                )
+                self.cleanup_sink_button.configure(
+                    state="normal", text="🗑 Remove"
+                )
+            except Exception:
+                pass
+
     def _create_passthrough_section(self, parent: ctk.CTkFrame):
         """Create the microphone passthrough section."""
         passthrough_info = self.create_helper_text(
-            "Route your real microphone to VBCable at the same time as TTS. Useful for mixing your voice with TTS in VRChat/Discord.",
+            self._get_passthrough_info_text(),
             parent=parent,
         )
         passthrough_info.pack(anchor="w", pady=(0, 10))
@@ -131,7 +330,7 @@ class AudioOutputTab(BaseTab):
         )
         self.mic_passthrough_enabled_check = ctk.CTkCheckBox(
             parent,
-            text="Enable microphone passthrough to VBCable",
+            text=self._get_passthrough_checkbox_text(),
             variable=self.mic_passthrough_enabled_var,
             font=ctk.CTkFont(size=FONT_MD),
         )
@@ -235,32 +434,82 @@ class AudioOutputTab(BaseTab):
         ).pack(side="left")
 
         self.passthrough_output_hint_label = self.create_helper_text(
-            "Select the VBCable Input device so your mic audio is mixed with TTS.",
+            self._get_passthrough_output_hint_text(),
             parent=parent,
         )
         self.passthrough_output_hint_label.pack(anchor="w")
+
+    @staticmethod
+    def _detect_platform() -> str:
+        """Return 'linux', 'windows', 'macos', or 'unknown'."""
+        if sys.platform.startswith("linux"):
+            return "linux"
+        if sys.platform == "win32":
+            return "windows"
+        if sys.platform == "darwin":
+            return "macos"
+        return "unknown"
+
+    def _get_playback_device_info_text(self) -> str:
+        """Return platform-appropriate info text for the playback device section."""
+        if self._platform == "linux":
+            audio_system = "PipeWire"
+            if self.audio_router:
+                detected = self.audio_router.detect_linux_audio_system()
+                if detected == "pulseaudio":
+                    audio_system = "PulseAudio"
+                elif detected == "pipewire":
+                    audio_system = "PipeWire"
+            return (
+                f"Select \"default\" (or \"pulse\"/\"pipewire\") — "
+                f"{audio_system} aggregates all sinks into a single ALSA device, "
+                f"so individual virtual sinks won't appear here. "
+                f"Use pavucontrol or pactl move-sink-input to redirect TTS audio to a null sink. "
+                f"See README for detailed setup instructions."
+            )
+        elif self._platform == "macos":
+            return (
+                "Select where TTS audio should play. To route TTS to VRChat/Discord, "
+                "install BlackHole or Loopback and select it here."
+            )
+        # Windows
+        return (
+            "Select where TTS audio should play. Only VB-Cable virtual audio devices are shown — "
+            "TTS audio passes through the cable and appears as a microphone in VRChat/Discord."
+        )
 
     def _load_devices(self):
         """Load audio output devices."""
         all_devices = self.audio_router.get_audio_devices() if self.audio_router else []
 
-        vbcable_keywords = ["cable", "vb-audio", "vbaudio", "vb cable"]
-        self._devices = [
-            device
-            for device in all_devices
-            if any(keyword in device.get("name", "").lower() for keyword in vbcable_keywords)
-        ]
+        # Safe fallback: if _create_content hasn't run yet (e.g. tests),
+        # detect platform on demand.
+        platform = getattr(self, "_platform", None) or self._detect_platform()
+
+        if platform == "windows":
+            vbcable_keywords = ["cable", "vb-audio", "vbaudio", "vb cable"]
+            self._devices = [
+                device
+                for device in all_devices
+                if any(keyword in device.get("name", "").lower() for keyword in vbcable_keywords)
+            ]
+        else:
+            # Linux/macOS: show all output devices
+            self._devices = all_devices
 
         if not self._devices:
+            self._platform = platform  # ensure _platform is set for helper methods
+            warning_msg = self._get_no_devices_warning()
             self.configure_surface_status_label(
                 self.vbcable_warning_label,
-                "No VB-Cable devices found. Please install VB-Cable from vb-audio.com to route TTS audio to VRChat/Discord.",
+                warning_msg,
                 "warning",
             )
-            self.device_dropdown.configure(values=["No VB-Cable devices found"])
-            self.device_var.set("No VB-Cable devices found")
-            self.passthrough_output_dropdown.configure(values=["No VB-Cable devices found"])
-            self.passthrough_output_var.set("No VB-Cable devices found")
+            placeholder = self._get_no_devices_placeholder()
+            self.device_dropdown.configure(values=[placeholder])
+            self.device_var.set(placeholder)
+            self.passthrough_output_dropdown.configure(values=[placeholder])
+            self.passthrough_output_var.set(placeholder)
         else:
             self.vbcable_warning_label.configure(
                 text="",
@@ -367,6 +616,61 @@ class AudioOutputTab(BaseTab):
 
         self.device_info_text.configure(state="disabled")
 
+    def _get_no_devices_warning(self) -> str:
+        """Return platform-appropriate warning when no devices are found."""
+        if self._platform == "linux":
+            audio_system = "PulseAudio/PipeWire"
+            if self.audio_router:
+                detected = self.audio_router.detect_linux_audio_system()
+                if detected != "unknown":
+                    audio_system = "PipeWire" if detected == "pipewire" else "PulseAudio"
+            return (
+                f"No audio output devices found. Check your {audio_system} configuration "
+                f"and ensure sound is working on your system."
+            )
+        elif self._platform == "macos":
+            return (
+                "No audio output devices found. Check your system audio settings "
+                "and ensure sound is working."
+            )
+        return (
+            "No VB-Cable devices found. Please install VB-Cable from vb-audio.com "
+            "to route TTS audio to VRChat/Discord."
+        )
+
+    def _get_no_devices_placeholder(self) -> str:
+        """Return platform-appropriate placeholder when no devices are found."""
+        if self._platform == "windows":
+            return "No VB-Cable devices found"
+        return "No audio devices found"
+
+    def _get_passthrough_info_text(self) -> str:
+        """Return platform-appropriate passthrough info text."""
+        if self._platform == "windows":
+            return (
+                "Route your real microphone to VBCable at the same time as TTS. "
+                "Useful for mixing your voice with TTS in VRChat/Discord."
+            )
+        return (
+            "Route your real microphone to the selected output device alongside TTS. "
+            "Useful for mixing your voice with TTS in VRChat/Discord."
+        )
+
+    def _get_passthrough_checkbox_text(self) -> str:
+        """Return platform-appropriate passthrough checkbox text."""
+        if self._platform == "windows":
+            return "Enable microphone passthrough to VBCable"
+        return "Enable microphone passthrough to output device"
+
+    def _get_passthrough_output_hint_text(self) -> str:
+        """Return platform-appropriate passthrough output hint."""
+        if self._platform == "windows":
+            return "Select the VBCable Input device so your mic audio is mixed with TTS."
+        return (
+            "Select the output device where your mic audio should be sent. "
+            "Choose the same device as the main output for mixing."
+        )
+
     def _on_passthrough_volume_change(self, value):
         """Update passthrough volume label when slider changes."""
         self.passthrough_volume_value_label.configure(text=f"{int(value)}%")
@@ -379,6 +683,9 @@ class AudioOutputTab(BaseTab):
             "mic_passthrough_enabled": self.mic_passthrough_enabled_var.get(),
             "mic_passthrough_volume": self.passthrough_volume_var.get(),
         }
+
+        if hasattr(self, "sink_name_var"):
+            settings["linux_sink_name"] = self.sink_name_var.get().strip()
 
         device_name = self.device_var.get()
         for device in self._devices:

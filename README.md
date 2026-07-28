@@ -15,8 +15,9 @@ A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS support
 - **Custom Language Mappings**: Set preferred voices for each language
 
 ### Audio Processing
-- **Audio Routing**: Route TTS output to any audio device (including VB-Cable for Discord)
-- **Microphone Passthrough**: Route your real microphone to VB-Cable alongside TTS for voice mixing
+- **Audio Routing**: Route TTS output to any audio device (VB-Cable on Windows, virtual sinks on Linux/macOS)
+- **Linux One-Click Setup**: Auto-creates a null sink + Discord-compatible virtual microphone — no terminal needed (Settings → Audio → Create Null Sink), auto-cleans on exit
+- **Microphone Passthrough**: Route your real microphone alongside TTS for voice mixing
 - **Processing Profiles**: Choose between Fast Preview, Balanced, or High Quality
 - **Audio Normalization**: Peak, RMS, or LUFS normalization for consistent volume
 - **High-Quality Resampling**: 48kHz with Kaiser-windowed anti-aliasing filters
@@ -51,6 +52,10 @@ A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS support
 
 ### Prerequisites
 - Python 3.8 or higher
+- **Tkinter** (GUI toolkit — bundled with python.org installer on Windows/macOS; on Linux you may need a separate package)
+  - **Arch**: `sudo pacman -S tk`
+  - **Debian/Ubuntu**: `sudo apt install python3-tk`
+  - **Fedora**: `sudo dnf install python3-tkinter`
 - Windows, macOS, or Linux
 
 ### Quick Start
@@ -71,19 +76,25 @@ run.bat
 ./run.sh
 ```
 
-The launcher scripts are zero-step on fresh installs:
+The launcher scripts handle everything automatically — zero manual setup:
 
 1. **Auto-detect / auto-install Python** — if `python` (and `py -3` on Windows) isn't on PATH, the launcher prompts you once and offers to install Python for you:
    - On Windows: downloads the python.org installer silently (per-user, with pip and PATH), or bootstraps via uv.
    - On Linux/macOS: uses the system package manager (`apt`, `dnf`, `pacman`, or Homebrew), or falls back to uv.
-2. **Install Python dependencies** against `requirements.txt` via `scripts/install_deps.py`, which already cascades through `pip` → `pip.exe` → `uv` → `ensurepip` to handle Microsoft Store Python, pip-less venvs, and other oddities.
-3. **Launch** `main.py`.
+2. **Auto-create virtual environment** — creates an isolated `.venv/` in the project folder (prefers `uv venv`, falls back to `python -m venv`).  This keeps dependencies out of your system Python and works around PEP 668 restrictions on Arch, Fedora, Debian 12+, and MS Store Python.
+3. **Install Python dependencies** against `requirements.txt` via `scripts/install_deps.py`, which cascades through `pip` → `pip.exe` → `uv` → `ensurepip` to handle every environment.
+4. **Launch** `main.py`.
 
 The launcher caches a fingerprint of `requirements.txt` so subsequent runs only re-install when dependencies change.
 
-**Manual installation:**
+**Manual installation (if not using launchers):**
 
 ```bash
+# Create and activate a virtual environment (recommended)
+python -m venv .venv
+source .venv/bin/activate  # Linux/macOS
+# .venv\Scripts\activate   # Windows
+
 # Install dependencies
 pip install -r requirements.txt
 
@@ -140,9 +151,11 @@ Access settings by clicking the "Settings" button or pressing `Ctrl+,`
 - Select output device
 - Enable/disable normalization
 - Choose normalization type (Peak, RMS, LUFS)
-- **Microphone Passthrough**: Route your real microphone to VB-Cable alongside TTS
+- **Linux PulseAudio Sink Routing**: One-click null sink + virtual mic setup for Discord/VRChat
+- **Microphone Passthrough**: Route your real microphone to the output device alongside TTS (platform-adaptive)
   - Enable/disable passthrough
   - Select microphone device
+  - Select passthrough output device
   - Adjust passthrough volume (0-200%)
 
 #### Appearance Tab
@@ -226,9 +239,13 @@ While a model is downloading or loading, the **status bar** at the bottom of the
 
 > **Note**: Piper does not support pitch adjustment. Rate and volume controls work normally.
 
-## VB-Cable Setup (Discord Integration)
+## Audio Routing Setup
 
-To route TTS audio to Discord or other applications:
+CriTTS routes TTS audio to a selected output device so it can be used as a microphone input in applications like VRChat or Discord. The setup varies by platform.
+
+### Windows — VB-Cable
+
+To route TTS audio to Discord or other applications on Windows:
 
 1. **Install VB-Cable**
    - Download from [VB-Audio Software](https://vb-audio.com/Cable/)
@@ -244,40 +261,75 @@ To route TTS audio to Discord or other applications:
    - Set Input Device to "CABLE Output"
    - Disable "Automatically determine input sensitivity"
 
-4. **Use**
-   - Type text in CriTTS and click Speak
-   - Audio will be routed to Discord
+### Linux — One-Click Null Sink + Virtual Mic
+
+CriTTS provides a **fully automatic one-click setup** for Linux audio routing. No terminal commands needed.
+
+**In Settings → Audio → "PulseAudio Sink Routing":**
+
+1. Click **"🔧 Create Null Sink"** — this creates:
+   - A null sink (`crittssink`) that accepts TTS audio silently
+   - A virtual microphone (**CriTTS_Virtual_Mic**) that Discord/VRChat can see as an input device
+2. In Discord/VRChat, set your microphone to **"CriTTS_Virtual_Mic"**
+3. Click **Speak** — TTS audio is automatically routed to the null sink (not your speakers) and appears as microphone input
+
+**What happens under the hood:**
+- TTS audio plays to the null sink via `pactl move-sink-input` (automatic, no user action needed)
+- The null sink's audio is mirrored to a virtual microphone via `module-remap-source`
+- Cleanup is automatic when CriTTS exits (no leftover modules)
+- Use the **"🗑 Remove"** button to clean up manually at any time
+- Voice **Preview** in the Voice tab plays through your speakers as normal (for testing)
+
+> **Why the virtual mic?** Discord and Chromium-based apps hide PulseAudio "monitor" sources from the input device list. CriTTS creates a virtual mic with the correct `media.class=Audio/Source` that Discord will show.
+
+> **Tip:** If Discord doesn't show "CriTTS_Virtual_Mic" right away, restart Discord — it caches the device list on startup.
+
+**Manual setup (if you prefer the terminal):**
+```bash
+# Create the null sink
+pactl load-module module-null-sink sink_name=crittssink sink_properties=device.description=CriTTS_Null_Sink
+
+# Create Discord-compatible virtual mic
+pactl load-module module-remap-source source_name=crittssink_mic source_properties=device.description=CriTTS_Virtual_Mic master=crittssink.monitor
+```
+
+### macOS — BlackHole / Loopback
+
+On macOS, CriTTS shows **all** audio output devices:
+
+1. Install [BlackHole](https://existential.audio/blackhole/) (free) or [Loopback](https://rogueamoeba.com/loopback/) (paid)
+2. Open Settings > Audio Output in CriTTS
+3. Select BlackHole/Loopback as the output device
+4. In Discord/VRChat, set your microphone to the same BlackHole/Loopback device
 
 ## Microphone Passthrough
 
-The Microphone Passthrough feature allows you to route your real microphone audio to VB-Cable alongside TTS output. This is useful for mixing your voice with TTS in VRChat or Discord.
+The Microphone Passthrough feature allows you to route your real microphone audio to the selected output device alongside TTS output. This is useful for mixing your voice with TTS in VRChat or Discord.
 
 ### Setup
 
 1. **Enable Passthrough**
    - Open Settings > Audio Output
    - Scroll to "Microphone Passthrough" section
-   - Check "Enable microphone passthrough to VBCable"
+   - Check "Enable microphone passthrough to output device"
 
 2. **Select Microphone**
    - Choose your microphone device from the dropdown
    - Use "Default (System)" to use your system's default microphone
 
-3. **Adjust Volume**
+3. **Select Passthrough Output**
+   - On Windows: choose the same VB-Cable device as your main output
+   - On Linux/macOS: choose the same virtual device as your main output
+
+4. **Adjust Volume**
    - Set passthrough volume (0-200%)
    - 100% = normal volume
    - 200% = doubled volume (for quiet microphones)
    - 0% = muted
 
-### Use Cases
-
-- **VRChat**: Speak normally while TTS plays, both audio sources go to VB-Cable
-- **Discord**: Mix your voice with TTS for roleplay or accessibility
-- **Streaming**: Combine voice and TTS into a single audio source
-
 ### How It Works
 
-When enabled, CriTTS creates a real-time audio stream from your selected microphone to VB-Cable. This runs continuously in the background, allowing you to speak naturally while TTS plays. The volume control lets you boost quiet microphones or balance levels between your voice and TTS.
+When enabled, CriTTS creates a real-time audio stream from your selected microphone to the chosen output device. This runs continuously in the background, allowing you to speak naturally while TTS plays.
 
 ## Audio Processing Profiles
 
@@ -350,7 +402,7 @@ CriTTS/
     │   ├── recording_overlay.py   # Recording state overlay
     │   └── settings_tabs/         # Settings tab components
     │       ├── voice_tab.py           # Voice selection & customization
-    │       ├── audio_output_tab.py    # Audio device & normalization
+    │       ├── audio_output_tab.py    # Audio device, normalization & Linux sink routing
     │       ├── appearance_tab.py      # Theme & button visibility
     │       ├── abbreviations_tab.py   # Text expansion shortcuts
     │       ├── keybinds_tab.py        # Keyboard shortcuts
@@ -382,10 +434,18 @@ All shortcuts are customizable in Settings > Keybinds.
 2. Ensure device is not muted in system settings
 3. Try "System Default" device
 
-### VB-Cable Not Working
+### Audio Routing Not Working
+
+**Windows:**
 1. Verify VB-Cable is installed correctly
 2. Check Discord input device is "CABLE Output"
 3. Disable noise suppression in Discord
+
+**Linux:**
+1. Verify the null sink is loaded: `pactl list sinks short | grep crittssink`
+2. Verify the virtual mic exists: `pactl list sources short | grep CriTTS_Virtual_Mic`
+3. Restart Discord if it doesn't show "CriTTS_Virtual_Mic" in input devices
+4. Check that no other process is using the same sink
 
 ### TTS Not Working
 1. Check internet connection (edge-tts requires internet)
@@ -414,7 +474,7 @@ All shortcuts are customizable in Settings > Keybinds.
 - **GUI Framework**: [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)
 - **TTS Engine**: [edge-tts](https://github.com/rany2/edge-tts)
 - **Audio I/O**: [sounddevice](https://python-sounddevice.readthedocs.io/), [soundfile](https://pysoundfile.readthedocs.io/)
-- **Virtual Audio**: [VB-Audio Cable](https://vb-audio.com/Cable/)
+- **Virtual Audio**: [VB-Audio Cable](https://vb-audio.com/Cable/) (Windows), PulseAudio/PipeWire null sinks (Linux), [BlackHole](https://existential.audio/blackhole/) (macOS)
 
 ## License
 

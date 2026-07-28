@@ -1163,6 +1163,13 @@ class MainWindow:
             pitch = self.settings.get("pitch", 0)
             device_idx = self.settings.get("device_index")
 
+            # Linux: configure PulseAudio/PipeWire sink auto-routing.
+            # PortAudio on most Linux systems only ships the ALSA backend,
+            # so PULSE_SINK has no effect.  AudioRouter._route_to_linux_sink()
+            # polls for the just-opened stream and moves it with pactl.
+            linux_sink = self.settings.get("linux_sink_name", "")
+            self.audio_router.set_linux_sink_name(linux_sink)
+
             enable_normalization = self.settings.get("enable_normalization", True)
             normalization_type = self.settings.get("normalization_type", "Peak")
             processing_profile = self.settings.get("processing_profile", "balanced")

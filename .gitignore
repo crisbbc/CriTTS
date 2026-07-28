@@ -40,3 +40,7 @@ plans/
 # Launcher generated state
 .dep-hash
 .version
+
+# Runtime temp / cache
+.tmp-audio-cache/
+.tmp-audio-cache-*/

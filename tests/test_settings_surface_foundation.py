@@ -491,7 +491,7 @@ def test_wave2_tabs_use_section_surfaces_in_existing_order(monkeypatch):
     """Wave 2 tabs should promote each top-level anchor section into a section surface."""
     expected_sections = {
         AudioOutputTab: [
-            "Output Device",
+            "Playback Device",
             "Device Information",
             "Audio Normalization",
             "Microphone Passthrough",

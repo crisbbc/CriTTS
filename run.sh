@@ -24,19 +24,19 @@ install_python_system() {
         SUDO="sudo"
     fi
     if command -v apt-get >/dev/null 2>&1; then
-        echo "[INFO] Detected apt-get (Debian/Ubuntu). Installing python3, python3-pip, python3-venv..."
+        echo "[INFO] Detected apt-get (Debian/Ubuntu). Installing python3, python3-pip, python3-venv, python3-tk, libportaudio2, libsndfile1, ffmpeg..."
         # shellcheck disable=SC2086
         $SUDO apt-get update -qq 2>&1 | tail -n 5 || true
         # shellcheck disable=SC2086
-        $SUDO apt-get install -y python3 python3-pip python3-venv
+        $SUDO apt-get install -y python3 python3-pip python3-venv python3-tk libportaudio2 libsndfile1 ffmpeg
     elif command -v dnf >/dev/null 2>&1; then
-        echo "[INFO] Detected dnf (Fedora/RHEL). Installing python3, python3-pip, python3-devel..."
+        echo "[INFO] Detected dnf (Fedora/RHEL). Installing python3, python3-pip, python3-devel, python3-tkinter, portaudio, libsndfile, ffmpeg..."
         # shellcheck disable=SC2086
-        $SUDO dnf install -y python3 python3-pip python3-devel
+        $SUDO dnf install -y python3 python3-pip python3-devel python3-tkinter portaudio libsndfile ffmpeg
     elif command -v pacman >/dev/null 2>&1; then
-        echo "[INFO] Detected pacman (Arch). Installing python, python-pip..."
+        echo "[INFO] Detected pacman (Arch). Installing python, python-pip, tk, portaudio, libsndfile, ffmpeg..."
         # shellcheck disable=SC2086
-        $SUDO pacman -S --noconfirm python python-pip
+        $SUDO pacman -S --noconfirm python python-pip tk portaudio libsndfile ffmpeg
     elif command -v brew >/dev/null 2>&1; then
         echo "[INFO] Detected Homebrew (macOS). Installing python@3.12..."
         brew install python@3.12
@@ -169,6 +169,37 @@ else
         # Loop continues: re-detects. If found, breaks. If still nothing, the
         # abort block above fires on the next iteration.
     done
+fi
+
+# ---------------------------------------------------------------------------
+# [1b] Auto-create virtual environment when none exists
+#
+# System Python on Arch, Fedora, and Debian 12+ blocks direct package installs
+# (PEP 668 “externally managed”).  We create a venv so ``install_deps.py`` has a
+# writable site-packages.  Prefer ``uv venv`` when available (faster); fall back
+# to ``python -m venv``.
+# ---------------------------------------------------------------------------
+if [ ! -f "$SCRIPT_DIR/.venv/bin/activate" ] && [ ! -f "$SCRIPT_DIR/venv/bin/activate" ]; then
+    echo "[INFO] No virtual environment found — creating one..."
+    VENV_MADE=false
+    if command -v uv >/dev/null 2>&1; then
+        if uv venv --python "$PYTHON" "$SCRIPT_DIR/.venv" 2>&1; then
+            VENV_MADE=true
+        else
+            echo "[WARN] uv venv failed, falling back to python -m venv..."
+        fi
+    fi
+    if [ "$VENV_MADE" = false ]; then
+        if ! "$PYTHON" -m venv "$SCRIPT_DIR/.venv"; then
+            echo "[ERROR] Could not create virtual environment with python -m venv." >&2
+            echo "  Install python3-venv (Debian/Ubuntu) or python (Arch) and retry." >&2
+            exit 1
+        fi
+    fi
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/.venv/bin/activate"
+    PYTHON="python"
+    echo "[OK] Virtual environment created and activated at $SCRIPT_DIR/.venv"
 fi
 
 # ---------------------------------------------------------------------------

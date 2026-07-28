@@ -868,7 +868,8 @@ class VoiceTab(BaseTab):
                 
                 success = loop.run_until_complete(
                     self.audio_router.play_audio_to_device(
-                        audio_data, 48000, None, enable_norm, norm_type
+                        audio_data, 48000, None, enable_norm, norm_type,
+                        skip_sink_routing=True,
                     )
                 )
 

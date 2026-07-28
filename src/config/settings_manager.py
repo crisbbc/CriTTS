@@ -154,6 +154,9 @@ class SettingsManager:
 
         # Audio clarity EQ: high-pass + presence boost for speech intelligibility
         "enable_clarity_eq": True,
+
+        # Linux PulseAudio/PipeWire sink routing
+        "linux_sink_name": "",  # Name of the null sink to route TTS to (empty = no auto-routing)
     }
 
 

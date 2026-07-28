@@ -178,6 +178,47 @@ for /f "tokens=2" %%i in ('"!PYTHON_CMD!" --version 2^>^&1') do set "PYTHON_VERS
 echo [OK] Python %PYTHON_VERSION% found.
 
 REM ---------------------------------------------------------------------------
+REM [2b] Auto-create virtual environment when none exists
+REM
+REM Microsoft Store Python and system-managed installs (PEP 668) block direct
+REM package installs.  We create a venv so install_deps.py has a writable
+REM site-packages.  Prefer ``uv venv`` when available (faster); fall back to
+REM ``python -m venv``.
+REM ---------------------------------------------------------------------------
+if exist "%SCRIPT_DIR%.venv\Scripts\activate.bat" goto :skip_venv_create
+if exist "%SCRIPT_DIR%venv\Scripts\activate.bat" goto :skip_venv_create
+
+echo [INFO] No virtual environment found -- creating one...
+
+REM Try uv first (fast, modern)
+where uv >nul 2>&1
+if not errorlevel 1 (
+    uv venv --python "!PYTHON_CMD!" "%SCRIPT_DIR%.venv"
+    if not errorlevel 1 goto :venv_created
+    echo [WARN] uv venv failed, falling back to python -m venv...
+    rmdir /s /q "%SCRIPT_DIR%.venv" 2>nul
+)
+
+REM Fall back to stdlib venv
+"!PYTHON_CMD!" -m venv "%SCRIPT_DIR%.venv"
+if errorlevel 1 (
+    echo [ERROR] Could not create virtual environment with python -m venv.
+    echo   Reinstall Python from python.org (includes venv) and retry.
+    pause
+    exit /b 1
+)
+
+:venv_created
+call "%SCRIPT_DIR%.venv\Scripts\activate.bat" >nul 2>&1
+if errorlevel 1 (
+    echo [WARN] Virtual environment created but activation failed.
+)
+set "PYTHON_CMD=python"
+echo [OK] Virtual environment created and activated at %SCRIPT_DIR%.venv
+
+:skip_venv_create
+
+REM ---------------------------------------------------------------------------
 REM [3] Install dependencies -- only when requirements.txt changed
 REM     No hard pip gate: install_deps.py tries pip -> pip.exe -> uv -> ensurepip
 REM ---------------------------------------------------------------------------
