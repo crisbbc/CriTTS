@@ -65,7 +65,9 @@ class AudioRouter:
         self._passthrough_duplex_stream: Optional[sd.Stream] = None
         self._passthrough_queue: queue.Queue = queue.Queue()
         self._passthrough_active: bool = False
-        self._passthrough_lock = threading.Lock()  # Protects passthrough state transitions
+        # start_mic_passthrough() may need to stop a partially-created stream
+        # while already holding this lock, so it must be re-entrant.
+        self._passthrough_lock = threading.RLock()  # Protects passthrough state transitions
 
         # Lazy-cached Linux audio system detection
         self._cached_linux_audio_system: Optional[str] = None
@@ -1097,6 +1099,10 @@ class AudioRouter:
                 self._current_stream = None
                 self._current_amplitude = 0.0
 
+    def _stream_stop_requested(self, stop_event=None) -> bool:
+        """Return whether streaming playback has received either stop signal."""
+        return self._stop_requested.is_set() or bool(stop_event and stop_event.is_set())
+
     async def play_audio_streaming(
         self,
         audio_chunk_generator,
@@ -1133,6 +1139,7 @@ class AudioRouter:
         import threading as th
 
         process = None
+        stream_tasks = []
 
         try:
             self._stop_requested.clear()
@@ -1183,7 +1190,7 @@ class AudioRouter:
                 """Feed MP3 chunks into ffmpeg stdin."""
                 try:
                     async for chunk in audio_chunk_generator:
-                        if self._stop_requested.is_set() or (stop_event and stop_event.is_set()):
+                        if self._stream_stop_requested(stop_event):
                             break
                         if process.stdin:
                             process.stdin.write(chunk)
@@ -1218,11 +1225,25 @@ class AudioRouter:
                 except Exception:
                     pass
 
+            def enqueue_terminal_marker() -> None:
+                """Signal playback completion without blocking shutdown."""
+                try:
+                    audio_queue.put_nowait(None)
+                except queue.Full:
+                    try:
+                        audio_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        audio_queue.put_nowait(None)
+                    except queue.Full:
+                        pass
+
             async def read_stdout():
                 """Read decoded PCM from ffmpeg stdout and enqueue for playback."""
                 if not process.stdout:
                     decode_error[0] = RuntimeError("ffmpeg stdout unavailable")
-                    audio_queue.put(None)
+                    enqueue_terminal_marker()
                     return
 
                 buffer = bytearray()
@@ -1232,7 +1253,7 @@ class AudioRouter:
 
                 try:
                     while True:
-                        if self._stop_requested.is_set() or (stop_event and stop_event.is_set()):
+                        if self._stream_stop_requested(stop_event):
                             break
 
                         data = await process.stdout.read(4096)
@@ -1257,7 +1278,7 @@ class AudioRouter:
                             )
 
                             while True:
-                                if self._stop_requested.is_set() or (stop_event and stop_event.is_set()):
+                                if self._stream_stop_requested(stop_event):
                                     return
                                 try:
                                     audio_queue.put(chunk, block=True, timeout=0.1)
@@ -1284,12 +1305,17 @@ class AudioRouter:
                                 enable_clarity_eq,
                                 stereo_width,
                             )
-                            audio_queue.put(chunk)
+                            while not self._stream_stop_requested(stop_event):
+                                try:
+                                    audio_queue.put(chunk, block=True, timeout=0.1)
+                                    break
+                                except queue.Full:
+                                    continue
 
                 except Exception as e:
                     decode_error[0] = e
                 finally:
-                    audio_queue.put(None)
+                    enqueue_terminal_marker()
 
             # Closure variable to hold leftover samples between callbacks
             leftover = [None]
@@ -1343,6 +1369,7 @@ class AudioRouter:
             feed_task = asyncio.create_task(feed_stdin())
             stderr_task = asyncio.create_task(read_stderr())
             stdout_task = asyncio.create_task(read_stdout())
+            stream_tasks = [feed_task, stderr_task, stdout_task]
 
             try:
                 await asyncio.wait_for(playback_started.wait(), timeout=5.0)
@@ -1371,7 +1398,7 @@ class AudioRouter:
 
             with self._current_stream:
                 while self._current_stream.active and not self._stop_requested.is_set():
-                    if stop_event and stop_event.is_set():
+                    if self._stream_stop_requested(stop_event):
                         self._stop_requested.set()
                         break
                     await asyncio.sleep(0.05)
@@ -1379,10 +1406,7 @@ class AudioRouter:
             try:
                 await asyncio.wait_for(stdout_task, timeout=1.0)
             except asyncio.TimeoutError:
-                stdout_task.cancel()
-
-            feed_task.cancel()
-            stderr_task.cancel()
+                pass
 
             return not self._stop_requested.is_set()
 
@@ -1391,9 +1415,30 @@ class AudioRouter:
         except Exception:
             return False
         finally:
+            # Every exit path (including startup timeout and decoder errors) must
+            # cancel and await all reader/writer tasks before closing the loop.
+            pending_tasks = [task for task in stream_tasks if not task.done()]
+            for task in pending_tasks:
+                task.cancel()
+            if stream_tasks:
+                await asyncio.gather(*stream_tasks, return_exceptions=True)
+
             if process is not None:
                 try:
-                    process.kill()
+                    if process.stdin:
+                        process.stdin.close()
+                        wait_closed = getattr(process.stdin, "wait_closed", None)
+                        if callable(wait_closed):
+                            await wait_closed()
+                except Exception:
+                    pass
+                try:
+                    if process.returncode is None:
+                        process.kill()
+                except Exception:
+                    pass
+                try:
+                    await process.wait()
                 except Exception:
                     pass
             if self._current_stream is not None:
@@ -1853,7 +1898,8 @@ class AudioRouter:
 
     def stop_mic_passthrough(self):
         """Stop microphone passthrough and clean up resources."""
-        self._stop_mic_passthrough_unlocked()
+        with self._passthrough_lock:
+            self._stop_mic_passthrough_unlocked()
         logger.info("Microphone passthrough stopped")
 
     def is_mic_passthrough_active(self) -> bool:

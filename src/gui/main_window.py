@@ -116,6 +116,9 @@ class MainWindow:
         self._speaking_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
+        # Background threads must stop scheduling Tk callbacks before the root
+        # window is destroyed.
+        self._async_callbacks_active = True
         
         # TTS speaking animation state
         self._tts_speaking = False
@@ -189,6 +192,30 @@ class MainWindow:
 
 
     
+    def _safe_after(self, delay_ms: int, callback):
+        """Schedule a Tk callback unless shutdown has invalidated callbacks."""
+        if not getattr(self, "_async_callbacks_active", True):
+            return None
+
+        def guarded_callback(*args, **kwargs):
+            if not getattr(self, "_async_callbacks_active", True):
+                return None
+            return callback(*args, **kwargs)
+
+        try:
+            return self.root.after(delay_ms, guarded_callback)
+        except Exception:
+            return None
+
+    def _cancel_after(self, timer_id) -> None:
+        """Cancel a Tk timer while tolerating a root that is already closing."""
+        if not timer_id:
+            return
+        try:
+            self.root.after_cancel(timer_id)
+        except Exception:
+            pass
+
     def _setup_window(self):
         """Configure the main window."""
         self.root.title("CriTTS Recoded")
@@ -899,14 +926,14 @@ class MainWindow:
     def _schedule_voice_indicator_update(self):
         """Debounce expensive voice-indicator analysis with latest-wins semantics."""
         if self._voice_indicator_timer:
-            self.root.after_cancel(self._voice_indicator_timer)
+            self._cancel_after(self._voice_indicator_timer)
             self._voice_indicator_timer = None
 
         request = self._voice_indicator_scheduler.next_request(
             self.text_input.get("1.0", "end-1c")
         )
 
-        self._voice_indicator_timer = self.root.after(
+        self._voice_indicator_timer = self._safe_after(
             300,
             lambda pending_request=request: self._run_scheduled_voice_indicator_update(pending_request),
         )
@@ -915,6 +942,8 @@ class MainWindow:
         """Run deferred voice-indicator analysis only if it is still current."""
         self._voice_indicator_timer = None
 
+        if not getattr(self, "_async_callbacks_active", True):
+            return
         if not self._voice_indicator_scheduler.is_latest(request):
             return
 
@@ -1009,11 +1038,11 @@ class MainWindow:
         
         # Reset debounce timer
         if self._typing_debounce_timer:
-            self.root.after_cancel(self._typing_debounce_timer)
+            self._cancel_after(self._typing_debounce_timer)
         
         # Set new debounce timer to stop typing after timeout
         timeout_seconds = self.settings.get("vrchat_osc_typing_timeout", 2.0)
-        self._typing_debounce_timer = self.root.after(int(timeout_seconds * 1000), self._stop_typing_animation)
+        self._typing_debounce_timer = self._safe_after(int(timeout_seconds * 1000), self._stop_typing_animation)
     
     def _animate_typing_indicator(self):
         """Animate the typing indicator with dots."""
@@ -1036,7 +1065,7 @@ class MainWindow:
         self._typing_animation_state = (self._typing_animation_state + 1) % 3
         
         # Schedule next animation frame (1500ms interval to match VRChat rate limit)
-        self._typing_animation_timer = self.root.after(1500, self._animate_typing_indicator)
+        self._typing_animation_timer = self._safe_after(1500, self._animate_typing_indicator)
     
     def _stop_typing_animation(self, send_clear: bool = True):
         """Stop the typing animation.
@@ -1048,12 +1077,12 @@ class MainWindow:
         """
         # Cancel animation timer
         if self._typing_animation_timer:
-            self.root.after_cancel(self._typing_animation_timer)
+            self._cancel_after(self._typing_animation_timer)
             self._typing_animation_timer = None
         
         # Cancel debounce timer
         if self._typing_debounce_timer:
-            self.root.after_cancel(self._typing_debounce_timer)
+            self._cancel_after(self._typing_debounce_timer)
             self._typing_debounce_timer = None
         
         # Send typing indicator OFF (only if OSC is enabled)
@@ -1127,7 +1156,7 @@ class MainWindow:
                     False
                 )
                 if wait_time > 0:
-                    self.root.after(int(wait_time * 1000), lambda args=send_args: self._send_chatbox_message(*args))
+                    self._safe_after(int(wait_time * 1000), lambda args=send_args: self._send_chatbox_message(*args))
                 else:
                     self._send_chatbox_message(*send_args)
             except Exception:
@@ -1212,7 +1241,7 @@ class MainWindow:
                         if not segment_text.strip():
                             continue
 
-                        self.root.after(0, lambda: self._set_status("Generating speech...", "🔊", "speaking"))
+                        self._safe_after(0, lambda: self._set_status("Generating speech...", "🔊", "speaking"))
 
                         audio_data, error = loop.run_until_complete(
                             self.tts_engine.generate_speech(segment_text, voice, rate, volume, pitch, self._stop_event)
@@ -1222,13 +1251,13 @@ class MainWindow:
                             return
 
                         if error:
-                            self.root.after(0, lambda e=error: self._show_error(f"TTS Error: {e}"))
+                            self._safe_after(0, lambda e=error: self._show_error(f"TTS Error: {e}"))
                             return
 
                         if not audio_data:
                             continue
 
-                        self.root.after(0, lambda: self._set_status("Playing audio...", "▶️", "speaking"))
+                        self._safe_after(0, lambda: self._set_status("Playing audio...", "▶️", "speaking"))
                         success = loop.run_until_complete(
                             self._play_audio_segment(
                                 audio_data,
@@ -1246,7 +1275,7 @@ class MainWindow:
                             return
 
                         if not success:
-                            self.root.after(0, lambda: self._show_error("Failed to play audio to device."))
+                            self._safe_after(0, lambda: self._show_error("Failed to play audio to device."))
                             return
 
                     elif segment_type == "sound":
@@ -1261,7 +1290,7 @@ class MainWindow:
                         slot_path = slot_path.strip()
 
                         if not slot_path:
-                            self.root.after(
+                            self._safe_after(
                                 0,
                                 lambda s=slot: self._set_status(
                                     f"Soundboard slot [{s}] is empty. Skipping.",
@@ -1272,7 +1301,7 @@ class MainWindow:
                             continue
 
                         if not os.path.isfile(slot_path):
-                            self.root.after(
+                            self._safe_after(
                                 0,
                                 lambda s=slot, p=slot_path: self._set_status(
                                     f"Soundboard slot [{s}] file not found: {p}",
@@ -1286,7 +1315,7 @@ class MainWindow:
                             with open(slot_path, "rb") as f:
                                 slot_audio_data = f.read()
                         except Exception as file_error:
-                            self.root.after(
+                            self._safe_after(
                                 0,
                                 lambda s=slot, e=str(file_error): self._set_status(
                                     f"Failed loading soundboard slot [{s}]: {e}",
@@ -1297,7 +1326,7 @@ class MainWindow:
                             continue
 
                         if not slot_audio_data:
-                            self.root.after(
+                            self._safe_after(
                                 0,
                                 lambda s=slot: self._set_status(
                                     f"Soundboard slot [{s}] file is empty. Skipping.",
@@ -1307,7 +1336,7 @@ class MainWindow:
                             )
                             continue
 
-                        self.root.after(
+                        self._safe_after(
                             0,
                             lambda s=slot: self._set_status(
                                 f"Playing sound slot [{s}]...",
@@ -1332,7 +1361,7 @@ class MainWindow:
                             return
 
                         if not success:
-                            self.root.after(
+                            self._safe_after(
                                 0,
                                 lambda s=slot: self._set_status(
                                     f"Failed to play soundboard slot [{s}].",
@@ -1346,19 +1375,19 @@ class MainWindow:
             if self._stop_event.is_set():
                 return
             if not success:
-                self.root.after(0, lambda: self._show_error("Failed to play audio to device."))
+                self._safe_after(0, lambda: self._show_error("Failed to play audio to device."))
                 return
-            self.root.after(0, lambda: self._set_status("Finished", "✅"))
+            self._safe_after(0, lambda: self._set_status("Finished", "✅"))
             
         except Exception as e:
-            self.root.after(0, lambda: self._show_error(f"Error: {str(e)}"))
+            self._safe_after(0, lambda: self._show_error(f"Error: {str(e)}"))
         finally:
             if loop:
                 loop.close()
             with self._speaking_lock:
                 self._speaking = False
             self._worker_thread = None
-            self.root.after(0, lambda: self._update_ui_speaking(False))
+            self._safe_after(0, lambda: self._update_ui_speaking(False))
 
     async def _play_audio_segment(
         self,
@@ -1448,7 +1477,7 @@ class MainWindow:
         """
         try:
             # Update status
-            self.root.after(0, lambda: self._set_status("Streaming speech...", "🔊"))
+            self._safe_after(0, lambda: self._set_status("Streaming speech...", "🔊"))
             
             # Check if voice amplitude feature is enabled for VRChat
             voice_amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
@@ -1600,7 +1629,7 @@ class MainWindow:
         
         # Cancel any existing timeout timer
         if self._stt_timeout_timer:
-            self.root.after_cancel(self._stt_timeout_timer)
+            self._cancel_after(self._stt_timeout_timer)
             self._stt_timeout_timer = None
         
         # Stop spinner animation if not transcribing
@@ -1634,7 +1663,7 @@ class MainWindow:
             # Start spinner animation
             self._start_stt_spinner()
             # Set timeout to restore button if transcription hangs
-            self._stt_timeout_timer = self.root.after(
+            self._stt_timeout_timer = self._safe_after(
                 self._STT_TIMEOUT_MS,
                 self._on_stt_timeout
             )
@@ -1650,7 +1679,7 @@ class MainWindow:
             if self._overlay_visible and self._recording_overlay:
                 self._recording_overlay.set_recording(False)
             # Auto-reset to IDLE after 2 seconds
-            self.root.after(2000, lambda: self._set_stt_state(STTState.IDLE))
+            self._safe_after(2000, lambda: self._set_stt_state(STTState.IDLE))
     
     def _on_stt_timeout(self):
         """Handle transcription timeout - restore button and show error."""
@@ -1683,7 +1712,7 @@ class MainWindow:
             self._stt_spinner_index = (self._stt_spinner_index + 1) % len(self._stt_spinner_frames)
             
             # Schedule next frame
-            self.root.after(400, self._animate_stt_spinner)
+            self._safe_after(400, self._animate_stt_spinner)
     
     def _stop_stt_spinner(self):
         """Stop the spinner animation."""
@@ -1744,7 +1773,7 @@ class MainWindow:
     def _on_stt_result_safe(self, text: str):
         """Handle successful STT transcription with guaranteed state restoration."""
         # Use root.after to safely update UI from background thread
-        self.root.after(0, lambda: self._handle_stt_result_safe(text))
+        self._safe_after(0, lambda: self._handle_stt_result_safe(text))
     
     def _handle_stt_result_safe(self, text: str):
         """Safely handle STT result with guaranteed state restoration."""
@@ -1761,7 +1790,7 @@ class MainWindow:
     def _on_stt_error_safe(self, exception: Exception):
         """Handle STT error with guaranteed state restoration."""
         # Use root.after to safely update UI from background thread
-        self.root.after(0, lambda: self._handle_stt_error_safe(exception))
+        self._safe_after(0, lambda: self._handle_stt_error_safe(exception))
     
     def _handle_stt_error_safe(self, exception: Exception):
         """Safely handle STT error with guaranteed state restoration."""
@@ -1774,7 +1803,7 @@ class MainWindow:
     def _on_stt_result(self, text: str):
         """Handle successful STT transcription (called from background thread)."""
         # Use root.after to safely update UI from background thread
-        self.root.after(0, lambda: self._insert_stt_text(text))
+        self._safe_after(0, lambda: self._insert_stt_text(text))
     
     def _insert_stt_text(self, text: str):
         """Insert transcribed text into the text input (called on main thread)."""
@@ -1800,7 +1829,7 @@ class MainWindow:
         # Check if auto-speak is enabled and automatically speak the text
         if self.settings.get("stt_auto_speak", False) and text.strip():
             # Automatically trigger speak after a short delay to let UI update
-            self.root.after(100, self._on_speak)
+            self._safe_after(100, self._on_speak)
 
     def _send_chatbox_message(self, text: str, play_notification_sound: bool, show_keyboard: bool):
         """Send a message to the VRChat chatbox and track cooldown timing."""
@@ -1843,7 +1872,7 @@ class MainWindow:
     def _on_stt_error(self, exception: Exception):
         """Handle STT error (called from background thread)."""
         # Use root.after to safely update UI from background thread
-        self.root.after(0, lambda: self._handle_stt_error(exception))
+        self._safe_after(0, lambda: self._handle_stt_error(exception))
     
     def _handle_stt_error(self, exception: Exception):
         """Handle STT error on main thread."""
@@ -1876,7 +1905,7 @@ class MainWindow:
         to safely update the UI on the main thread.
         """
         # Schedule UI update on main thread
-        self.root.after(0, self._handle_stt_auto_stop)
+        self._safe_after(0, self._handle_stt_auto_stop)
     
     def _handle_stt_auto_stop(self):
         """Handle STT auto-stop on the main thread."""
@@ -1949,7 +1978,7 @@ class MainWindow:
             self._speaking_animation_index = (self._speaking_animation_index + 1) % len(self._speaking_animation_frames)
             
             # Schedule next frame (500ms for smooth animation)
-            self.root.after(500, self._animate_speaking_button)
+            self._safe_after(500, self._animate_speaking_button)
     
     def _stop_speaking_animation(self):
         """Stop the speaking animation."""
@@ -2030,7 +2059,7 @@ class MainWindow:
                 except Exception:
                     pass  # Button may have been destroyed or reconfigured
             
-            self.root.after(int(duration * 300), reset_size)
+            self._safe_after(int(duration * 300), reset_size)
         except Exception:
             pass  # Button may not support width configuration
     
@@ -2130,7 +2159,7 @@ class MainWindow:
         self._progress_animation_index = (self._progress_animation_index + 1) % len(frames)
         
         # Schedule next frame (80ms for smooth spinner)
-        self.root.after(80, self._animate_progress)
+        self._safe_after(80, self._animate_progress)
     
     def _stop_progress_animation(self):
         """Stop the progress animation."""
@@ -2569,10 +2598,16 @@ class MainWindow:
 
     def _on_coqui_status(self, message: str) -> None:
         """Called (from a background thread) with a Coqui model status message."""
-        self.root.after(0, lambda msg=message: self._set_status(msg, "⬇️", "info"))
+        self._safe_after(0, lambda msg=message: self._set_status(msg, "⬇️", "info"))
     
     def shutdown(self):
         """Gracefully shutdown the main window and wait for worker threads."""
+        if not self._async_callbacks_active:
+            return
+        # Invalidate callbacks before stopping workers.  Their finally blocks
+        # can still run while this method joins the worker.
+        self._async_callbacks_active = False
+
         # Stop typing animation if active
         if self._is_typing_active:
             self._stop_typing_animation()

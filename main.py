@@ -340,6 +340,15 @@ class CriTTSApp(ctk.CTk):
             return
         self._cleaned_up = True
         
+        # Invalidate GUI callbacks and stop the main-window worker before
+        # destroying the Tk root.  The worker may otherwise call root.after()
+        # after Tcl has already been torn down.
+        if hasattr(self, 'main_window'):
+            try:
+                self.main_window.shutdown()
+            except Exception:
+                logging.getLogger(__name__).exception("Error shutting down main window")
+
         # Stop any active audio playback
         if hasattr(self, 'audio_router'):
             self.audio_router.stop_playback()

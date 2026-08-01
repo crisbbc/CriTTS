@@ -9,6 +9,7 @@ import re
 import sys
 import logging
 import threading
+import math
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -206,15 +207,11 @@ class SettingsManager:
                     self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
                     self.save_settings()
                     return
-                # Merge with defaults to ensure all keys exist
+                # Merge with defaults, then normalize persisted values before
+                # anything consumes them.  Validation alone is not sufficient:
+                # malformed JSON values otherwise remain live at runtime.
                 self._settings = {**copy.deepcopy(self.DEFAULT_SETTINGS), **loaded}
-                # Validate abbreviations is a dictionary
-                abbreviations = self._settings.get("abbreviations")
-                if not isinstance(abbreviations, dict):
-                    logger.warning("abbreviations setting corrupted or invalid; resetting to default.")
-                    self._settings["abbreviations"] = copy.deepcopy(self.DEFAULT_SETTINGS["abbreviations"])
-                # Validate voice_preview_text for corruption
-                self._validate_text_setting("voice_preview_text", self.DEFAULT_SETTINGS["voice_preview_text"])
+                self._normalize_loaded_settings()
                 self._migrate_voice_setting()
                 
                 # Validate all settings and log any issues
@@ -289,33 +286,102 @@ class SettingsManager:
         
         return True
     
+    def _normalize_loaded_settings(self):
+        """Replace malformed persisted values with their individual defaults."""
+        for key, default in self.DEFAULT_SETTINGS.items():
+            if key not in self._settings:
+                continue
+            value = self._settings[key]
+            valid = True
+
+            if default is None:
+                # Optional paths and device indexes have a concrete shape even
+                # though their default is None.
+                if key in {"audio_cache_path", "voice_cache_path"}:
+                    valid = value is None or isinstance(value, str)
+                elif key in {"device_index", "stt_mic_device_index", "mic_passthrough_device_index", "mic_passthrough_output_device_index"}:
+                    valid = value is None or (isinstance(value, int) and not isinstance(value, bool))
+                else:
+                    valid = value is None or isinstance(value, (str, int, float, bool))
+            elif isinstance(default, bool):
+                valid = isinstance(value, bool)
+            elif isinstance(default, (int, float)):
+                valid = (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                )
+            else:
+                valid = isinstance(value, type(default))
+
+            if not valid:
+                logger.warning("Setting '%s' has an invalid type; resetting to default.", key)
+                self._settings[key] = copy.deepcopy(default)
+
+        # Validate the structured values that have stricter schemas than their
+        # container type alone conveys.
+        self._validate_text_setting("voice_preview_text", self.DEFAULT_SETTINGS["voice_preview_text"])
+        for key in ("abbreviations", "soundboard_slots", "keybinds", "language_voice_mappings", "stt_corrections"):
+            if not isinstance(self._settings.get(key), dict):
+                logger.warning("Setting '%s' is not a dictionary; resetting to default.", key)
+                self._settings[key] = copy.deepcopy(self.DEFAULT_SETTINGS[key])
+
+        # Apply the same range rules used by interactive settings changes.
+        ranges = {
+            "rate": (-100, 100),
+            "volume": (0, 100),
+            "pitch": (-100, 100),
+            "audio_cache_max_size_mb": (1, None),
+            "stt_silence_threshold": (0, None),
+            "mic_passthrough_volume": (0, 200),
+            "vrchat_osc_port": (1, 65535),
+        }
+        for key, (minimum, maximum) in ranges.items():
+            value = self._settings.get(key)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                self._settings[key] = copy.deepcopy(self.DEFAULT_SETTINGS[key])
+                continue
+            if (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
+                logger.warning("Setting '%s' is out of range; resetting to default.", key)
+                self._settings[key] = copy.deepcopy(self.DEFAULT_SETTINGS[key])
+
+        if self._settings.get("tts_provider") not in self.VALID_TTS_PROVIDERS:
+            self._settings["tts_provider"] = self.DEFAULT_SETTINGS["tts_provider"]
+        if self._settings.get("appearance_mode") not in ("Dark", "Light", "System"):
+            self._settings["appearance_mode"] = self.DEFAULT_SETTINGS["appearance_mode"]
+        if self._settings.get("normalization_type") not in ("Peak", "RMS", "LUFS", "None"):
+            self._settings["normalization_type"] = self.DEFAULT_SETTINGS["normalization_type"]
+
     def _migrate_voice_setting(self):
-        """
-        Migrate legacy voice setting: if saved value is a friendly name (contains spaces/parentheses),
-        map it to the corresponding short_name. Only fall back to default if no match exists.
-        Preserves existing valid short_name (no spaces/parentheses).
-        """
+        """Migrate legacy friendly voice names without destroying valid Coqui IDs."""
         voice = self._settings.get("voice")
-        if not voice or not isinstance(voice, str):
+        if not isinstance(voice, str) or not voice:
             return
-        
-        # If it's already a valid short_name (no spaces or parentheses), preserve it
+
+        # XTTS speaker IDs are human names containing spaces.  They are valid
+        # identifiers, not legacy Edge display names, and metadata is loaded
+        # after SettingsManager during startup.
+        if self._settings.get("tts_provider") == "coqui":
+            if self._voices_mapping and voice in self._voices_mapping:
+                self._settings["voice"] = self._voices_mapping[voice]
+                self.save_settings()
+            return
+
         if " " not in voice and "(" not in voice and ")" not in voice:
             return
-        
-        # It's a friendly name - try to map it to short_name
+
         if self._voices_mapping and voice in self._voices_mapping:
-            # Map friendly name to short_name
             self._settings["voice"] = self._voices_mapping[voice]
             logger.info("Migrated voice setting '%s' to '%s'", voice, self._settings["voice"])
-            # Persist the migration immediately to avoid re-running on next launch
             self.save_settings()
-        else:
-            # No mapping available - fall back to default
-            logger.warning("Could not map voice '%s' to short_name; resetting to default", voice)
-            self._settings["voice"] = self.DEFAULT_SETTINGS["voice"]
-            # Persist the migration immediately to avoid re-running on next launch
-            self.save_settings()
+            return
+
+        defaults = {"edge": "en-US-AriaNeural", "piper": "en_US-lessac-medium"}
+        provider = self._settings.get("tts_provider", "edge")
+        replacement = defaults.get(provider, self.DEFAULT_SETTINGS["voice"])
+        logger.warning("Could not map voice '%s' for provider '%s'; resetting to '%s'", voice, provider, replacement)
+        self._settings["voice"] = replacement
+        self.save_settings()
     
     def save_settings(self):
         """Save current settings to JSON file (atomic write to prevent corruption)."""
@@ -340,10 +406,44 @@ class SettingsManager:
         with self._lock:
             return self._settings.get(key, default)
     
+    @staticmethod
+    def _default_voice_for_provider(provider: str) -> str:
+        """Return the safe initial voice for a provider."""
+        return {
+            "edge": "en-US-AriaNeural",
+            "piper": "en_US-lessac-medium",
+            "coqui": "Claribel Dervla",
+        }.get(provider, SettingsManager.DEFAULT_SETTINGS["voice"])
+
+    def _voice_matches_provider(self, voice: object, provider: str) -> bool:
+        """Recognize provider voice identifier shapes without importing runtimes."""
+        if not isinstance(voice, str) or not voice:
+            return False
+        if provider == "coqui":
+            # XTTS speaker IDs are human-readable names.  Prefer the mapping
+            # when metadata is loaded, but keep unknown future speaker names
+            # rather than replacing them with a stale hard-coded list.
+            if voice in self._voices_mapping or voice in self._voices_mapping.values():
+                return True
+            return " " in voice and "(" not in voice and ")" not in voice
+        if provider == "piper":
+            return "_" in voice and voice.count("-") >= 2 and " " not in voice
+        if provider == "edge":
+            return voice.endswith("Neural") and " " not in voice
+        return False
+
     def set(self, key, value):
         """Set a setting value by key with validation."""
         with self._lock:
             
+            # A provider switch invalidates the previous provider's voice.  Do
+            # this before assigning the new provider so a later voice-tab value
+            # in the same settings transaction can still replace the fallback.
+            if key == "tts_provider" and value in self.VALID_TTS_PROVIDERS:
+                current_voice = self._settings.get("voice")
+                if value != self._settings.get("tts_provider") and not self._voice_matches_provider(current_voice, value):
+                    self._settings["voice"] = self._default_voice_for_provider(value)
+
             # Validate keybind format if setting keybinds
             if key == "keybinds" and isinstance(value, dict):
                 validated_keybinds = {}
@@ -382,6 +482,27 @@ class SettingsManager:
                 logger.warning("Invalid TTS provider: %s, using default", value)
                 value = self.DEFAULT_SETTINGS["tts_provider"]
 
+            # Normalize numeric settings so programmatic updates cannot inject
+            # strings or out-of-range values into runtime arithmetic.
+            numeric_ranges = {
+                "rate": (-100, 100),
+                "volume": (0, 100),
+                "pitch": (-100, 100),
+                "audio_cache_max_size_mb": (1, None),
+                "stt_silence_threshold": (0, None),
+                "mic_passthrough_volume": (0, 200),
+            }
+            if key in numeric_ranges:
+                minimum, maximum = numeric_ranges[key]
+                try:
+                    numeric_value = float(value)
+                    if not math.isfinite(numeric_value) or (minimum is not None and numeric_value < minimum) or (maximum is not None and numeric_value > maximum):
+                        raise ValueError
+                    value = int(numeric_value) if isinstance(self.DEFAULT_SETTINGS[key], int) else numeric_value
+                except (TypeError, ValueError):
+                    logger.warning("Invalid %s: %s, using default", key, value)
+                    value = self.DEFAULT_SETTINGS[key]
+
             # Validate Coqui GPU device index
             if key == "coqui_gpu_device":
                 try:
@@ -395,7 +516,7 @@ class SettingsManager:
     def get_all(self):
         """Get all settings as a dictionary."""
         with self._lock:
-            return self._settings.copy()
+            return copy.deepcopy(self._settings)
 
     def get_persisted_settings(self):
         """Get the last settings snapshot that successfully loaded from or saved to disk."""

@@ -7,6 +7,9 @@ import hashlib
 import time
 import threading
 import logging
+import os
+import tempfile
+import math
 from pathlib import Path
 from typing import Optional, Dict, Any
 from collections import OrderedDict
@@ -110,8 +113,7 @@ class AudioCache:
         a batch flush.
         """
         with self._lock:
-            if self._dirty:
-                self._save_index()
+            if self._dirty and self._save_index():
                 self._dirty = False
                 self._last_flush_time = time.time()
                 logger.debug("Flushed audio cache index to disk")
@@ -181,9 +183,10 @@ class AudioCache:
             logger.warning("Failed to load cache index: %s", e)
             self._index = OrderedDict()
     
-    def _save_index(self):
-        """Save cache index to disk."""
+    def _save_index(self) -> bool:
+        """Save cache index atomically so interruption cannot truncate it."""
         index_path = self._get_index_path()
+        tmp_path = None
         try:
             data = {
                 "version": self.CACHE_VERSION,
@@ -194,10 +197,24 @@ class AudioCache:
                     "total_saved_time": self._total_saved_time
                 }
             }
-            with open(index_path, 'w', encoding='utf-8') as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.cache_dir,
+                prefix=f".{index_path.name}.", suffix=".tmp", delete=False,
+            ) as f:
+                tmp_path = Path(f.name)
                 json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, index_path)
+            return True
         except Exception as e:
             logger.warning("Failed to save cache index: %s", e)
+            try:
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
     
     def _rebuild_index(self):
         """
@@ -243,7 +260,8 @@ class AudioCache:
             # Recompute running total
             self._total_size_bytes = sum(e.get("size_bytes", 0) for e in self._index.values())
 
-            self._save_index()
+            if not self._save_index():
+                self._dirty = True
             logger.info("Rebuilt cache index with %d entries", len(self._index))
             
         except Exception as e:
@@ -261,7 +279,8 @@ class AudioCache:
                 except OSError:
                     pass
 
-        self._save_index()
+        if not self._save_index():
+            self._dirty = True
 
     def _generate_key(
         self,
@@ -389,10 +408,27 @@ class AudioCache:
             key = self._generate_key(text, voice, rate, volume, pitch, provider)
             
             try:
-                # Save audio file
+                # Save audio file atomically; a crash during a write must not
+                # leave an indexed but truncated MP3 behind.
                 cache_path = self.cache_dir / f"{key}.mp3"
-                with open(cache_path, 'wb') as f:
-                    f.write(audio_data)
+                audio_tmp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        mode="wb", dir=self.cache_dir,
+                        prefix=f".{cache_path.name}.", suffix=".tmp", delete=False,
+                    ) as f:
+                        audio_tmp_path = Path(f.name)
+                        f.write(audio_data)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(audio_tmp_path, cache_path)
+                except Exception:
+                    try:
+                        if audio_tmp_path is not None:
+                            audio_tmp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    raise
                 
                 # Create metadata (stored in centralized index, not individual files)
                 meta = {
@@ -425,11 +461,11 @@ class AudioCache:
                 
                 # Flush if batch threshold reached
                 if self._store_count >= self.FLUSH_INTERVAL_STORES:
-                    self._save_index()
-                    self._dirty = False
-                    self._store_count = 0
-                    self._last_flush_time = time.time()
-                    logger.debug("Flushed audio cache index (batch threshold reached)")
+                    if self._save_index():
+                        self._dirty = False
+                        self._store_count = 0
+                        self._last_flush_time = time.time()
+                        logger.debug("Flushed audio cache index (batch threshold reached)")
                 
                 # Check if cleanup needed
                 self._cleanup_if_needed()
@@ -483,10 +519,10 @@ class AudioCache:
         
         if removed_count > 0:
             logger.info("Cache cleanup: removed %d entries, freed %.2f MB", removed_count, removed_size / (1024*1024))
-            self._save_index()
-            # Reset state after cleanup to ensure consistency
-            self._dirty = False
-            self._store_count = 0
+            if self._save_index():
+                # Reset state after cleanup to ensure consistency
+                self._dirty = False
+                self._store_count = 0
     
     def clear(self) -> bool:
         """
@@ -511,13 +547,17 @@ class AudioCache:
                 
                 self._index.clear()
                 self._total_size_bytes = 0
-                self._save_index()
 
-                # Reset statistics
+                # Reset statistics before persisting the now-empty cache.
                 self._hits = 0
                 self._misses = 0
                 self._total_saved_time = 0.0
-                
+                self._dirty = True
+                if not self._save_index():
+                    return False
+                self._dirty = False
+                self._store_count = 0
+
                 logger.info("Audio cache cleared")
                 return True
                 
@@ -584,9 +624,11 @@ class AudioCache:
                     logger.debug("Failed to remove old cache entry: %s", e)
             
             if removed > 0:
-                self._save_index()
+                self._dirty = True
+                if self._save_index():
+                    self._dirty = False
                 logger.info("Pruned %d cache entries older than %d days", removed, max_age_days)
-            
+
             return removed
     
     def set_max_size(self, max_size_mb: int):
@@ -615,8 +657,7 @@ class AudioCache:
         self._stop_flush_timer()
         
         with self._lock:
-            if self._dirty:
-                self._save_index()
+            if self._dirty and self._save_index():
                 self._dirty = False
             logger.debug("Audio cache shutdown complete")
 
@@ -640,26 +681,62 @@ class PhraseTracker:
         self._lock = threading.Lock()
         self._load_stats()
     
+    @staticmethod
+    def _is_valid_stat_entry(entry: Any) -> bool:
+        """Return whether a persisted phrase entry has the expected schema."""
+        if not isinstance(entry, dict):
+            return False
+        if not isinstance(entry.get("text"), str) or not isinstance(entry.get("voice"), str):
+            return False
+        count = entry.get("count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            return False
+        for key in ("first_used", "last_used"):
+            value = entry.get(key)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)):
+                return False
+        return True
+
     def _load_stats(self):
-        """Load phrase statistics from disk."""
+        """Load only valid phrase statistics, ignoring malformed entries."""
         if not self.stats_path.exists():
             return
-        
+
         try:
             with open(self.stats_path, 'r', encoding='utf-8') as f:
-                self._stats = json.load(f)
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                raise ValueError("phrase stats root must be an object")
+            self._stats = {
+                key: entry
+                for key, entry in loaded.items()
+                if isinstance(key, str) and self._is_valid_stat_entry(entry)
+            }
         except Exception as e:
             logger.debug("Failed to load phrase stats: %s", e)
             self._stats = {}
-    
+
     def _save_stats(self):
-        """Save phrase statistics to disk."""
+        """Save phrase statistics atomically to disk."""
+        tmp_path = None
         try:
             self.stats_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.stats_path, 'w', encoding='utf-8') as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.stats_path.parent,
+                prefix=f".{self.stats_path.name}.", suffix=".tmp", delete=False,
+            ) as f:
+                tmp_path = Path(f.name)
                 json.dump(self._stats, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.stats_path)
         except Exception as e:
             logger.debug("Failed to save phrase stats: %s", e)
+            try:
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
     
     def track_usage(self, text: str, voice: str):
         """
@@ -708,7 +785,7 @@ class PhraseTracker:
             phrases = [
                 (entry["text"], entry["voice"], entry["count"])
                 for entry in self._stats.values()
-                if entry["count"] >= min_uses
+                if self._is_valid_stat_entry(entry) and entry["count"] >= min_uses
             ]
             
             # Sort by count descending
