@@ -72,6 +72,7 @@ class STTEngine:
         self._sample_rate = 16000  # Standard sample rate for speech recognition
         self._stream: Optional[sd.InputStream] = None
         self._lock = threading.Lock()
+        self._buffer_lock = threading.Lock()  # Protects _audio_buffer/_buffer_size_bytes
         self._buffer_size_bytes = 0  # Track total buffer size for memory limit
         self._max_buffer_bytes = self._MAX_RECORDING_DURATION_SECONDS * self._sample_rate * 2  # 2 bytes per sample (int16)
         self._auto_stopped_event = threading.Event()  # Thread-safe flag for auto-stop signaling
@@ -92,8 +93,9 @@ class STTEngine:
             
             try:
                 # Clear the audio buffer and reset size counter
-                self._audio_buffer = []
-                self._buffer_size_bytes = 0
+                with self._buffer_lock:
+                    self._audio_buffer = []
+                    self._buffer_size_bytes = 0
                 self._auto_stopped_event.clear()  # Reset auto-stop flag (thread-safe)
                 
                 # Get microphone device index from settings
@@ -144,28 +146,31 @@ class STTEngine:
         if status:
             logger.warning("Audio stream status: %s", status)
         
-        # Check if buffer size limit would be exceeded
+        # Check if buffer size limit would be exceeded.  Buffer mutations are
+        # guarded by _buffer_lock so stop_and_transcribe()/shutdown() can copy or
+        # reset the buffer without racing this realtime callback.
         chunk_size_bytes = indata.nbytes
-        if self._buffer_size_bytes + chunk_size_bytes > self._max_buffer_bytes:
-            # Stop recording to prevent memory exhaustion
-            logger.error(
-                "Recording buffer exceeded maximum size (%d seconds), stopping recording. "
-                "Recording may be incomplete.",
-                self._MAX_RECORDING_DURATION_SECONDS
-            )
-            # Reset listening flag (thread-safe operation)
-            # The main thread polls this flag via the is_listening property
-            self._is_listening_event.clear()
-            # Set thread-safe event to signal auto-stop occurred - the main thread will
-            # handle the callback via polling in stop_and_transcribe
-            self._auto_stopped_event.set()
-            # Signal stop by raising an exception in the callback
-            # This will stop the stream
-            raise sd.CallbackStop()
-        
-        # Append a copy of the audio data to the buffer
-        self._audio_buffer.append(indata.copy())
-        self._buffer_size_bytes += chunk_size_bytes
+        with self._buffer_lock:
+            if self._buffer_size_bytes + chunk_size_bytes > self._max_buffer_bytes:
+                # Stop recording to prevent memory exhaustion
+                logger.error(
+                    "Recording buffer exceeded maximum size (%d seconds), stopping recording. "
+                    "Recording may be incomplete.",
+                    self._MAX_RECORDING_DURATION_SECONDS
+                )
+                # Reset listening flag (thread-safe operation)
+                # The main thread polls this flag via the is_listening property
+                self._is_listening_event.clear()
+                # Set thread-safe event to signal auto-stop occurred - the main thread will
+                # handle the callback via polling in stop_and_transcribe
+                self._auto_stopped_event.set()
+                # Signal stop by raising an exception in the callback
+                # This will stop the stream
+                raise sd.CallbackStop()
+
+            # Append a copy of the audio data to the buffer
+            self._audio_buffer.append(indata.copy())
+            self._buffer_size_bytes += chunk_size_bytes
     
     def stop_and_transcribe(
         self,
@@ -180,26 +185,32 @@ class STTEngine:
             on_result: Callback function called with transcribed text
             on_error: Callback function called with exception on error
         """
+        stream = None
         with self._lock:
             is_listening = self._is_listening_event.is_set()
             auto_stopped = self._auto_stopped_event.is_set()
             if not is_listening and not auto_stopped:
                 logger.warning("Not currently listening, ignoring stop_and_transcribe call")
                 return
-            
-            # Stop and close the stream
+
             self._is_listening_event.clear()
-            if self._stream:
-                try:
-                    self._stream.stop()
-                    self._stream.close()
-                except Exception as e:
-                    logger.error("Error closing audio stream: %s", e)
-                self._stream = None
-            
-            # Copy the audio buffer for processing
-            audio_buffer = list(self._audio_buffer)
+            stream = self._stream
+            self._stream = None
             self._auto_stopped_event.clear()
+
+        # Stop and close the stream OUTSIDE the lock.  InputStream.stop() waits
+        # for the current audio callback to return, and the callback now takes
+        # _buffer_lock — holding any lock across stop() could deadlock.
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception as e:
+                logger.error("Error closing audio stream: %s", e)
+
+        # Copy the audio buffer for processing (under its own lock).
+        with self._buffer_lock:
+            audio_buffer = list(self._audio_buffer)
         
         logger.info("Stopped recording, %d audio chunks to process", len(audio_buffer))
         
@@ -508,19 +519,23 @@ class STTEngine:
         Shutdown the STT engine and stop any active recording.
         Called from CriTTSApp._on_closing.
         """
+        stream = None
         with self._lock:
             if self._is_listening_event.is_set():
                 logger.info("Shutting down STT engine, stopping active recording")
                 self._is_listening_event.clear()
-                
-                if self._stream:
-                    try:
-                        self._stream.stop()
-                        self._stream.close()
-                    except Exception as e:
-                        logger.error("Error closing audio stream during shutdown: %s", e)
-                    self._stream = None
-            
+                stream = self._stream
+                self._stream = None
+
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception as e:
+                logger.error("Error closing audio stream during shutdown: %s", e)
+
+        with self._buffer_lock:
             self._audio_buffer = []
+            self._buffer_size_bytes = 0
         
         logger.info("STT Engine shutdown complete")

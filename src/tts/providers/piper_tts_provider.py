@@ -639,7 +639,7 @@ class PiperTTSProvider(TTSProvider):
         if stop_event and stop_event.is_set():
             return None
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             audio_bytes = await loop.run_in_executor(
                 None,
@@ -750,7 +750,7 @@ class PiperTTSProvider(TTSProvider):
         if stop_event and stop_event.is_set():
             return
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._mark_voice_active(voice)
         try:
             piper_voice = await loop.run_in_executor(None, self._load_voice, voice)

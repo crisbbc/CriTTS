@@ -68,8 +68,8 @@ def get_local_sha() -> str | None:
     """Return the locally stored commit SHA, if any."""
     if VERSION_FILE.exists():
         sha = VERSION_FILE.read_text().strip()
-        # Validate hex format (40-char)
-        if len(sha) >= 40 and all(c in "0123456789abcdef" for c in sha):
+        # Validate full hex commit hashes only (40-char SHA-1 or 64-char SHA-256).
+        if len(sha) in (40, 64) and all(c in "0123456789abcdef" for c in sha):
             return sha
     return None
 
@@ -127,6 +127,24 @@ def _remove_path(path: Path) -> None:
         path.unlink(missing_ok=True)
     elif path.is_dir():
         shutil.rmtree(path)
+
+
+def _purge_bytecode() -> None:
+    """Delete __pycache__ directories under SCRIPT_DIR.
+
+    The updater preserves existing files, so a module removed from the new
+    revision would otherwise remain importable through stale bytecode left in
+    __pycache__.  Removing the caches forces Python to regenerate them from the
+    current sources.
+    """
+    for pycache in SCRIPT_DIR.rglob("__pycache__"):
+        try:
+            if pycache.is_dir():
+                shutil.rmtree(pycache)
+            elif pycache.is_symlink():
+                pycache.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _apply_staged_update(extracted: Path) -> None:
@@ -201,6 +219,10 @@ def download_and_apply(zipball_url: str) -> None:
     dep_hash = SCRIPT_DIR / ".dep-hash"
     if dep_hash.exists():
         dep_hash.unlink()
+
+    # Remove stale bytecode so a deleted module can't be imported from an old
+    # .pyc still present in __pycache__.
+    _purge_bytecode()
 
     print("Update applied successfully.")
 

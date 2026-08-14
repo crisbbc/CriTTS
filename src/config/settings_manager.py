@@ -14,11 +14,127 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+_VALID_TTS_PROVIDERS = ("edge", "piper", "coqui")
+
+_APPEARANCE_MODES = ("Dark", "Light", "System")
+_NORMALIZATION_TYPES = ("Peak", "RMS", "LUFS", "None")
+
+_NUMERIC_KINDS = ("int", "number")
+
+# Parameter-like prefixes that must never appear in free-text settings.
+# Anchored at the start of the whole string so a legitimate multi-line preview
+# whose later lines start with these words is not falsely rejected.
+_TEXT_PARAM_PATTERNS = (
+    re.compile(r"^rate\s*=", re.IGNORECASE),
+    re.compile(r"^volume\s*=", re.IGNORECASE),
+    re.compile(r"^pitch\s*=", re.IGNORECASE),
+    re.compile(r"^voice\s*=", re.IGNORECASE),
+    re.compile(r"^speed\s*=", re.IGNORECASE),
+)
+
+# Declarative refinements layered on top of the defaults-derived schema.  Every
+# key omitted here is still covered: its type is inferred from DEFAULT_SETTINGS,
+# and keys whose default is None are treated as nullable unless overridden.
+_SCHEMA_OVERRIDES = {
+    # Nullable keys (default None) with a concrete non-None shape.
+    "device_index": {"kind": "int"},
+    "stt_mic_device_index": {"kind": "int"},
+    "mic_passthrough_device_index": {"kind": "int"},
+    "mic_passthrough_output_device_index": {"kind": "int"},
+    "audio_cache_path": {"kind": "str"},
+    "voice_cache_path": {"kind": "str"},
+    "piper_noise_scale": {"kind": "number", "range": (0.0, 2.0)},
+    "piper_noise_w_scale": {"kind": "number", "range": (0.0, 2.0)},
+
+    # Range-constrained numbers.
+    "rate": {"range": (-100, 100)},
+    "volume": {"range": (0, 100)},
+    "pitch": {"range": (-100, 100)},
+    "audio_cache_max_size_mb": {"range": (1, None)},
+    "stt_silence_threshold": {"range": (0, None)},
+    "mic_passthrough_volume": {"range": (0, 200)},
+    "vrchat_osc_port": {"range": (1, 65535)},
+    "coqui_gpu_device": {"range": (-2, None)},
+    "stt_confidence_threshold": {"range": (0.0, 1.0)},
+    "language_detection_confidence_threshold": {"range": (0.0, 1.0)},
+    "piper_sentence_silence": {"range": (0.0, 2.0)},
+
+    # Enumerated string choices.
+    "appearance_mode": {"choices": _APPEARANCE_MODES},
+    "normalization_type": {"choices": _NORMALIZATION_TYPES},
+    "tts_provider": {"choices": _VALID_TTS_PROVIDERS},
+
+    # Free-text content guard (parameter-pattern + printability checks).
+    "voice_preview_text": {"text": True},
+}
+
+
+def _derived_kind(default):
+    """Infer a schema kind from a setting's default value."""
+    if isinstance(default, bool):
+        return "bool"
+    if isinstance(default, int):
+        return "int"
+    if isinstance(default, float):
+        return "number"
+    if isinstance(default, str):
+        return "str"
+    if isinstance(default, list):
+        return "list"
+    if isinstance(default, dict):
+        return "dict"
+    return "any"  # None (and unknown) defaults: accept anything unless overridden
+
+
+def _value_matches_kind(value, kind, nullable):
+    """Return whether `value` satisfies the given schema kind."""
+    if value is None:
+        return nullable
+    if kind == "bool":
+        return isinstance(value, bool)
+    if kind == "int":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if kind == "number":
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+        )
+    if kind == "str":
+        return isinstance(value, str)
+    if kind == "list":
+        return isinstance(value, list)
+    if kind == "dict":
+        return isinstance(value, dict)
+    return True  # "any"
+
+
+def _in_range(value, rng):
+    """Return whether `value` falls within the given (min, max) range."""
+    if rng is None:
+        return True
+    minimum, maximum = rng
+    return (minimum is None or value >= minimum) and (maximum is None or value <= maximum)
+
+
+def _build_schema(default_settings):
+    """Derive the declarative schema from defaults, refined by overrides."""
+    schema = {}
+    for key, default in default_settings.items():
+        entry = {
+            "kind": _derived_kind(default),
+            "default": default,
+            "nullable": default is None,
+        }
+        entry.update(_SCHEMA_OVERRIDES.get(key, {}))
+        schema[key] = entry
+    return schema
+
 
 class SettingsManager:
     """Manages application settings with JSON persistence."""
 
-    VALID_TTS_PROVIDERS = ("edge", "piper", "coqui")
+    VALID_TTS_PROVIDERS = _VALID_TTS_PROVIDERS
     
     DEFAULT_SETTINGS = {
         "voice": "en-US-AriaNeural",
@@ -161,6 +277,11 @@ class SettingsManager:
 
 
     
+    # Single declarative source of truth driving load normalization, set()
+    # coercion, and validate_settings().  Entries are derived from defaults
+    # and refined by the module-level `_SCHEMA_OVERRIDES` table.
+    SCHEMA = _build_schema(DEFAULT_SETTINGS)
+
     def __init__(self, config_path=None):
         """Initialize settings manager with optional custom config path."""
         if config_path is None:
@@ -241,116 +362,63 @@ class SettingsManager:
             self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
             self._update_persisted_settings_snapshot()
     
-    def _validate_text_setting(self, key: str, default_value: str) -> bool:
-        """
-        Validate a text-based setting for corruption or suspicious content.
-        
-        Args:
-            key: The setting key to validate
-            default_value: The default value to use if validation fails
-            
-        Returns:
-            True if valid, False if corrupted and reset
-        """
-        value = self._settings.get(key)
-        if value is None:
-            return True
-        
-        if not isinstance(value, str):
-            logger.warning("Setting '%s' is not a string; resetting to default.", key)
-            self._settings[key] = default_value
-            return False
-        
-        # Check for parameter-like patterns that shouldn't be in text settings
-        # Use anchored patterns to catch corrupted TTS parameter strings while
-        # allowing normal sentences that contain these words mid-sentence
-        param_patterns = [
-            r'^rate\s*=',      # Matches "rate=" at start of string or line
-            r'^volume\s*=',
-            r'^pitch\s*=',
-            r'^voice\s*=',
-            r'^speed\s*=',
-        ]
-        
-        for pattern in param_patterns:
-            if re.search(pattern, value, re.IGNORECASE | re.MULTILINE):
-                logger.warning("Setting '%s' contains suspicious parameter pattern; resetting to default. Value was: '%s'", key, value)
-                self._settings[key] = default_value
-                return False
-        
-        # Check if text contains only printable characters
+    def _text_issue(self, key, value):
+        """Return a human-readable issue for a suspicious text setting, else None."""
+        for pattern in _TEXT_PARAM_PATTERNS:
+            if pattern.match(value):
+                return f"Setting '{key}' contains a suspicious parameter pattern"
         if not all(c.isprintable() or c.isspace() for c in value):
-            logger.warning("Setting '%s' contains non-printable characters; resetting to default.", key)
-            self._settings[key] = default_value
-            return False
-        
-        return True
-    
+            return f"Setting '{key}' contains non-printable characters"
+        return None
+
+    def _coerce_setting(self, key, value):
+        """Return (coerced_value, issue) for a raw setting value.
+
+        `issue` is None when the value is valid (and canonicalized); otherwise
+        it names the problem and the value is replaced by its schema default.
+        """
+        entry = self.SCHEMA.get(key)
+        if entry is None:
+            return value, None  # Unknown keys pass through unchanged.
+
+        kind = entry["kind"]
+        default = entry["default"]
+        nullable = entry.get("nullable", False)
+
+        # Numeric kinds canonicalize numbers (and numeric strings) and reject
+        # booleans, non-finite values, and out-of-range values.
+        if kind in _NUMERIC_KINDS:
+            if value is None and nullable:
+                return None, None
+            try:
+                if isinstance(value, bool):
+                    raise ValueError
+                numeric = float(value)
+                if not math.isfinite(numeric) or not _in_range(numeric, entry.get("range")):
+                    raise ValueError
+                return (int(numeric) if kind == "int" else numeric), None
+            except (TypeError, ValueError):
+                return copy.deepcopy(default), f"Setting '{key}' has an invalid value {value!r}"
+
+        if _value_matches_kind(value, kind, nullable):
+            choices = entry.get("choices")
+            if choices is not None and value not in choices:
+                return copy.deepcopy(default), f"Setting '{key}' has an invalid choice {value!r}"
+            if entry.get("text"):
+                text_issue = self._text_issue(key, value)
+                if text_issue is not None:
+                    return copy.deepcopy(default), text_issue
+            return value, None
+
+        return copy.deepcopy(default), f"Setting '{key}' has an invalid type ({type(value).__name__})"
+
     def _normalize_loaded_settings(self):
-        """Replace malformed persisted values with their individual defaults."""
-        for key, default in self.DEFAULT_SETTINGS.items():
-            if key not in self._settings:
-                continue
-            value = self._settings[key]
-            valid = True
-
-            if default is None:
-                # Optional paths and device indexes have a concrete shape even
-                # though their default is None.
-                if key in {"audio_cache_path", "voice_cache_path"}:
-                    valid = value is None or isinstance(value, str)
-                elif key in {"device_index", "stt_mic_device_index", "mic_passthrough_device_index", "mic_passthrough_output_device_index"}:
-                    valid = value is None or (isinstance(value, int) and not isinstance(value, bool))
-                else:
-                    valid = value is None or isinstance(value, (str, int, float, bool))
-            elif isinstance(default, bool):
-                valid = isinstance(value, bool)
-            elif isinstance(default, (int, float)):
-                valid = (
-                    isinstance(value, (int, float))
-                    and not isinstance(value, bool)
-                    and math.isfinite(float(value))
-                )
-            else:
-                valid = isinstance(value, type(default))
-
-            if not valid:
-                logger.warning("Setting '%s' has an invalid type; resetting to default.", key)
-                self._settings[key] = copy.deepcopy(default)
-
-        # Validate the structured values that have stricter schemas than their
-        # container type alone conveys.
-        self._validate_text_setting("voice_preview_text", self.DEFAULT_SETTINGS["voice_preview_text"])
-        for key in ("abbreviations", "soundboard_slots", "keybinds", "language_voice_mappings", "stt_corrections"):
-            if not isinstance(self._settings.get(key), dict):
-                logger.warning("Setting '%s' is not a dictionary; resetting to default.", key)
-                self._settings[key] = copy.deepcopy(self.DEFAULT_SETTINGS[key])
-
-        # Apply the same range rules used by interactive settings changes.
-        ranges = {
-            "rate": (-100, 100),
-            "volume": (0, 100),
-            "pitch": (-100, 100),
-            "audio_cache_max_size_mb": (1, None),
-            "stt_silence_threshold": (0, None),
-            "mic_passthrough_volume": (0, 200),
-            "vrchat_osc_port": (1, 65535),
-        }
-        for key, (minimum, maximum) in ranges.items():
-            value = self._settings.get(key)
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
-                self._settings[key] = copy.deepcopy(self.DEFAULT_SETTINGS[key])
-                continue
-            if (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
-                logger.warning("Setting '%s' is out of range; resetting to default.", key)
-                self._settings[key] = copy.deepcopy(self.DEFAULT_SETTINGS[key])
-
-        if self._settings.get("tts_provider") not in self.VALID_TTS_PROVIDERS:
-            self._settings["tts_provider"] = self.DEFAULT_SETTINGS["tts_provider"]
-        if self._settings.get("appearance_mode") not in ("Dark", "Light", "System"):
-            self._settings["appearance_mode"] = self.DEFAULT_SETTINGS["appearance_mode"]
-        if self._settings.get("normalization_type") not in ("Peak", "RMS", "LUFS", "None"):
-            self._settings["normalization_type"] = self.DEFAULT_SETTINGS["normalization_type"]
+        """Normalize persisted values onto the schema, resetting malformed ones."""
+        for key, raw in list(self._settings.items()):
+            normalized, issue = self._coerce_setting(key, raw)
+            if issue:
+                logger.warning("%s; resetting to default.", issue)
+            self._settings[key] = normalized
 
     def _migrate_voice_setting(self):
         """Migrate legacy friendly voice names without destroying valid Coqui IDs."""
@@ -433,9 +501,8 @@ class SettingsManager:
         return False
 
     def set(self, key, value):
-        """Set a setting value by key with validation."""
+        """Set a setting value by key, coercing it through the shared schema."""
         with self._lock:
-            
             # A provider switch invalidates the previous provider's voice.  Do
             # this before assigning the new provider so a later voice-tab value
             # in the same settings transaction can still replace the fallback.
@@ -444,7 +511,8 @@ class SettingsManager:
                 if value != self._settings.get("tts_provider") and not self._voice_matches_provider(current_voice, value):
                     self._settings["voice"] = self._default_voice_for_provider(value)
 
-            # Validate keybind format if setting keybinds
+            # Keybind dictionaries are filtered (keeping valid entries) rather
+            # than reset wholesale, so one bad keybind doesn't discard the rest.
             if key == "keybinds" and isinstance(value, dict):
                 validated_keybinds = {}
                 for action, keybind in value.items():
@@ -453,65 +521,11 @@ class SettingsManager:
                     else:
                         logger.warning("Invalid keybind format for %s: %s", action, keybind)
                 value = validated_keybinds
-            
-            # Validate OSC port
-            if key == "vrchat_osc_port":
-                try:
-                    port = int(value)
-                    if 1 <= port <= 65535:
-                        value = port
-                    else:
-                        logger.warning("OSC port out of range: %s, using default", value)
-                        value = self.DEFAULT_SETTINGS["vrchat_osc_port"]
-                except (ValueError, TypeError):
-                    logger.warning("Invalid OSC port: %s, using default", value)
-                    value = self.DEFAULT_SETTINGS["vrchat_osc_port"]
-            
-            # Validate normalization type
-            if key == "normalization_type" and value not in ["Peak", "RMS", "LUFS", "None"]:
-                logger.warning("Invalid normalization type: %s, using default", value)
-                value = self.DEFAULT_SETTINGS["normalization_type"]
-            
-            # Validate appearance mode
-            if key == "appearance_mode" and value not in ["Dark", "Light", "System"]:
-                logger.warning("Invalid appearance mode: %s, using default", value)
-                value = self.DEFAULT_SETTINGS["appearance_mode"]
-            
-            # Validate TTS provider
-            if key == "tts_provider" and value not in self.VALID_TTS_PROVIDERS:
-                logger.warning("Invalid TTS provider: %s, using default", value)
-                value = self.DEFAULT_SETTINGS["tts_provider"]
 
-            # Normalize numeric settings so programmatic updates cannot inject
-            # strings or out-of-range values into runtime arithmetic.
-            numeric_ranges = {
-                "rate": (-100, 100),
-                "volume": (0, 100),
-                "pitch": (-100, 100),
-                "audio_cache_max_size_mb": (1, None),
-                "stt_silence_threshold": (0, None),
-                "mic_passthrough_volume": (0, 200),
-            }
-            if key in numeric_ranges:
-                minimum, maximum = numeric_ranges[key]
-                try:
-                    numeric_value = float(value)
-                    if not math.isfinite(numeric_value) or (minimum is not None and numeric_value < minimum) or (maximum is not None and numeric_value > maximum):
-                        raise ValueError
-                    value = int(numeric_value) if isinstance(self.DEFAULT_SETTINGS[key], int) else numeric_value
-                except (TypeError, ValueError):
-                    logger.warning("Invalid %s: %s, using default", key, value)
-                    value = self.DEFAULT_SETTINGS[key]
-
-            # Validate Coqui GPU device index
-            if key == "coqui_gpu_device":
-                try:
-                    idx = int(value)
-                    value = max(-2, idx)
-                except (TypeError, ValueError):
-                    value = -2
-            
-            self._settings[key] = value
+            normalized, issue = self._coerce_setting(key, value)
+            if issue:
+                logger.warning("%s; resetting to default.", issue)
+            self._settings[key] = normalized
     
     def get_all(self):
         """Get all settings as a dictionary."""
@@ -569,87 +583,44 @@ class SettingsManager:
         
         return validate_keybind_format(keybind_string)
     
-    def validate_settings(self) -> list:
-        """Validate all settings and return list of issues."""
+    def _validate_keybinds(self, keybinds) -> list:
+        """Validate keybind entries, preserving the per-action message format."""
         issues = []
-        
+        if not isinstance(keybinds, dict):
+            issues.append("keybinds setting is not a dictionary")
+            return issues
+        for action, keybind in keybinds.items():
+            if not self._validate_keybind_format(keybind):
+                issues.append(f"Invalid keybind for {action}: {keybind}")
+        return issues
+
+    def _validate_soundboard_slots(self, soundboard_slots) -> list:
+        """Validate soundboard slot keys and paths."""
+        issues = []
+        if not isinstance(soundboard_slots, dict):
+            issues.append("soundboard_slots must be a dictionary")
+            return issues
+        for slot, file_path in soundboard_slots.items():
+            if not isinstance(slot, str) or not slot.isdigit():
+                issues.append(f"Invalid soundboard slot key: {slot}")
+                continue
+
+            slot_num = int(slot)
+            if not (1 <= slot_num <= 99):
+                issues.append(f"Soundboard slot out of range (1-99): {slot}")
+
+            if file_path is not None and not isinstance(file_path, str):
+                issues.append(f"Soundboard slot '{slot}' path must be a string or null")
+        return issues
+
+    def validate_settings(self) -> list:
+        """Validate all settings against the schema and return a list of issues."""
+        issues = []
         with self._lock:
-            # Check keybinds
-            keybinds = self._settings.get("keybinds", {})
-            if not isinstance(keybinds, dict):
-                issues.append("keybinds setting is not a dictionary")
-            else:
-                for action, keybind in keybinds.items():
-                    if not self._validate_keybind_format(keybind):
-                        issues.append(f"Invalid keybind for {action}: {keybind}")
-            
-            # Check OSC settings
-            osc_port = self._settings.get("vrchat_osc_port")
-            try:
-                port = int(osc_port)
-                if not (1 <= port <= 65535):
-                    issues.append(f"OSC port out of range: {port}")
-            except (ValueError, TypeError):
-                issues.append(f"Invalid OSC port: {osc_port}")
-            
-            # Check normalization type
-            norm_type = self._settings.get("normalization_type")
-            if norm_type not in ["Peak", "RMS", "LUFS", "None"]:
-                issues.append(f"Invalid normalization type: {norm_type}")
-            
-            # Check appearance mode
-            appearance = self._settings.get("appearance_mode")
-            if appearance not in ["Dark", "Light", "System"]:
-                issues.append(f"Invalid appearance mode: {appearance}")
-            
-            # Check TTS provider
-            tts_provider = self._settings.get("tts_provider")
-            if tts_provider not in self.VALID_TTS_PROVIDERS:
-                issues.append(f"Invalid TTS provider: {tts_provider}")
-            
-            # Check numeric range settings
-            rate = self._settings.get("rate")
-            if not isinstance(rate, (int, float)) or not (-100 <= rate <= 100):
-                issues.append(f"Rate out of range (-100 to 100): {rate}")
-            
-            volume = self._settings.get("volume")
-            if not isinstance(volume, (int, float)) or not (0 <= volume <= 100):
-                issues.append(f"Volume out of range (0 to 100): {volume}")
-            
-            pitch = self._settings.get("pitch")
-            if not isinstance(pitch, (int, float)) or not (-100 <= pitch <= 100):
-                issues.append(f"Pitch out of range (-100 to 100): {pitch}")
-            
-            cache_size = self._settings.get("audio_cache_max_size_mb")
-            if not isinstance(cache_size, (int, float)) or cache_size <= 0:
-                issues.append(f"Audio cache size must be positive: {cache_size}")
-            
-            silence_threshold = self._settings.get("stt_silence_threshold")
-            if not isinstance(silence_threshold, (int, float)) or silence_threshold < 0:
-                issues.append(f"STT silence threshold must be non-negative: {silence_threshold}")
-            
-            mic_passthrough_volume = self._settings.get("mic_passthrough_volume")
-            if not isinstance(mic_passthrough_volume, (int, float)) or not (0 <= mic_passthrough_volume <= 200):
-                issues.append(f"Mic passthrough volume out of range (0 to 200): {mic_passthrough_volume}")
-
-            soundboard_enabled = self._settings.get("soundboard_enabled")
-            if not isinstance(soundboard_enabled, bool):
-                issues.append(f"soundboard_enabled must be a boolean: {soundboard_enabled}")
-
-            soundboard_slots = self._settings.get("soundboard_slots")
-            if not isinstance(soundboard_slots, dict):
-                issues.append("soundboard_slots must be a dictionary")
-            else:
-                for slot, file_path in soundboard_slots.items():
-                    if not isinstance(slot, str) or not slot.isdigit():
-                        issues.append(f"Invalid soundboard slot key: {slot}")
-                        continue
-
-                    slot_num = int(slot)
-                    if not (1 <= slot_num <= 99):
-                        issues.append(f"Soundboard slot out of range (1-99): {slot}")
-
-                    if file_path is not None and not isinstance(file_path, str):
-                        issues.append(f"Soundboard slot '{slot}' path must be a string or null")
-        
+            for key, value in self._settings.items():
+                _, issue = self._coerce_setting(key, value)
+                if issue:
+                    issues.append(issue)
+            issues.extend(self._validate_keybinds(self._settings.get("keybinds", {})))
+            issues.extend(self._validate_soundboard_slots(self._settings.get("soundboard_slots", {})))
         return issues

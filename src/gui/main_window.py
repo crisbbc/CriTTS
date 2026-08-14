@@ -4,6 +4,7 @@ Primary application window with text input, controls, and status display.
 """
 import customtkinter as ctk
 import asyncio
+import queue
 import threading
 import tkinter as tk
 from dataclasses import dataclass
@@ -75,6 +76,57 @@ class LatestWinsTextAnalysisScheduler:
         return request.generation == self._latest_generation
 
 
+class OscAmplitudeForwarder:
+    """Forward VRChat voice amplitude on a dedicated thread.
+
+    The amplitude callback fires on PortAudio's realtime audio thread, where a
+    blocking UDP send can underrun audio.  This class hands the value to a
+    daemon thread that coalesces to the newest sample and performs the OSC send
+    off the audio thread.
+    """
+
+    def __init__(self, send_callback: Callable[[float], None]):
+        self._send_callback = send_callback
+        self._queue: "queue.Queue" = queue.Queue(maxsize=1)
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="osc-amplitude-forwarder", daemon=True
+        )
+        self._thread.start()
+
+    def update(self, amplitude: float) -> None:
+        """Publish a new amplitude value, keeping only the latest."""
+        try:
+            self._queue.put_nowait(amplitude)
+        except queue.Full:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait(amplitude)
+            except queue.Full:
+                pass
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                amplitude = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                self._send_callback(amplitude)
+            except Exception:
+                pass
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=0.5)
+        self._thread = None
+
+
 
 
 
@@ -116,6 +168,12 @@ class MainWindow:
         self._speaking_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
+        # Monotonic generation counter for speak operations.  Workers capture
+        # their generation and only clear shared state while still current, so a
+        # late-finishing worker can't clobber a newer speak.
+        self._speak_generation = 0
+        # Offloads VRChat voice-amplitude OSC sends off the audio callback thread.
+        self._amplitude_forwarder = None
         # Background threads must stop scheduling Tk callbacks before the root
         # window is destroyed.
         self._async_callbacks_active = True
@@ -134,7 +192,7 @@ class MainWindow:
         # STT loading animation state
         self._stt_spinner_running = False
         self._stt_spinner_index = 0
-        self._stt_spinner_frames = ["⏳", "⏳", "⏳"]
+        self._stt_spinner_frames = ["⏳", "⌛"]
         
         # Progress animation state
         self._progress_animation_running = False
@@ -1162,22 +1220,31 @@ class MainWindow:
             except Exception:
                 self._set_status("Failed to send to VRChat chatbox", "⚠️")
         
-        # Clear the stop event for new speak action
-        self._stop_event.clear()
-        
+        # Start a fresh speak generation with its own stop event.  A previous
+        # worker still winding down keeps its own (already-set) event, so it
+        # cannot observe this speak's cleared stop signal or clobber the new
+        # worker's state when it finally exits.
+        self._speak_generation += 1
+        generation = self._speak_generation
+        stop_event = threading.Event()
+        self._stop_event = stop_event
+
         self._update_ui_speaking(True)
         self._set_status("Generating speech...", "⏳", "speaking")
-        
+
         # Run TTS in background thread to avoid blocking UI
-        self._worker_thread = threading.Thread(target=self._speak_async, args=(processed_text,))
-        self._worker_thread.daemon = True
+        self._worker_thread = threading.Thread(
+            target=self._speak_async,
+            args=(processed_text, stop_event, generation),
+            daemon=True,
+        )
         self._worker_thread.start()
 
 
 
 
     
-    def _speak_async(self, text: str):
+    def _speak_async(self, text: str, stop_event: threading.Event, generation: int):
         """Run TTS generation and playback in async context."""
         loop = None
         try:
@@ -1210,7 +1277,7 @@ class MainWindow:
                 soundboard_slots = {}
 
             # Check if stop was requested before generation
-            if self._stop_event.is_set():
+            if stop_event.is_set():
                 return
 
             # When soundboard is disabled, keep text untouched so tokens are spoken normally.
@@ -1225,13 +1292,13 @@ class MainWindow:
             if enable_streaming and not has_sound_tokens and len(segments) == 1 and segments[0].get("type") == "text":
                 # Use streaming playback for lower latency
                 success = loop.run_until_complete(
-                    self._speak_streaming_async(text, voice, rate, volume, pitch, device_idx, processing_profile, enable_normalization, normalization_type)
+                    self._speak_streaming_async(text, voice, rate, volume, pitch, device_idx, processing_profile, stop_event, enable_normalization, normalization_type)
                 )
             else:
                 success = True
 
                 for segment in segments:
-                    if self._stop_event.is_set():
+                    if stop_event.is_set():
                         return
 
                     segment_type = segment.get("type")
@@ -1244,10 +1311,10 @@ class MainWindow:
                         self._safe_after(0, lambda: self._set_status("Generating speech...", "🔊", "speaking"))
 
                         audio_data, error = loop.run_until_complete(
-                            self.tts_engine.generate_speech(segment_text, voice, rate, volume, pitch, self._stop_event)
+                            self.tts_engine.generate_speech(segment_text, voice, rate, volume, pitch, stop_event)
                         )
 
-                        if self._stop_event.is_set():
+                        if stop_event.is_set():
                             return
 
                         if error:
@@ -1271,7 +1338,7 @@ class MainWindow:
                             )
                         )
 
-                        if self._stop_event.is_set():
+                        if stop_event.is_set():
                             return
 
                         if not success:
@@ -1357,7 +1424,7 @@ class MainWindow:
                             )
                         )
 
-                        if self._stop_event.is_set():
+                        if stop_event.is_set():
                             return
 
                         if not success:
@@ -1372,7 +1439,7 @@ class MainWindow:
                             continue
 
             # Do not show Finished or success UI when user stopped or playback was interrupted
-            if self._stop_event.is_set():
+            if stop_event.is_set():
                 return
             if not success:
                 self._safe_after(0, lambda: self._show_error("Failed to play audio to device."))
@@ -1384,10 +1451,15 @@ class MainWindow:
         finally:
             if loop:
                 loop.close()
+            # Only the current generation may reset shared speak state.  A late
+            # worker finishing after a newer speak started must leave the newer
+            # worker's state untouched.
             with self._speaking_lock:
-                self._speaking = False
-            self._worker_thread = None
-            self._safe_after(0, lambda: self._update_ui_speaking(False))
+                if generation == self._speak_generation:
+                    self._speaking = False
+                    self._worker_thread = None
+            if generation == self._speak_generation:
+                self._safe_after(0, lambda: self._update_ui_speaking(False))
 
     async def _play_audio_segment(
         self,
@@ -1428,11 +1500,12 @@ class MainWindow:
             )
 
         if voice_amplitude_enabled and self._amplitude_analyzer is not None and self.osc_client is not None:
+            forwarder = self._get_amplitude_forwarder()
+
             def amplitude_callback_with_osc(amplitude: float):
-                """Update amplitude analyzer and forward to VRChat OSC."""
+                """Update the analyzer and hand amplitude to the OSC forwarder."""
                 self._amplitude_analyzer.update_amplitude(amplitude)
-                if self.osc_client:
-                    self.osc_client.send_voice_amplitude(amplitude)
+                forwarder.update(amplitude)
 
             return await self.audio_router.play_audio_with_amplitude(
                 audio_data,
@@ -1457,7 +1530,7 @@ class MainWindow:
             prepared_audio=prepared_audio,
         )
     
-    async def _speak_streaming_async(self, text: str, voice: str, rate: int, volume: int, pitch: int, device_idx, processing_profile: str, enable_normalization: bool = True, normalization_type: str = "Peak") -> bool:
+    async def _speak_streaming_async(self, text: str, voice: str, rate: int, volume: int, pitch: int, device_idx, processing_profile: str, stop_event: threading.Event, enable_normalization: bool = True, normalization_type: str = "Peak") -> bool:
         """
         Stream TTS generation and playback for lower latency.
         
@@ -1507,19 +1580,18 @@ class MainWindow:
             
             # Create the audio chunk generator
             audio_generator = self.tts_engine.stream_speech(
-                text, voice, rate, volume, pitch, self._stop_event
+                text, voice, rate, volume, pitch, stop_event
             )
             
             # Create amplitude callback for streaming playback if VRChat voice amplitude is enabled
             streaming_amplitude_callback = None
             if voice_amplitude_enabled and self._amplitude_analyzer is not None and self.osc_client is not None:
+                forwarder = self._get_amplitude_forwarder()
+
                 def streaming_amplitude_callback_with_osc(amplitude: float):
-                    """Update amplitude analyzer and forward to VRChat OSC during streaming."""
-                    # Update the local amplitude analyzer (for viseme intensity)
+                    """Update the analyzer and hand amplitude to the OSC forwarder."""
                     self._amplitude_analyzer.update_amplitude(amplitude)
-                    # Forward amplitude to VRChat
-                    if self.osc_client:
-                        self.osc_client.send_voice_amplitude(amplitude)
+                    forwarder.update(amplitude)
                 streaming_amplitude_callback = streaming_amplitude_callback_with_osc
             
             # Play streaming audio
@@ -1528,7 +1600,7 @@ class MainWindow:
                 48000,
                 device_idx,
                 processing_profile,
-                self._stop_event,
+                stop_event,
                 enable_normalization,
                 normalization_type,
                 amplitude_callback=streaming_amplitude_callback,
@@ -1724,27 +1796,7 @@ class MainWindow:
     
     def _on_voice_input(self):
         """Handle voice input button click - toggle recording."""
-        if not self.stt_engine:
-            self._set_status("Voice input not available", "⚠️")
-            return
-        
-        if self._stt_state == STTState.IDLE:
-            # Start recording
-            success = self.stt_engine.start_listening()
-            if success:
-                self._set_stt_state(STTState.RECORDING)
-                self._set_status("🎙 Listening… click again to stop", "🎙")
-            else:
-                self._set_status("Failed to start voice recording", "⚠️")
-                
-        elif self._stt_state == STTState.RECORDING:
-            # Stop recording and start transcription
-            self._set_stt_state(STTState.TRANSCRIBING)
-            self._set_status("⏳ Transcribing…", "⏳")
-            self.stt_engine.stop_and_transcribe(
-                on_result=self._on_stt_result_safe,
-                on_error=self._on_stt_error_safe
-            )
+        self._on_voice_input_toggle()
     
     def _on_voice_input_toggle(self):
         """Handle voice input toggle keybind - toggle recording based on current state."""
@@ -2599,6 +2651,19 @@ class MainWindow:
     def _on_coqui_status(self, message: str) -> None:
         """Called (from a background thread) with a Coqui model status message."""
         self._safe_after(0, lambda msg=message: self._set_status(msg, "⬇️", "info"))
+
+    def _get_amplitude_forwarder(self) -> "OscAmplitudeForwarder":
+        """Return the shared OSC amplitude forwarder, creating it on demand."""
+        if self._amplitude_forwarder is None:
+            self._amplitude_forwarder = OscAmplitudeForwarder(
+                self._forward_voice_amplitude
+            )
+        return self._amplitude_forwarder
+
+    def _forward_voice_amplitude(self, amplitude: float) -> None:
+        """Send the current amplitude to the active OSC client (off the audio thread)."""
+        if self.osc_client is not None:
+            self.osc_client.send_voice_amplitude(amplitude)
     
     def shutdown(self):
         """Gracefully shutdown the main window and wait for worker threads."""
@@ -2630,6 +2695,11 @@ class MainWindow:
                 pass
             self.osc_client = None
         
+        # Stop the OSC amplitude forwarder thread
+        if self._amplitude_forwarder is not None:
+            self._amplitude_forwarder.stop()
+            self._amplitude_forwarder = None
+
         # Shutdown STT engine if available
         if self.stt_engine:
             self.stt_engine.shutdown()

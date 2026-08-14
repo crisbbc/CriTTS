@@ -572,20 +572,20 @@ class AudioCache:
         Returns:
             Dictionary with cache statistics
         """
-        total_requests = self._hits + self._misses
-        hit_rate = (self._hits / total_requests * 100) if total_requests > 0 else 0
-        
-        return {
-            "enabled": self.enabled,
-            "entries": len(self._index),
-            "size_mb": self.get_cache_size_mb(),
-            "max_size_mb": self.max_size_mb,
-            "hits": self._hits,
-            "misses": self._misses,
-            "hit_rate": hit_rate,
-            "total_saved_time": self._total_saved_time,
-            "cache_dir": str(self.cache_dir)
-        }
+        with self._lock:
+            total_requests = self._hits + self._misses
+            hit_rate = (self._hits / total_requests * 100) if total_requests > 0 else 0
+            return {
+                "enabled": self.enabled,
+                "entries": len(self._index),
+                "size_mb": self._total_size_bytes / (1024 * 1024),
+                "max_size_mb": self.max_size_mb,
+                "hits": self._hits,
+                "misses": self._misses,
+                "hit_rate": hit_rate,
+                "total_saved_time": self._total_saved_time,
+                "cache_dir": str(self.cache_dir)
+            }
     
     def prune_by_age(self, max_age_days: int = 30) -> int:
         """

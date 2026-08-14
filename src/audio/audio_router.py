@@ -76,6 +76,19 @@ class AudioRouter:
         self._linux_sink_name: str = ""
 
     @staticmethod
+    def _is_truncation_prefix(shorter: str, longer: str) -> bool:
+        """Return True when *shorter* is a whitespace-boundary prefix of *longer*.
+
+        Distinguishes a truncated name for the same device ("Speakers" →
+        "Speakers (Realtek)") from a genuinely different device whose name only
+        shares a prefix ("Speakers" vs "Speakers/Headphones").
+        """
+        if not longer.startswith(shorter):
+            return False
+        remainder = longer[len(shorter):]
+        return not remainder or remainder[0].isspace()
+
+    @staticmethod
     def _deduplicate_devices(devices: List[Dict]) -> List[Dict]:
         """
         Deduplicate audio device list using multi-pass algorithm.
@@ -134,9 +147,12 @@ class AudioRouter:
             name_lower = device['name'].lower()
             is_duplicate = False
 
-            # Check if this device's name is a prefix of or is prefixed by any existing device
+            # Treat a device as a duplicate only when one name is a prefix of
+            # the other at a whitespace boundary (a truncated version of the same
+            # device).  A slash or other separator indicates a different device.
             for existing_lower in final_devices_lower:
-                if name_lower.startswith(existing_lower) or existing_lower.startswith(name_lower):
+                if (AudioRouter._is_truncation_prefix(name_lower, existing_lower)
+                        or AudioRouter._is_truncation_prefix(existing_lower, name_lower)):
                     is_duplicate = True
                     break
 
@@ -351,7 +367,7 @@ class AudioRouter:
             data = self._apply_clarity_eq(data, effective_sr)
 
         if len(data.shape) == 1 and stereo_width > 0:
-            data = self._stereo_enhancement(data, width=stereo_width)
+            data = self._stereo_enhancement(data, width=stereo_width, sample_rate=effective_sr)
 
         if len(data.shape) == 1:
             data = np.column_stack((data, data))
@@ -434,7 +450,7 @@ class AudioRouter:
             result = result * (0.99 / peak)
         return result
 
-    def _stereo_enhancement(self, data: np.ndarray, width: float = 0.5) -> np.ndarray:
+    def _stereo_enhancement(self, data: np.ndarray, width: float = 0.5, sample_rate: int = 48000) -> np.ndarray:
         """
         Convert mono to stereo with width enhancement for more natural sound.
 
@@ -455,7 +471,7 @@ class AudioRouter:
 
         # Add slight phase shift for width enhancement
         if width > 0 and len(data) > 10:
-            delay_samples = int(0.001 * 48000)  # 1ms delay at 48kHz
+            delay_samples = max(1, int(0.001 * sample_rate))  # 1ms delay at the actual rate
             if delay_samples < len(data):
                 right[delay_samples:] += data[:-delay_samples] * width * 0.3
 
@@ -818,14 +834,12 @@ class AudioRouter:
             Duration in seconds as a float, or 0.0 on error.
         """
         try:
-            prepared_audio = await self.prepare_audio_for_playback(
-                audio_data,
-                enable_normalization=False,
-                normalization_type="None",
-                processing_profile="balanced",
-                enable_clarity_eq=False,
-            )
-            return prepared_audio.duration_seconds
+            # Decode at the native rate without resampling, EQ, or stereo
+            # processing — duration is just frame count over sample rate.
+            data, sample_rate = await self._decode_audio_data(audio_data, target_sample_rate=None)
+            if sample_rate > 0 and data.size > 0:
+                return data.shape[0] / sample_rate
+            return 0.0
         except Exception:
             return 0.0
 
@@ -1379,11 +1393,16 @@ class AudioRouter:
             if decode_error[0]:
                 return False
 
-            output_sr = target_sr if target_sr is not None else (detected_sr[0] or sample_rate)
-
-            if output_sr is None:
-                logger.error("Could not determine sample rate for playback stream")
-                return False
+            if target_sr is not None:
+                output_sr = target_sr
+            elif detected_sr[0] is not None:
+                output_sr = detected_sr[0]
+            else:
+                logger.warning(
+                    "Could not detect the decoded sample rate; assuming %d Hz",
+                    sample_rate,
+                )
+                output_sr = sample_rate
 
             self._current_stream = sd.OutputStream(
                 device=device_index,

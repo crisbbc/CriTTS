@@ -34,14 +34,15 @@ class EdgeTTSProvider(TTSProvider):
 
         proxy_type = self._settings_manager.get("proxy_type", "http")
 
-        # Validate proxy_type against the allowlist to prevent scheme injection
-        # (e.g. "file" or "javascript" leading to file:// or javascript:// URLs).
-        if proxy_type not in self._ALLOWED_PROXY_TYPES:
+        # Validate proxy_type against the allowlist (case-insensitively) to
+        # prevent scheme injection (e.g. "file" or "javascript").
+        if not isinstance(proxy_type, str) or proxy_type.lower() not in self._ALLOWED_PROXY_TYPES:
             logger.warning(
                 "Invalid proxy type '%s'; must be one of %s — ignoring proxy",
                 proxy_type, sorted(self._ALLOWED_PROXY_TYPES),
             )
             return None
+        proxy_type = proxy_type.lower()
 
         proxy_server = self._settings_manager.get("proxy_server", "")
         if not proxy_server:
@@ -60,10 +61,10 @@ class EdgeTTSProvider(TTSProvider):
         #          "attacker.com@real-host.com" would confuse URL parsers.
         #   '/', '?', '#' — introduce a path, query, or fragment component that
         #          should not appear in a bare host[:port] string.
-        if any(ch in proxy_server for ch in ('@', '/', '?', '#')):
+        if any(ch in proxy_server for ch in ('@', '/', '?', '#')) or any(ch.isspace() for ch in proxy_server):
             logger.warning(
                 "Proxy server value '%s' contains invalid characters "
-                "(@, /, ?, or #); ignoring proxy",
+                "(@, /, ?, #, or whitespace); ignoring proxy",
                 proxy_server,
             )
             return None

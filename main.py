@@ -322,10 +322,9 @@ class CriTTSApp(ctk.CTk):
     
     def _signal_handler(self, _signum, _frame):
         """Handle termination signals."""
+        # Clean up resources synchronously; the atexit-registered _cleanup is a
+        # no-op afterwards because _cleaned_up is already set.
         self._cleanup()
-        # Schedule destroy on the main loop before exiting
-        # This prevents TclError from a still-running Tkinter mainloop
-        self.after(0, self.destroy)
         sys.exit(0)
     
     def _on_close(self):
