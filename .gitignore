@@ -35,6 +35,7 @@ ENV/
 *.swp
 *.swo
 .claude
+.freebuff
 plans/
 
 # Launcher generated state
