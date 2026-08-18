@@ -57,9 +57,15 @@ class STTState:
 
 @dataclass(frozen=True)
 class DeferredTextAnalysisRequest:
-    """Immutable snapshot for deferred text analysis work."""
+    """Token identifying one deferred text-analysis request.
+
+    The analyzed text is intentionally *not* carried here: reading the whole
+    text widget on every keystroke is the dominant cost of the voice-indicator
+    update path, so the current document is read lazily once the debounce
+    timer actually fires (and only when this request is still the latest).
+    """
     generation: int
-    text: str
+    text: Optional[str] = None
 
 
 class LatestWinsTextAnalysisScheduler:
@@ -68,7 +74,7 @@ class LatestWinsTextAnalysisScheduler:
     def __init__(self):
         self._latest_generation = 0
 
-    def next_request(self, text: str) -> DeferredTextAnalysisRequest:
+    def next_request(self, text: Optional[str] = None) -> DeferredTextAnalysisRequest:
         self._latest_generation += 1
         return DeferredTextAnalysisRequest(generation=self._latest_generation, text=text)
 
@@ -229,6 +235,11 @@ class MainWindow:
         self._voice_indicator_timer = None
         self._voice_indicator_animating = False
         self._voice_indicator_scheduler = LatestWinsTextAnalysisScheduler()
+
+        # Status-label wraplength resize debounce (coalesces <Configure> events)
+        self._pending_status_wraplength: Optional[int] = None
+        self._status_wraplength_job = None
+        self._last_status_wraplength: Optional[int] = None
         
         # Text preprocessor (reused across speak calls)
         self._text_preprocessor = TextPreprocessor()
@@ -572,20 +583,46 @@ class MainWindow:
         self._schedule_voice_indicator_update()
     
     def _on_window_resize(self, event):
-        """Handle window resize to update dynamic elements like status label wraplength."""
-        # Only process resize for the root window
-        if event.widget == self.root:
-            # Calculate available width for status label
-            window_width = event.width
-            # Reserve space for progress, activity indicator, and padding
-            reserved_width = 150
-            new_wraplength = max(200, window_width - reserved_width)
-            
-            # Update status label wraplength
-            try:
-                self.status_label.configure(wraplength=new_wraplength)
-            except Exception:
-                pass  # Ignore errors during resize
+        """Coalesce window <Configure> events into one status-label rewrap.
+
+        A resize drag emits a stream of <Configure> events; configuring the
+        label on every one of them forces repeated text reflow and can make
+        resizing janky.  Mirror the settings tabs: record the latest width and
+        apply it once per event-loop cycle via ``after(0)``.
+        """
+        if event.widget != self.root:
+            return
+
+        window_width = event.width
+        # Reserve space for progress, activity indicator, and padding
+        reserved_width = 150
+        new_wraplength = max(200, window_width - reserved_width)
+
+        self._pending_status_wraplength = new_wraplength
+
+        if new_wraplength == self._last_status_wraplength:
+            return
+        if self._status_wraplength_job is not None:
+            return
+
+        self._status_wraplength_job = self._safe_after(
+            0, self._apply_pending_status_wraplength
+        )
+
+    def _apply_pending_status_wraplength(self):
+        """Apply the latest coalesced status-label wraplength, if it changed."""
+        self._status_wraplength_job = None
+        pending_wraplength = self._pending_status_wraplength
+        self._pending_status_wraplength = None
+
+        if pending_wraplength is None or pending_wraplength == self._last_status_wraplength:
+            return
+
+        try:
+            self.status_label.configure(wraplength=pending_wraplength)
+            self._last_status_wraplength = pending_wraplength
+        except Exception:
+            pass  # Ignore errors during resize
 
     
     def _bind_text_editing_shortcuts(self):
@@ -987,9 +1024,10 @@ class MainWindow:
             self._cancel_after(self._voice_indicator_timer)
             self._voice_indicator_timer = None
 
-        request = self._voice_indicator_scheduler.next_request(
-            self.text_input.get("1.0", "end-1c")
-        )
+        # Do NOT snapshot the document here: ``text_input.get()`` copies the
+        # entire text on every keystroke.  The text is read lazily when the
+        # debounce timer fires, at most once per 300ms quiet period.
+        request = self._voice_indicator_scheduler.next_request()
 
         self._voice_indicator_timer = self._safe_after(
             300,
@@ -1005,7 +1043,8 @@ class MainWindow:
         if not self._voice_indicator_scheduler.is_latest(request):
             return
 
-        self._update_voice_indicator_for_text(request.text, request=request)
+        text = self.text_input.get("1.0", "end-1c")
+        self._update_voice_indicator_for_text(text, request=request)
     
     def _animate_voice_indicator(self, new_text: str, new_color: str):
         """Animate the voice indicator with smooth transitions."""

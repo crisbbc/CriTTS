@@ -319,6 +319,61 @@ class TestAudioCacheIsolation:
         finally:
             cache.shutdown()
 
+    def test_audio_cache_isolates_entries_by_settings_fingerprint(self, tmp_path):
+        """Same text/voice under different synthesis settings must not collide.
+
+        Changing a synthesis-affecting setting (Coqui language, Piper noise
+        scales, EQ/normalization/profile) must be a cache miss — otherwise the
+        app silently replays audio recorded under a different configuration.
+        """
+        fp_default = "lang=en|eq=1|norm=1:Peak|prof=balanced"
+        fp_spanish = "lang=es|eq=1|norm=1:Peak|prof=balanced"
+        fp_different = "lang=de|eq=1|norm=1:Peak|prof=balanced"
+        cache = AudioCache(cache_dir=tmp_path, enabled=True)
+
+        try:
+            assert cache.store(
+                b"en-audio",
+                "Hello there",
+                "SharedVoice",
+                provider="coqui",
+                settings_fingerprint=fp_default,
+            )
+            assert cache.store(
+                b"es-audio",
+                "Hello there",
+                "SharedVoice",
+                provider="coqui",
+                settings_fingerprint=fp_spanish,
+            )
+
+            assert cache.lookup(
+                "Hello there", "SharedVoice", provider="coqui",
+                settings_fingerprint=fp_default,
+            ) == b"en-audio"
+            assert cache.lookup(
+                "Hello there", "SharedVoice", provider="coqui",
+                settings_fingerprint=fp_spanish,
+            ) == b"es-audio"
+            # A fingerprint change must miss, never return stale audio
+            assert cache.lookup(
+                "Hello there", "SharedVoice", provider="coqui",
+                settings_fingerprint=fp_different,
+            ) is None
+            # Entries written without a fingerprint are also isolated from them
+            assert cache.store(
+                b"legacy-style-audio",
+                "Hello there",
+                "SharedVoice",
+                provider="coqui",
+            )
+            assert cache.lookup(
+                "Hello there", "SharedVoice", provider="coqui",
+            ) == b"legacy-style-audio"
+            assert cache.get_statistics()["entries"] == 3
+        finally:
+            cache.shutdown()
+
     def test_schema_version_mismatch_invalidates_legacy_cache_entries(self, tmp_path):
         """Legacy cache files should be invalidated when the cache-key schema changes."""
         legacy_key = "legacy-providerless-entry"
@@ -569,3 +624,54 @@ class TestProviderStableValidationAndPreprocessing:
         )
         assert engine.validate_voice.await_args_list[0].kwargs == {"provider_name": "edge"}
         assert engine.preprocess_text.await_args.kwargs == {"provider_name": "edge"}
+
+
+# ---------------------------------------------------------------------------
+# A mocked audio_cache_path must never become a real on-disk directory
+# ---------------------------------------------------------------------------
+
+def test_coerce_cache_path_rejects_mock_values():
+    """Only str/Path values are valid cache paths; mocks fall back to default."""
+    from pathlib import Path
+
+    assert TTSEngine._coerce_cache_path(MagicMock()) is None
+    # `Path(MagicMock())` -> 'MagicMock/mock.get()/…' which AudioCache would mkdir
+    assert TTSEngine._coerce_cache_path(MagicMock().get("audio_cache_path")) is None
+    assert TTSEngine._coerce_cache_path(None) is None
+    assert TTSEngine._coerce_cache_path(123) is None
+    # bytes are not a valid Path in Python 3.14, so they must be rejected too
+    assert TTSEngine._coerce_cache_path(b"/tmp/audio-cache") is None
+    assert TTSEngine._coerce_cache_path("/tmp/audio-cache") == Path("/tmp/audio-cache")
+    real_path = Path("/tmp/audio-cache")
+    assert TTSEngine._coerce_cache_path(real_path) == real_path
+
+
+def test_mock_audio_cache_path_falls_back_to_default_cache_dir():
+    """A mocked audio_cache_path must not be turned into a MagicMock directory.
+
+    Regression: TTSEngine passed ``Path(settings.get("audio_cache_path"))``
+    straight to AudioCache, and ``pathlib.Path`` converts a MagicMock into a
+    relative ``MagicMock/mock.get()/…`` path that AudioCache then created on
+    disk in the working directory.
+    """
+    manager = MagicMock()
+
+    def get(key, default=None):
+        values = {
+            "audio_cache_enabled": True,
+            "audio_cache_max_size_mb": 500,
+            "text_cache_size": 1000,
+        }
+        if key == "audio_cache_path":
+            return MagicMock()  # simulate an unconfigured mock settings manager
+        return values.get(key, default)
+
+    manager.get.side_effect = get
+    engine = TTSEngine(settings_manager=manager)
+    try:
+        assert "MagicMock" not in str(engine._audio_cache.cache_dir)
+    finally:
+        if engine._audio_cache is not None:
+            engine._audio_cache.shutdown()
+        if engine._phrase_tracker is not None:
+            engine._phrase_tracker.shutdown()

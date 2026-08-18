@@ -27,7 +27,9 @@ class AudioCache:
     
     DEFAULT_CACHE_DIR = Path.home() / ".critts" / "audio_cache"
     DEFAULT_MAX_SIZE_MB = 500
-    CACHE_VERSION = 2  # Increment when cache format changes
+    # Increment when the cache-key schema changes so entries written under an
+    # older key layout are invalidated instead of being served stale.
+    CACHE_VERSION = 3
     
     # Batching configuration for index persistence
     FLUSH_INTERVAL_STORES = 10  # Flush index every N store operations
@@ -290,6 +292,7 @@ class AudioCache:
         volume: int,
         pitch: int,
         provider: str = "",
+        settings_fingerprint: str = "",
     ) -> str:
         """
         Generate a cache key from TTS parameters.
@@ -301,6 +304,11 @@ class AudioCache:
             rate: Speech rate
             volume: Volume level
             pitch: Pitch adjustment
+            settings_fingerprint: Stable fingerprint of every setting that can
+                change the cached audio waveform (synthesis knobs such as Coqui
+                language or Piper noise scales).  Entries generated under a
+                different fingerprint must never be reused, or the cache would
+                silently serve audio that no longer matches the current config.
             
         Returns:
             Hash key for the parameters
@@ -310,7 +318,10 @@ class AudioCache:
         normalized_provider = provider.strip().lower()
         
         # Create key string
-        key_string = f"{normalized_provider}|{normalized_text}|{voice}|{rate}|{volume}|{pitch}"
+        key_string = (
+            f"{normalized_provider}|{normalized_text}|{voice}|{rate}|{volume}|{pitch}"
+            f"|{settings_fingerprint}"
+        )
         
         # Generate hash
         return hashlib.sha256(key_string.encode('utf-8')).hexdigest()[:32]
@@ -323,6 +334,7 @@ class AudioCache:
         volume: int = 100,
         pitch: int = 0,
         provider: str = "",
+        settings_fingerprint: str = "",
     ) -> Optional[bytes]:
         """
         Look up cached audio for the given parameters.
@@ -334,6 +346,8 @@ class AudioCache:
             rate: Speech rate
             volume: Volume level
             pitch: Pitch adjustment
+            settings_fingerprint: Fingerprint of settings affecting the cached
+                waveform; entries from a different fingerprint are never reused.
             
         Returns:
             Cached audio bytes or None if not found
@@ -342,7 +356,7 @@ class AudioCache:
             return None
         
         with self._lock:
-            key = self._generate_key(text, voice, rate, volume, pitch, provider)
+            key = self._generate_key(text, voice, rate, volume, pitch, provider, settings_fingerprint)
             
             if key not in self._index:
                 self._misses += 1
@@ -383,7 +397,8 @@ class AudioCache:
         volume: int = 100,
         pitch: int = 0,
         provider: str = "",
-        generation_time: float = 0.0
+        generation_time: float = 0.0,
+        settings_fingerprint: str = "",
     ) -> bool:
         """
         Store generated audio in the cache.
@@ -397,6 +412,8 @@ class AudioCache:
             volume: Volume level
             pitch: Pitch adjustment
             generation_time: Time taken to generate the audio
+            settings_fingerprint: Fingerprint of settings affecting the cached
+                waveform; the entry is only reused for identical fingerprints.
             
         Returns:
             True if stored successfully
@@ -405,7 +422,7 @@ class AudioCache:
             return False
         
         with self._lock:
-            key = self._generate_key(text, voice, rate, volume, pitch, provider)
+            key = self._generate_key(text, voice, rate, volume, pitch, provider, settings_fingerprint)
             
             try:
                 # Save audio file atomically; a crash during a write must not

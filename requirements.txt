@@ -2,6 +2,7 @@ customtkinter
 edge-tts>=7.2.3
 piper-tts>=1.2.0
 coqui-tts[codec]>=0.27.5
+spacy[ja]
 langid>=1.1.6
 sounddevice
 soundfile>=0.12.0

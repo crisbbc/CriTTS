@@ -2,7 +2,9 @@
 Advanced Tab
 Settings for cache management, performance, and experimental features.
 """
+import asyncio
 import logging
+import threading
 import customtkinter as ctk
 from typing import Any, Callable, Optional, List, Dict
 
@@ -19,6 +21,67 @@ logger = logging.getLogger(__name__)
 
 class AdvancedTab(BaseTab):
     """Tab for advanced settings."""
+
+    def __init__(
+        self,
+        tab_widget: ctk.CTkFrame,
+        settings_manager: Any,
+        tts_engine: Any = None,
+        audio_router: Any = None,
+        on_change: Optional[Callable] = None,
+        parent_window: Optional[ctk.CTk] = None,
+    ):
+        """Initialize the advanced tab."""
+        self.parent_window = parent_window
+        self._async_callbacks_active = True
+        self._pregenerating = False
+        self._pregenerate_stop_event = threading.Event()
+        super().__init__(tab_widget, settings_manager, tts_engine, audio_router, on_change)
+
+    def invalidate_async_callbacks(self) -> None:
+        """Stop background pre-generation before the tab is destroyed or rebuilt."""
+        self._async_callbacks_active = False
+        self._pregenerate_stop_event.set()
+
+    def _is_async_callback_target_alive(self) -> bool:
+        """Return True while this tab instance still owns live widgets."""
+        if not getattr(self, "_async_callbacks_active", True):
+            return False
+
+        tab_widget = getattr(self, "tab", None)
+        if tab_widget is not None:
+            try:
+                tab_winfo_exists = getattr(tab_widget, "winfo_exists", None)
+                if callable(tab_winfo_exists) and not tab_winfo_exists():
+                    return False
+            except Exception:
+                return False
+
+        return True
+
+    def _schedule_on_ui_thread(self, callback: Callable[[], None], delay_ms: int = 0) -> bool:
+        """Safely queue UI work only while the parent window is still available."""
+        parent_window = getattr(self, "parent_window", None)
+        if parent_window is None:
+            return False
+
+        if not self._is_async_callback_target_alive():
+            return False
+
+        try:
+            winfo_exists = getattr(parent_window, "winfo_exists", None)
+            if callable(winfo_exists) and not winfo_exists():
+                return False
+
+            def guarded_callback() -> None:
+                if not self._is_async_callback_target_alive():
+                    return
+                callback()
+
+            parent_window.after(delay_ms, guarded_callback)
+            return True
+        except Exception:
+            return False
 
     def _load_data(self):
         """Populate dynamic cache data during settings window refreshes."""
@@ -49,6 +112,15 @@ class AdvancedTab(BaseTab):
         )
         cache_section.pack(fill="x", pady=(0, SPACING_MD))
         self._create_cache_section(cache_content)
+        
+        # Phrase Pre-generation Section
+        pregeneration_section, pregeneration_content = self.create_section_surface(
+            "Phrase Pre-generation",
+            parent=self.scroll,
+            description="Pre-generate audio for your most-used phrases so they play instantly instead of synthesizing on demand.",
+        )
+        pregeneration_section.pack(fill="x", pady=(0, SPACING_MD))
+        self._create_pregeneration_section(pregeneration_content)
         
         # Network Privacy Section
         privacy_section, privacy_content = self.create_section_surface(
@@ -232,7 +304,204 @@ class AdvancedTab(BaseTab):
             width=80
         )
         self.cache_size_value_label.pack(side="right", padx=5)
-        
+
+    def _create_pregeneration_section(self, parent):
+        """Create the phrase pre-generation section."""
+        enabled = bool(self.settings.get("pregenerate_phrases_enabled", True))
+        self.pregenerate_enabled_var = ctk.BooleanVar(value=enabled)
+        self.pregenerate_enabled_check = ctk.CTkCheckBox(
+            parent,
+            text="Enable phrase pre-generation",
+            variable=self.pregenerate_enabled_var,
+            font=ctk.CTkFont(size=FONT_MD),
+            command=self._on_pregenerate_enabled_toggle,
+        )
+        self.pregenerate_enabled_check.pack(anchor="w", pady=5)
+
+        # Minimum uses slider
+        self.create_setting_label("Minimum Uses:", parent).pack(anchor="w", pady=(10, 5))
+        min_uses_frame = self.create_inline_frame(parent)
+        self.pregenerate_min_uses_var = ctk.IntVar(
+            value=int(self.settings.get("pregenerate_min_uses", 3))
+        )
+        self.pregenerate_min_uses_slider = ctk.CTkSlider(
+            min_uses_frame,
+            from_=1,
+            to=50,
+            number_of_steps=49,
+            variable=self.pregenerate_min_uses_var,
+            command=self._on_min_uses_change,
+            width=400,
+        )
+        self.pregenerate_min_uses_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self.pregenerate_min_uses_value_label = ctk.CTkLabel(
+            min_uses_frame,
+            text=f"{self.pregenerate_min_uses_var.get()}",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=80,
+        )
+        self.pregenerate_min_uses_value_label.pack(side="right", padx=5)
+
+        # Max phrases slider
+        self.create_setting_label("Max Phrases:", parent).pack(anchor="w", pady=(10, 5))
+        max_phrases_frame = self.create_inline_frame(parent)
+        self.pregenerate_max_phrases_var = ctk.IntVar(
+            value=int(self.settings.get("pregenerate_max_phrases", 20))
+        )
+        self.pregenerate_max_phrases_slider = ctk.CTkSlider(
+            max_phrases_frame,
+            from_=1,
+            to=100,
+            number_of_steps=99,
+            variable=self.pregenerate_max_phrases_var,
+            command=self._on_max_phrases_change,
+            width=400,
+        )
+        self.pregenerate_max_phrases_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self.pregenerate_max_phrases_value_label = ctk.CTkLabel(
+            max_phrases_frame,
+            text=f"{self.pregenerate_max_phrases_var.get()}",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=80,
+        )
+        self.pregenerate_max_phrases_value_label.pack(side="right", padx=5)
+
+        # Action button + status
+        pregen_buttons_frame = self.create_inline_frame(parent, pady=10)
+        self.pregenerate_button = ctk.CTkButton(
+            pregen_buttons_frame,
+            text="Pre-generate Common Phrases",
+            font=ctk.CTkFont(size=FONT_SM),
+            command=self._on_pregenerate,
+            width=BUTTON_WIDTH_DEFAULT,
+            height=BUTTON_HEIGHT,
+        )
+        self.pregenerate_button.pack(side="left", padx=5)
+        self.pregenerate_status_label = self.create_surface_status_label(
+            pregen_buttons_frame,
+            wraplength=220,
+        )
+        self.pregenerate_status_label.pack(side="left", padx=10)
+
+        self.create_helper_text(
+            text=(
+                "Common phrases are tracked automatically as you speak. Pre-generating "
+                "them ahead of time makes repeated lines play instantly."
+            ),
+            parent=parent,
+            font_size=FONT_XS,
+        ).pack(anchor="w", pady=(0, 10))
+
+        if not enabled:
+            self.pregenerate_button.configure(state="disabled")
+
+    def _on_pregenerate_enabled_toggle(self):
+        """Disable the pre-generate button when pre-generation is turned off."""
+        state = "normal" if self.pregenerate_enabled_var.get() else "disabled"
+        self.pregenerate_button.configure(state=state)
+
+    def _on_min_uses_change(self, value):
+        """Update the minimum-uses label when the slider changes."""
+        self.pregenerate_min_uses_value_label.configure(text=str(int(value)))
+
+    def _on_max_phrases_change(self, value):
+        """Update the max-phrases label when the slider changes."""
+        self.pregenerate_max_phrases_value_label.configure(text=str(int(value)))
+
+    def _on_pregenerate(self):
+        """Start background pre-generation of common phrases."""
+        if self._pregenerating:
+            return
+        if self.tts_engine is None:
+            self.configure_surface_status_label(
+                self.pregenerate_status_label, "TTS engine not available.", "warning"
+            )
+            return
+        if not self.pregenerate_enabled_var.get():
+            self.configure_surface_status_label(
+                self.pregenerate_status_label, "Phrase pre-generation is disabled.", "warning"
+            )
+            return
+
+        self._pregenerating = True
+        self._pregenerate_stop_event.clear()
+        self.pregenerate_button.configure(state="disabled")
+        self.configure_surface_status_label(
+            self.pregenerate_status_label, "Pre-generating...", "idle"
+        )
+
+        engine = self.tts_engine
+
+        def run():
+            loop = None
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                def progress(generated: int, total: int):
+                    self._schedule_on_ui_thread(
+                        lambda: self._pregenerate_progress(generated, total)
+                    )
+
+                count = loop.run_until_complete(
+                    engine.pregenerate_common_phrases(
+                        progress_callback=progress,
+                        stop_event=self._pregenerate_stop_event,
+                    )
+                )
+                self._schedule_on_ui_thread(lambda: self._pregenerate_done(count))
+            except Exception as e:
+                logger.error("Phrase pre-generation exception: %s", e)
+                self._schedule_on_ui_thread(
+                    lambda: self._pregenerate_done(-1, error=str(e))
+                )
+            finally:
+                if loop:
+                    loop.close()
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _pregenerate_progress(self, generated: int, total: int):
+        """Update the status label during pre-generation (UI thread)."""
+        if not self._is_async_callback_target_alive():
+            return
+        self.configure_surface_status_label(
+            self.pregenerate_status_label,
+            f"Pre-generating... {generated}/{total}",
+            "idle",
+        )
+
+    def _pregenerate_done(self, count: int, error: Optional[str] = None):
+        """Handle pre-generation completion on the UI thread."""
+        self._pregenerating = False
+        if not self._is_async_callback_target_alive():
+            return
+        # Re-enable only while the feature is still turned on; the user may
+        # have unchecked the enable box while a run was in flight.
+        state = "normal" if self.pregenerate_enabled_var.get() else "disabled"
+        self.pregenerate_button.configure(state=state)
+        if error:
+            self.configure_surface_status_label(
+                self.pregenerate_status_label, f"Error: {error}", "error"
+            )
+        elif self._pregenerate_stop_event.is_set():
+            self.configure_surface_status_label(
+                self.pregenerate_status_label,
+                f"Cancelled after {count} phrase(s).",
+                "warning",
+            )
+        elif count > 0:
+            self.configure_surface_status_label(
+                self.pregenerate_status_label,
+                f"Done: {count} phrase(s) cached.",
+                "success",
+            )
+        else:
+            self.configure_surface_status_label(
+                self.pregenerate_status_label,
+                "Nothing to pre-generate — speak phrases first or lower 'Minimum Uses'.",
+                "idle",
+            )
 
     def _create_performance_section(self, parent):
         """Create the performance settings section."""
@@ -366,6 +635,9 @@ class AdvancedTab(BaseTab):
             "proxy_server": self.proxy_server_var.get().strip(),
             "proxy_username": self.proxy_username_var.get().strip(),
             "proxy_password": self.proxy_password_var.get(),
+            "pregenerate_phrases_enabled": self.pregenerate_enabled_var.get(),
+            "pregenerate_min_uses": self.pregenerate_min_uses_var.get(),
+            "pregenerate_max_phrases": self.pregenerate_max_phrases_var.get(),
         }
     
     def validate(self) -> List[str]:

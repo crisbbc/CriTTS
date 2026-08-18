@@ -109,6 +109,7 @@ customtkinter
 edge-tts>=7.2.3
 piper-tts>=1.2.0
 coqui-tts[codec]>=0.27.5
+spacy[ja]
 langid>=1.1.6
 sounddevice
 soundfile>=0.12.0
@@ -184,6 +185,7 @@ Access settings by clicking the "Settings" button or pressing `Ctrl+,`
 
 #### Advanced Tab
 - Manage audio cache settings
+- **Phrase Pre-generation**: Enable/disable automatic phrase tracking, set minimum uses and max phrase counts, and pre-generate your most-used phrases so they play instantly
 - Select processing profile
 - Enable streaming playback (experimental)
 
@@ -212,6 +214,8 @@ Piper voice models are downloaded automatically the first time they are used and
 Coqui XTTS v2 downloads a larger shared model on first use (about 1.8 GB) and then runs fully offline.
 
 While a model is downloading or loading, the **status bar** at the bottom of the main window shows a live indicator. Subsequent uses of the same model are instant.
+
+> **Language-aware sentence splitting (Coqui)**: The "Language-aware sentence splitting" option in **Settings → TTS Provider** keeps long or unpunctuated text stable by splitting on real sentence boundaries before synthesis. It requires [spaCy](https://spacy.io/), which is included in `requirements.txt` as `spacy[ja]` (the `[ja]` extra also bundles SudachiPy so Japanese voices work). If spaCy is missing, Coqui silently falls back to its built-in chunker and logs a warning — install it with `pip install "spacy[ja]"` to enable the feature.
 
 ### Available Piper Voices
 

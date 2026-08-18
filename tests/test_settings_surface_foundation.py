@@ -494,6 +494,7 @@ def test_wave2_tabs_use_section_surfaces_in_existing_order(monkeypatch):
             "Playback Device",
             "Device Information",
             "Audio Normalization",
+            "PulseAudio Sink Routing",
             "Microphone Passthrough",
         ],
         AppearanceTab: ["Appearance Mode", "Visible Buttons"],

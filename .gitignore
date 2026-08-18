@@ -45,3 +45,12 @@ plans/
 # Runtime temp / cache
 .tmp-audio-cache/
 .tmp-audio-cache-*/
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Stray directory left behind when a test writes through a MagicMock path
+MagicMock/

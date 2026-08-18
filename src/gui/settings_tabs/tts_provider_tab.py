@@ -228,6 +228,114 @@ class TTSProviderTab(BaseTab):
             width=380,
         ).pack(anchor="w", pady=(0, SPACING_MD), padx=SPACING_MD)
 
+        self.create_separator(self._coqui_settings_frame).pack(fill="x", pady=(5, 10), padx=SPACING_MD)
+
+        # --- Sampling stability (temperature / repetition penalty) ---
+        ctk.CTkLabel(
+            self._coqui_settings_frame,
+            text="Sampling Stability",
+            font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
+            text_color=surface_theme["text_primary"],
+        ).pack(anchor="w", pady=(0, 4), padx=SPACING_MD)
+
+        stability_desc = self.create_helper_text(
+            text=(
+                "Lower temperature and higher repetition penalty make XTTS more "
+                "deterministic and reduce 'uhhh' / looping artifacts on long sessions."
+            ),
+            parent=self._coqui_settings_frame,
+        )
+        stability_desc.pack(anchor="w", pady=(0, 6), padx=SPACING_MD)
+
+        self.create_setting_label("Temperature:", parent=self._coqui_settings_frame).pack(
+            anchor="w", pady=(6, 4), padx=SPACING_MD
+        )
+        temp_frame = self.create_inline_frame(self._coqui_settings_frame)
+        saved_temp = float(self.settings.get("coqui_temperature", 0.75))
+        self._temperature_var = ctk.DoubleVar(value=saved_temp)
+        self._temperature_slider = ctk.CTkSlider(
+            temp_frame,
+            from_=0.0,
+            to=1.0,
+            number_of_steps=100,
+            variable=self._temperature_var,
+            command=self._on_temperature_change,
+        )
+        self._temperature_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self._temperature_value_label = ctk.CTkLabel(
+            temp_frame,
+            text=f"{saved_temp:.2f}",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=50,
+        )
+        self._temperature_value_label.pack(side="right", padx=5)
+
+        self.create_setting_label("Repetition Penalty:", parent=self._coqui_settings_frame).pack(
+            anchor="w", pady=(6, 4), padx=SPACING_MD
+        )
+        rep_frame = self.create_inline_frame(self._coqui_settings_frame)
+        saved_rep = float(self.settings.get("coqui_repetition_penalty", 10.0))
+        self._repetition_penalty_var = ctk.DoubleVar(value=saved_rep)
+        self._repetition_penalty_slider = ctk.CTkSlider(
+            rep_frame,
+            from_=1.0,
+            to=20.0,
+            number_of_steps=190,
+            variable=self._repetition_penalty_var,
+            command=self._on_repetition_penalty_change,
+        )
+        self._repetition_penalty_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self._repetition_penalty_value_label = ctk.CTkLabel(
+            rep_frame,
+            text=f"{saved_rep:.1f}",
+            font=ctk.CTkFont(size=FONT_MD),
+            width=50,
+        )
+        self._repetition_penalty_value_label.pack(side="right", padx=5)
+
+        # --- Text splitting + memory cleanup ---
+        self._text_splitting_var = ctk.BooleanVar(
+            value=bool(self.settings.get("coqui_enable_text_splitting", True))
+        )
+        ctk.CTkCheckBox(
+            self._coqui_settings_frame,
+            text="Language-aware sentence splitting",
+            variable=self._text_splitting_var,
+            font=ctk.CTkFont(size=FONT_MD),
+        ).pack(anchor="w", pady=(10, 4), padx=SPACING_MD)
+        splitting_note = self.create_helper_text(
+            text=(
+                "Splits on real sentence boundaries (needs spaCy, bundled in "
+                "requirements.txt as 'spacy[ja]'). Falls back to the built-in "
+                "chunker if spaCy isn't installed."
+            ),
+            parent=self._coqui_settings_frame,
+        )
+        splitting_note.pack(anchor="w", pady=(0, 6), padx=SPACING_MD)
+
+        self.create_setting_label("GPU Memory Cleanup:", parent=self._coqui_settings_frame).pack(
+            anchor="w", pady=(6, 4), padx=SPACING_MD
+        )
+        cleanup_frame = self.create_inline_frame(self._coqui_settings_frame)
+        saved_cleanup = int(self.settings.get("coqui_gpu_cleanup_interval", 5))
+        self._gpu_cleanup_var = ctk.IntVar(value=saved_cleanup)
+        self._gpu_cleanup_slider = ctk.CTkSlider(
+            cleanup_frame,
+            from_=0,
+            to=50,
+            number_of_steps=50,
+            variable=self._gpu_cleanup_var,
+            command=self._on_gpu_cleanup_change,
+        )
+        self._gpu_cleanup_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self._gpu_cleanup_value_label = ctk.CTkLabel(
+            cleanup_frame,
+            text=self._format_cleanup_label(saved_cleanup),
+            font=ctk.CTkFont(size=FONT_MD),
+            width=60,
+        )
+        self._gpu_cleanup_value_label.pack(side="right", padx=5)
+
         self.create_separator(self._coqui_settings_frame).pack(fill="x", pady=(5, SPACING_MD), padx=SPACING_MD)
 
         if current == _COQUI_PROVIDER_KEY:
@@ -270,6 +378,25 @@ class TTSProviderTab(BaseTab):
         if self._provider_changed_callback is not None:
             self._provider_changed_callback(key)
 
+    def _on_temperature_change(self, value):
+        """Update the temperature value label as the slider moves."""
+        self._temperature_value_label.configure(text=f"{float(value):.2f}")
+
+    def _on_repetition_penalty_change(self, value):
+        """Update the repetition penalty value label as the slider moves."""
+        self._repetition_penalty_value_label.configure(text=f"{float(value):.1f}")
+
+    def _on_gpu_cleanup_change(self, value):
+        """Update the GPU cleanup interval label as the slider moves."""
+        self._gpu_cleanup_value_label.configure(
+            text=self._format_cleanup_label(int(value))
+        )
+
+    @staticmethod
+    def _format_cleanup_label(interval: int) -> str:
+        """Human-readable label for the GPU cleanup interval slider."""
+        return "off" if interval <= 0 else f"every {interval}"
+
     @staticmethod
     def _build_gpu_options():
         """Return (index_list, label_list) for GPU selection.
@@ -302,6 +429,10 @@ class TTSProviderTab(BaseTab):
             "tts_provider": self._label_to_key(self._provider_var.get()),
             "coqui_gpu_device": gpu_device,
             "coqui_language": language_code,
+            "coqui_temperature": round(float(self._temperature_var.get()), 2),
+            "coqui_repetition_penalty": round(float(self._repetition_penalty_var.get()), 1),
+            "coqui_enable_text_splitting": bool(self._text_splitting_var.get()),
+            "coqui_gpu_cleanup_interval": int(self._gpu_cleanup_var.get()),
         }
 
     def validate(self) -> List[str]:

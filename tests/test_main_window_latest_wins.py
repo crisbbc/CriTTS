@@ -28,6 +28,93 @@ def test_latest_request_stays_current_until_another_is_scheduled():
     assert scheduler.is_latest(request)
 
 
+def test_schedule_voice_indicator_update_reads_text_lazily():
+    """Scheduling the debounced voice-indicator update must not copy the whole document."""
+    window = MainWindow.__new__(MainWindow)
+    window.text_input = MagicMock()
+    window.text_input.get.return_value = "hello world"
+    window._voice_indicator_timer = None
+    window._voice_indicator_scheduler = LatestWinsTextAnalysisScheduler()
+    window._async_callbacks_active = True
+    window._update_voice_indicator_for_text = MagicMock()
+    window._cancel_after = MagicMock()
+
+    captured = {}
+    window._safe_after = MagicMock(
+        side_effect=lambda delay, cb: captured.setdefault("cb", cb) or 123
+    )
+
+    MainWindow._schedule_voice_indicator_update(window)
+
+    # Scheduling is on the per-keystroke path, so it must not read the document
+    window.text_input.get.assert_not_called()
+
+    # When the debounce timer fires, the current text is read once and analyzed
+    captured["cb"]()
+
+    window.text_input.get.assert_called_once_with("1.0", "end-1c")
+    window._update_voice_indicator_for_text.assert_called_once()
+    assert window._update_voice_indicator_for_text.call_args.args[0] == "hello world"
+
+
+class _ResizeEvent:
+    def __init__(self, widget, width):
+        self.widget = widget
+        self.width = width
+
+
+def test_window_resize_defers_status_rewrap_and_skips_noop():
+    """Resize must configure the status label once per event-loop cycle, not per event."""
+    window = MainWindow.__new__(MainWindow)
+    window.root = MagicMock()
+    window.status_label = MagicMock()
+    window._async_callbacks_active = True
+    window._pending_status_wraplength = None
+    window._status_wraplength_job = None
+    window._last_status_wraplength = None
+
+    event = _ResizeEvent(window.root, 500)
+
+    MainWindow._on_window_resize(window, event)
+
+    # Deferred: the label is not configured until the queued job runs
+    window.status_label.configure.assert_not_called()
+    assert window.root.after.call_count == 1
+
+    window.root.after.call_args.args[1]()  # run the guarded after(0) callback
+
+    window.status_label.configure.assert_called_once_with(wraplength=350)
+    assert window._last_status_wraplength == 350
+
+    # Same width -> no new job and no extra configure
+    window.root.after.reset_mock()
+    MainWindow._on_window_resize(window, event)
+    assert window.root.after.call_count == 0
+    window.status_label.configure.assert_called_once()
+
+
+def test_window_resize_coalesces_updates_into_latest_width():
+    """A resize while a job is queued must keep only the latest pending width."""
+    window = MainWindow.__new__(MainWindow)
+    window.root = MagicMock()
+    window.status_label = MagicMock()
+    window._async_callbacks_active = True
+    window._pending_status_wraplength = None
+    window._status_wraplength_job = "queued"  # simulate an already-queued job
+    window._last_status_wraplength = 350
+
+    MainWindow._on_window_resize(window, _ResizeEvent(window.root, 700))
+
+    # No second job is scheduled; the latest width is stored for the queued job
+    assert window.root.after.call_count == 0
+    assert window._pending_status_wraplength == 550
+
+    MainWindow._apply_pending_status_wraplength(window)
+
+    window.status_label.configure.assert_called_once_with(wraplength=550)
+    assert window._last_status_wraplength == 550
+
+
 class _StubTextInput:
     def __init__(self):
         self.calls = []
@@ -469,6 +556,10 @@ async def test_play_audio_segment_prepares_audio_once_for_viseme_and_amplitude_p
     window._viseme_mapper = MagicMock()
     window._amplitude_analyzer = MagicMock()
     window._amplitude_analyzer.get_amplitude = MagicMock(return_value=0.5)
+    # The forwarder getter is mocked because OscAmplitudeForwarder starts a
+    # daemon thread on construction (out of scope for this test; the instance
+    # attribute normally exists after __init__).
+    window._get_amplitude_forwarder = MagicMock(return_value=MagicMock())
     window.osc_client = MagicMock()
     window.audio_router = MagicMock()
     window.audio_router.prepare_audio_for_playback = AsyncMock(return_value=prepared)

@@ -55,6 +55,9 @@ _SCHEMA_OVERRIDES = {
     "mic_passthrough_volume": {"range": (0, 200)},
     "vrchat_osc_port": {"range": (1, 65535)},
     "coqui_gpu_device": {"range": (-2, None)},
+    "coqui_temperature": {"range": (0.0, 1.0)},
+    "coqui_repetition_penalty": {"range": (1.0, 20.0)},
+    "coqui_gpu_cleanup_interval": {"range": (0, 100)},
     "stt_confidence_threshold": {"range": (0.0, 1.0)},
     "language_detection_confidence_threshold": {"range": (0.0, 1.0)},
     "piper_sentence_silence": {"range": (0.0, 2.0)},
@@ -253,8 +256,17 @@ class SettingsManager:
         # Coqui TTS Settings
         # gpu_device selects the CUDA device (-2 = Auto, -1 = CPU only, 0+ = GPU index)
         # language sets the XTTS v2 synthesis language (ISO code, default: "en")
+        # temperature/repetition_penalty tune XTTS sampling stability: lower
+        # temperature and higher repetition_penalty reduce "uhhh"/loop artifacts.
+        # enable_text_splitting uses XTTS's language-aware sentence splitter.
+        # gpu_cleanup_interval runs torch.cuda.empty_cache() every N syntheses
+        # (0 = never) to counter VRAM fragmentation over long sessions.
         "coqui_gpu_device": -2,
         "coqui_language": "en",
+        "coqui_temperature": 0.75,
+        "coqui_repetition_penalty": 10.0,
+        "coqui_enable_text_splitting": True,
+        "coqui_gpu_cleanup_interval": 5,
 
         # Piper TTS Settings
         # Keep None to preserve per-voice .onnx.json inference recommendations.

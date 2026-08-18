@@ -88,19 +88,6 @@ class TTSEngine:
         'ko': ['', '백', '이백', '삼백', '사백', '오백', '육백', '칠백', '팔백', '구백'],
     }
 
-    _THOUSANDS_WORDS = {
-        'en': ['', 'one thousand', 'two thousand', 'three thousand', 'four thousand', 'five thousand', 'six thousand', 'seven thousand', 'eight thousand', 'nine thousand'],
-        'es': ['', 'mil', 'dos mil', 'tres mil', 'cuatro mil', 'cinco mil', 'seis mil', 'siete mil', 'ocho mil', 'nueve mil'],
-        'fr': ['', 'mille', 'deux mille', 'trois mille', 'quatre mille', 'cinq mille', 'six mille', 'sept mille', 'huit mille', 'neuf mille'],
-        'de': ['', 'eintausend', 'zweitausend', 'dreitausend', 'viertausend', 'fünftausend', 'sechstausend', 'siebentausend', 'achttausend', 'neuntausend'],
-        'it': ['', 'mille', 'duemila', 'tremila', 'quattromila', 'cinquemila', 'seimila', 'settemila', 'ottomila', 'novemila'],
-        'pt': ['', 'mil', 'dois mil', 'três mil', 'quatro mil', 'cinco mil', 'seis mil', 'sete mil', 'oito mil', 'nove mil'],
-        'ru': ['', 'тысяча', 'две тысячи', 'три тысячи', 'четыре тысячи', 'пять тысяч', 'шесть тысяч', 'семь тысяч', 'восемь тысяч', 'девять тысяч'],
-        'zh': ['', '一千', '二千', '三千', '四千', '五千', '六千', '七千', '八千', '九千'],
-        'ja': ['', '千', '二千', '三千', '四千', '五千', '六千', '七千', '八千', '九千'],
-        'ko': ['', '천', '이천', '삼천', '사천', '오천', '육천', '칠천', '팔천', '구천'],
-    }
-
     # Regex patterns used by _clean_symbols (compiled once at class level)
     _URL_PATTERN = re.compile(r'https?://\S+|www\.\S+')
     _MARKDOWN_BOLD_ITALIC = re.compile(r'\*{1,3}(.+?)\*{1,3}', re.DOTALL)
@@ -115,6 +102,8 @@ class TTSEngine:
     )
     _REPEATED_PUNCT = re.compile(r'([!?]){2,}')
     _PIPER_VOICE_LANGUAGE = re.compile(r'^([A-Za-z]{2,3})(?:[_-][A-Za-z]{2,4})?[-_]')
+    _CURRENCY_SYMBOLS = '$€£¥₹₽₩¢₿'
+    _PERCENT_SYMBOLS = '%‰'
 
     def __init__(self, settings_manager: Optional['SettingsManager'] = None):
         """Initialize the TTS engine.
@@ -154,6 +143,21 @@ class TTSEngine:
         if self._settings_manager is not None:
             return self._settings_manager
         return SettingsManager()
+
+    @staticmethod
+    def _coerce_cache_path(value) -> Optional[Path]:
+        """Return ``value`` as a real cache path, or ``None`` when it isn't one.
+
+        ``audio_cache_path`` is read from the settings manager, which in tests
+        may be a MagicMock whose ``get()`` returns another mock.  ``pathlib.Path``
+        converts such mocks into a relative ``MagicMock/mock.get()/…`` path, and
+        AudioCache would then create that directory on disk.  Only genuine
+        ``str``/``Path`` values are valid cache locations; anything else falls
+        back to the default.
+        """
+        if isinstance(value, (str, Path)):
+            return Path(value)
+        return None
     
     def reload_cache_settings(self):
         """
@@ -168,7 +172,7 @@ class TTSEngine:
             # Get cache settings
             cache_enabled = settings.get("audio_cache_enabled", True)
             max_size_mb = settings.get("audio_cache_max_size_mb", 500)
-            cache_path = settings.get("audio_cache_path")
+            cache_path = self._coerce_cache_path(settings.get("audio_cache_path"))
             
             # Update audio cache settings if cache exists
             if self._audio_cache:
@@ -176,7 +180,7 @@ class TTSEngine:
                 self._audio_cache.max_size_mb = max_size_mb
                 # If cache path changed, we'd need to reinitialize - log a warning
                 current_cache_dir = str(self._audio_cache.cache_dir) if self._audio_cache.cache_dir else None
-                new_cache_path = str(Path(cache_path)) if cache_path else None
+                new_cache_path = str(cache_path) if cache_path is not None else None
                 if current_cache_dir != new_cache_path:
                     logger.warning("Cache path change requires restart to take effect")
             
@@ -196,11 +200,11 @@ class TTSEngine:
             # Get cache settings
             cache_enabled = settings.get("audio_cache_enabled", True)
             max_size_mb = settings.get("audio_cache_max_size_mb", 500)
-            cache_path = settings.get("audio_cache_path")
+            cache_path = self._coerce_cache_path(settings.get("audio_cache_path"))
             
             # Initialize audio cache
             self._audio_cache = AudioCache(
-                cache_dir=Path(cache_path) if cache_path else None,
+                cache_dir=cache_path,
                 max_size_mb=max_size_mb,
                 enabled=cache_enabled
             )
@@ -239,12 +243,14 @@ class TTSEngine:
             return self._phrase_tracker.get_common_phrases(min_uses, limit)
         return []
     
-    async def pregenerate_common_phrases(self, progress_callback=None) -> int:
+    async def pregenerate_common_phrases(self, progress_callback=None, stop_event=None) -> int:
         """
         Pre-generate audio for common phrases.
         
         Args:
             progress_callback: Optional callback for progress updates
+            stop_event: Optional event to signal cancellation (checked between
+                phrases and passed into each generate_speech call)
             
         Returns:
             Number of phrases pre-generated
@@ -259,21 +265,44 @@ class TTSEngine:
         phrases = self._phrase_tracker.get_common_phrases(min_uses, max_phrases)
         generated = 0
         
+        provider_name = self._get_active_provider_name()
+        fingerprint = self._get_audio_cache_fingerprint(provider_name)
+
         for text, voice, count in phrases:
-            # Check if already cached
+            if stop_event is not None and stop_event.is_set():
+                break
+
+            # Resolve the exact voice and preprocessed text that
+            # generate_speech() will use, so this pre-check matches the runtime
+            # cache key.  Looking up the raw text always missed — generate_speech
+            # caches under the *preprocessed* text — so already-cached phrases
+            # were re-invoked (and re-counted) on every run.
+            actual_voice, voice_error = await self._resolve_synthesis_voice(
+                text, voice, provider_name
+            )
+            if voice_error:
+                continue
+
+            processed_text = await self.preprocess_text(
+                text, actual_voice, provider_name=provider_name,
+            )
+
             if self._audio_cache.lookup(
-                text,
-                voice,
+                processed_text,
+                actual_voice,
                 0,
                 100,
                 0,
-                provider=self._get_active_provider_name(),
+                provider=provider_name,
+                settings_fingerprint=fingerprint,
             ):
                 continue
             
-            # Generate and cache
+            # Generate and cache (generate_speech derives the identical key)
             try:
-                audio_data, error = await self.generate_speech(text, voice)
+                audio_data, error = await self.generate_speech(
+                    text, actual_voice, stop_event=stop_event
+                )
                 if audio_data and not error:
                     generated += 1
                     if progress_callback:
@@ -288,6 +317,46 @@ class TTSEngine:
         if self._settings_manager:
             return self._settings_manager.get("tts_provider", "edge")
         return "edge"
+
+    def _get_audio_cache_fingerprint(self, provider_name: str) -> str:
+        """Return a stable fingerprint of settings that affect cached audio content.
+
+        The disk audio cache is keyed on (provider, processed text, voice, rate,
+        volume, pitch).  Any other setting that changes the synthesized waveform
+        (Coqui language, Piper noise/silence knobs, playback EQ/normalization/
+        profile) would otherwise silently replay audio recorded under a different
+        configuration — which sounds "stale" after the user tweaks a knob.  All
+        of them are folded into the fingerprint so a config change becomes a
+        cache miss.  Playback processing is re-applied at play time, but is
+        included anyway so the cache contract is simply "audio valid for exactly
+        these settings".
+        """
+        settings = self._get_settings()
+
+        def _get(key: str, default):
+            try:
+                return settings.get(key, default)
+            except Exception:
+                return default
+
+        parts = []
+        if provider_name == "coqui":
+            parts.append(f"lang={_get('coqui_language', 'en')}")
+            parts.append(f"temp={_get('coqui_temperature', 0.75)}")
+            parts.append(f"rep={_get('coqui_repetition_penalty', 10.0)}")
+            parts.append(f"split={int(bool(_get('coqui_enable_text_splitting', True)))}")
+        elif provider_name == "piper":
+            parts.append(f"ns={_get('piper_noise_scale', None)}")
+            parts.append(f"nw={_get('piper_noise_w_scale', None)}")
+            parts.append(f"sil={_get('piper_sentence_silence', None)}")
+
+        parts.append(f"eq={int(bool(_get('enable_clarity_eq', True)))}")
+        parts.append(
+            f"norm={int(bool(_get('enable_normalization', True)))}:"
+            f"{_get('normalization_type', 'Peak')}"
+        )
+        parts.append(f"prof={_get('processing_profile', 'balanced')}")
+        return "|".join(parts)
 
     def _create_coqui_provider(self):
         """Create the Coqui provider on first real use."""
@@ -648,35 +717,67 @@ class TTSEngine:
         return text
 
     def _format_numbers(self, text: str, voice: Optional[str] = None) -> str:
-        """Format numbers for better TTS pronunciation with language-aware conversion.
+        """Format standalone whole numbers for better TTS pronunciation.
+
+        Only plain, standalone integers (0-999) are rewritten to words.
+        Decimals, currency amounts, thousands-separated figures, times,
+        fractions, dates, percentages, and standalone years or larger numbers
+        are left untouched so the provider can read them with proper context.
         
         Args:
             text: Text containing numbers to format
             voice: Voice ID to determine language. If None, falls back to settings voice.
             
         Returns:
-            Text with numbers converted to words in the appropriate language
+            Text with standalone small numbers converted to words
         """
         # Get the current voice to determine language
         current_voice = self._get_current_voice_language(voice)
 
         # Get number words for current language (default to English)
         words = self._NUMBER_WORDS.get(current_voice, self._NUMBER_WORDS['en'])
-        
+
+        def part_of_larger_number(match) -> bool:
+            """True when a digit run belongs to a bigger numeric token."""
+            start, end = match.start(), match.end()
+            prev = text[start - 1] if start > 0 else ''
+            nxt = text[end] if end < len(text) else ''
+
+            # Currency attaches before the number ($5.99); % and ‰ attach after (50%).
+            if prev and prev in self._CURRENCY_SYMBOLS:
+                return True
+            if nxt and nxt in self._PERCENT_SYMBOLS:
+                return True
+
+            # A separator only links two halves of a number when a digit sits on
+            # the other side (3.14, 1,234, 12:30, 3/4, 555-1234, 2026-08-17).
+            for separator in '.,:/':
+                if prev == separator and start > 1 and text[start - 2].isdigit():
+                    return True
+                if nxt == separator and end + 1 < len(text) and text[end + 1].isdigit():
+                    return True
+
+            for dash in '-–—':
+                if prev == dash and start > 1 and text[start - 2].isdigit():
+                    return True
+                if nxt == dash and end + 1 < len(text) and text[end + 1].isdigit():
+                    return True
+
+            return False
+
         def number_to_words(match):
             num = int(match.group())
+
+            if part_of_larger_number(match) or num >= 1000:
+                return match.group()
+
             if 0 <= num <= 20:
                 return words[num]
-            elif 21 <= num <= 99:
+            if 21 <= num <= 99:
                 return self._convert_tens_to_words(num, words, current_voice)
-            elif 100 <= num <= 999:
-                return self._convert_hundreds_to_words(num, words, current_voice)
-            elif 1000 <= num <= 999999:
-                return self._convert_thousands_to_words(num, words, current_voice)
-            else:
-                return str(num)
+            return self._convert_hundreds_to_words(num, words, current_voice)
         
-        # Replace numbers with words (extended range)
+        # Replace standalone whole numbers with words
         text = re.sub(r'\b\d+\b', number_to_words, text)
         
         return text
@@ -718,27 +819,6 @@ class TTSEngine:
                 result += f" {self._convert_tens_to_words(remainder, words, language)}"
             else:
                 result += self._convert_tens_to_words(remainder, words, language)
-        
-        return result
-    
-    def _convert_thousands_to_words(self, num: int, words: list, language: str) -> str:
-        """Convert numbers 1000-999999 to words."""
-        thousands = num // 1000
-        remainder = num % 1000
-
-        # Guard: if thousands > 9, the lookup tables won't have an entry
-        # Fall back to returning the number as string (same as numbers > 999999)
-        if thousands > 9:
-            return str(num)
-
-        thousands_list = self._THOUSANDS_WORDS.get(language, self._THOUSANDS_WORDS['en'])
-        
-        result = thousands_list[thousands]
-        if remainder > 0:
-            if language in ['en', 'fr', 'de', 'it', 'pt']:
-                result += f" {self._convert_hundreds_to_words(remainder, words, language)}"
-            else:
-                result += self._convert_hundreds_to_words(remainder, words, language)
         
         return result
     
@@ -854,6 +934,76 @@ class TTSEngine:
         """
         return await self.generate_speech(text, voice, rate, volume, pitch, stop_event, auto_select_voice)
 
+    async def _resolve_synthesis_voice(
+        self,
+        text: str,
+        voice: str,
+        provider_name: str,
+        auto_select_voice: bool = False,
+    ) -> Tuple[str, Optional[str]]:
+        """Resolve the voice that will actually synthesize *text*.
+
+        Applies the full resolution pipeline used before generation: optional
+        language-based auto-selection, language auto-detection with custom-voice
+        mapping, and provider validation with fallback to the provider default.
+        Shared by ``generate_speech()`` and ``pregenerate_common_phrases()`` so
+        both derive identical voice + cache keys.
+
+        Returns:
+            ``(actual_voice, error)``; ``error`` is ``None`` when the voice
+            resolved successfully.
+        """
+        actual_voice = voice
+
+        if auto_select_voice:
+            suggested_voice = self.get_optimal_voice_for_text(text)
+            if suggested_voice and suggested_voice != voice:
+                actual_voice = suggested_voice
+                logger.info("Auto-selected voice '%s' for text language", actual_voice)
+
+        # Check settings for auto language detection (only for Edge TTS)
+        auto_language = False
+        try:
+            settings_manager = self._get_settings()
+            auto_language = settings_manager.get("auto_language_detection", False)
+            # Only apply auto language detection for Edge TTS
+            if auto_language:
+                detected_voice = self._detect_language_voice(text)
+                if detected_voice and detected_voice != actual_voice:
+                    # Check if user has a custom voice mapping for this language
+                    custom_voice = self._get_custom_language_voice(text, detected_voice)
+                    if custom_voice:
+                        actual_voice = custom_voice
+                        logger.info("Using custom language voice '%s' for text", actual_voice)
+                    else:
+                        actual_voice = detected_voice
+                        logger.info("Auto-detected language voice '%s' for text", actual_voice)
+        except Exception:
+            pass
+
+        # Validate voice before generation (cached); fall back to provider default if mismatched
+        if not await self.validate_voice(actual_voice, provider_name=provider_name):
+            provider = self._get_provider_by_name(provider_name)
+            fallback = provider.get_default_voice()
+            if fallback and await self.validate_voice(fallback, provider_name=provider_name):
+                logger.info(
+                    "Voice '%s' is not valid for the current provider; "
+                    "falling back to '%s'", actual_voice, fallback
+                )
+                invalid_voice = actual_voice
+                actual_voice = fallback
+                # Invalidate the validation cache entry for the incompatible voice
+                # so it is re-checked if the provider changes later.
+                with self._voice_cache_lock:
+                    self._voice_cache.pop((provider_name, invalid_voice), None)
+            else:
+                return actual_voice, (
+                    f"Voice '{actual_voice}' is not available with the current TTS provider. "
+                    "Please select a compatible voice in Settings."
+                )
+
+        return actual_voice, None
+
     async def generate_speech(
         self, 
         text: str, 
@@ -906,54 +1056,18 @@ class TTSEngine:
         provider_name = provider_override or self._get_active_provider_name()
         provider = self._get_provider_by_name(provider_name)
 
+        # Snapshot the synthesis-affecting settings fingerprint so the cache
+        # entry is tagged with exactly the configuration that produced the audio.
+        settings_fingerprint = self._get_audio_cache_fingerprint(provider_name)
+
         # Auto-select voice if requested and provider supports it
-        actual_voice = voice
-        
-        if auto_select_voice:
-            suggested_voice = self.get_optimal_voice_for_text(text)
-            if suggested_voice and suggested_voice != voice:
-                actual_voice = suggested_voice
-                logger.info(f"Auto-selected voice '{actual_voice}' for text language")
-        
-        # Check settings for auto language detection (only for Edge TTS)
-        auto_language = False
-        try:
-            settings_manager = self._get_settings()
-            auto_language = settings_manager.get("auto_language_detection", False)
-            # Only apply auto language detection for Edge TTS
-            if auto_language:
-                detected_voice = self._detect_language_voice(text)
-                if detected_voice and detected_voice != actual_voice:
-                    # Check if user has a custom voice mapping for this language
-                    custom_voice = self._get_custom_language_voice(text, detected_voice)
-                    if custom_voice:
-                        actual_voice = custom_voice
-                        logger.info(f"Using custom language voice '{actual_voice}' for text")
-                    else:
-                        actual_voice = detected_voice
-                        logger.info(f"Auto-detected language voice '{actual_voice}' for text")
-        except Exception:
-            pass
-        
-        # Validate voice before generation (cached); fall back to provider default if mismatched
-        if not await self.validate_voice(actual_voice, provider_name=provider_name):
-            fallback = provider.get_default_voice()
-            if fallback and await self.validate_voice(fallback, provider_name=provider_name):
-                logger.info(
-                    "Voice '%s' is not valid for the current provider; "
-                    "falling back to '%s'", actual_voice, fallback
-                )
-                invalid_voice = actual_voice
-                actual_voice = fallback
-                # Invalidate the validation cache entry for the incompatible voice
-                # so it is re-checked if the provider changes later.
-                with self._voice_cache_lock:
-                    self._voice_cache.pop((provider_name, invalid_voice), None)
-            else:
-                return None, (
-                    f"Voice '{actual_voice}' is not available with the current TTS provider. "
-                    "Please select a compatible voice in Settings."
-                )
+        # Resolve the voice that will actually synthesize the text (auto
+        # language detection, validation, provider-default fallback).
+        actual_voice, voice_error = await self._resolve_synthesis_voice(
+            text, voice, provider_name, auto_select_voice=auto_select_voice
+        )
+        if voice_error:
+            return None, voice_error
         
         # Preprocess text for better quality and speed, passing actual_voice for language-aware number formatting
         processed_text = await self.preprocess_text(
@@ -971,6 +1085,7 @@ class TTSEngine:
                 volume,
                 pitch,
                 provider=provider_name,
+                settings_fingerprint=settings_fingerprint,
             )
             if cached_audio:
                 logger.debug(f"Cache hit for text ({len(cached_audio)} bytes)")
@@ -1047,7 +1162,8 @@ class TTSEngine:
                     volume, 
                     pitch,
                     provider=provider_name,
-                    generation_time=duration
+                    generation_time=duration,
+                    settings_fingerprint=settings_fingerprint,
                 )
             
             # Track phrase usage for pre-generation

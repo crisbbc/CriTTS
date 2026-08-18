@@ -102,6 +102,7 @@ def test_advanced_tab_keeps_sidebar_anchor_order():
 
     assert [section["title"] for section in tab._sections] == [
         "Cache Management",
+        "Phrase Pre-generation",
         "Network Privacy",
         "Performance Settings",
         "Experimental Features",

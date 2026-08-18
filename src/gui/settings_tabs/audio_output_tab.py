@@ -192,7 +192,7 @@ class AudioOutputTab(BaseTab):
                 import shutil
                 if not shutil.which("pactl"):
                     self._after_sink_result(
-                        "⚠️ pactl not found. Is PipeWire installed?", error=True
+                        "⚠ pactl not found. Is PipeWire installed?", error=True
                     )
                     return
 
@@ -246,7 +246,7 @@ class AudioOutputTab(BaseTab):
                         err = mic_result.stderr.strip() or "Unknown error"
                         self._after_sink_result(
                             f"✅ Null sink ready.\n"
-                            f"⚠️ Virtual mic failed ({err}).\n"
+                            f"⚠ Virtual mic failed ({err}).\n"
                             f"   Check: pactl list sources short | grep {sink_name}",
                             error=False,
                         )
@@ -261,11 +261,11 @@ class AudioOutputTab(BaseTab):
 
             except FileNotFoundError:
                 self._after_sink_result(
-                    "⚠️ pactl not found. Is PipeWire installed?", error=True
+                    "⚠ pactl not found. Is PipeWire installed?", error=True
                 )
             except subprocess.TimeoutExpired:
                 self._after_sink_result(
-                    "⚠️ pactl timed out. Check your audio system.", error=True
+                    "⚠ pactl timed out. Check your audio system.", error=True
                 )
             except Exception as e:
                 self._after_sink_result(

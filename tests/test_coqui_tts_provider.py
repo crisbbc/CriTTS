@@ -4,7 +4,7 @@ Covers:
 - Voice list completeness and structure
 - get_default_voice
 - _apply_volume helper
-- _apply_rate helper
+- _rate_to_speed helper
 - _float_array_to_wav_bytes helper
 - validate_voice
 - clear_cache
@@ -13,7 +13,7 @@ Covers:
 - _ensure_model_loaded
 - _get_language
 - _get_gpu_device
-- sentence chunking and conservative offline rate handling
+- sentence chunking and native XTTS speed handling
 """
 import io
 import sys
@@ -59,7 +59,6 @@ from src.tts.providers.coqui_tts_provider import (  # noqa: E402
     _COQUI_VOICES,
     _VOICE_NAMES,
     _apply_volume,
-    _apply_rate,
     _float_array_to_wav_bytes,
     _COQUI_SAMPLE_RATE,
 )
@@ -143,6 +142,115 @@ class TestGetLanguage:
 
 
 # ---------------------------------------------------------------------------
+# Sampling stability settings (temperature / repetition penalty / splitting)
+# ---------------------------------------------------------------------------
+
+class TestSamplingSettings:
+    def test_temperature_default(self, provider):
+        assert provider._get_temperature() == pytest.approx(0.75)
+
+    def test_temperature_from_settings(self):
+        mock_sm = MagicMock()
+        mock_sm.get.side_effect = lambda key, default=None: (
+            0.4 if key == "coqui_temperature" else default
+        )
+        p = CoquiTTSProvider(settings_manager=mock_sm)
+        assert p._get_temperature() == pytest.approx(0.4)
+
+    def test_temperature_clamped_high(self):
+        mock_sm = MagicMock()
+        mock_sm.get.side_effect = lambda key, default=None: (
+            5.0 if key == "coqui_temperature" else default
+        )
+        p = CoquiTTSProvider(settings_manager=mock_sm)
+        assert p._get_temperature() == pytest.approx(1.0)
+
+    def test_repetition_penalty_default(self, provider):
+        assert provider._get_repetition_penalty() == pytest.approx(10.0)
+
+    def test_repetition_penalty_from_settings(self):
+        mock_sm = MagicMock()
+        mock_sm.get.side_effect = lambda key, default=None: (
+            15.0 if key == "coqui_repetition_penalty" else default
+        )
+        p = CoquiTTSProvider(settings_manager=mock_sm)
+        assert p._get_repetition_penalty() == pytest.approx(15.0)
+
+    def test_repetition_penalty_clamped_low(self):
+        mock_sm = MagicMock()
+        mock_sm.get.side_effect = lambda key, default=None: (
+            0.5 if key == "coqui_repetition_penalty" else default
+        )
+        p = CoquiTTSProvider(settings_manager=mock_sm)
+        assert p._get_repetition_penalty() == pytest.approx(1.0)
+
+    def test_text_splitting_default_enabled(self, provider):
+        """Text splitting is on by default when spaCy is available."""
+        with patch("importlib.util.find_spec", return_value=types.SimpleNamespace()):
+            assert provider._get_text_splitting_enabled() is True
+
+    def test_text_splitting_disabled_from_settings(self):
+        mock_sm = MagicMock()
+        mock_sm.get.side_effect = lambda key, default=None: (
+            False if key == "coqui_enable_text_splitting" else default
+        )
+        p = CoquiTTSProvider(settings_manager=mock_sm)
+        assert p._get_text_splitting_enabled() is False
+
+    def test_text_splitting_falls_back_when_spacy_missing(self, provider):
+        """Without spaCy, language-aware splitting must degrade, never crash.
+
+        XTTS raises ImportError when ``enable_text_splitting=True`` is used
+        without spaCy, so the provider must detect that and fall back to the
+        built-in chunker instead of breaking synthesis.
+        """
+        with patch("importlib.util.find_spec", return_value=None):
+            assert provider._get_text_splitting_enabled() is False
+
+    def test_text_splitting_enabled_when_spacy_present(self, provider):
+        """With spaCy available, language-aware splitting is on by default."""
+        with patch(
+            "importlib.util.find_spec",
+            return_value=types.SimpleNamespace(),
+        ):
+            assert provider._get_text_splitting_enabled() is True
+
+    def test_gpu_cleanup_interval_default(self, provider):
+        assert provider._get_gpu_cleanup_interval() == 5
+
+    def test_gpu_cleanup_interval_disabled(self):
+        mock_sm = MagicMock()
+        mock_sm.get.side_effect = lambda key, default=None: (
+            0 if key == "coqui_gpu_cleanup_interval" else default
+        )
+        p = CoquiTTSProvider(settings_manager=mock_sm)
+        assert p._get_gpu_cleanup_interval() == 0
+
+
+class TestGpuMemoryCleanup:
+    def test_cleanup_runs_every_interval(self, provider):
+        """empty_cache must run every `interval` syntheses, not each one."""
+        provider._loaded_device = "cuda:0"
+        with patch.object(provider, "_run_post_clear_memory_hygiene") as mock_hygiene:
+            for _ in range(4):
+                provider._maybe_cleanup_gpu_memory()
+            mock_hygiene.assert_not_called()
+            provider._maybe_cleanup_gpu_memory()  # 5th synthesis -> cleanup
+        mock_hygiene.assert_called_once_with("cuda:0")
+
+    def test_cleanup_disabled_when_interval_zero(self):
+        mock_sm = MagicMock()
+        mock_sm.get.side_effect = lambda key, default=None: (
+            0 if key == "coqui_gpu_cleanup_interval" else default
+        )
+        p = CoquiTTSProvider(settings_manager=mock_sm)
+        with patch.object(p, "_run_post_clear_memory_hygiene") as mock_hygiene:
+            for _ in range(20):
+                p._maybe_cleanup_gpu_memory()
+        mock_hygiene.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # _get_gpu_device
 # ---------------------------------------------------------------------------
 
@@ -193,37 +301,25 @@ class TestApplyVolume:
         np.testing.assert_array_almost_equal(result, arr * 2.0)
 
 
-class TestApplyRate:
-    def test_zero_rate_no_change(self):
-        arr = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
-        result, sr = _apply_rate(arr, 0, _COQUI_SAMPLE_RATE)
-        assert len(result) == len(arr)
-        assert sr == _COQUI_SAMPLE_RATE
+class TestRateToSpeed:
+    def test_zero_rate_is_natural_tempo(self, provider):
+        assert provider._rate_to_speed(0) == pytest.approx(1.0)
 
-    def test_positive_rate_shortens(self):
-        arr = np.ones(1000, dtype=np.float32)
-        result, _ = _apply_rate(arr, 50, _COQUI_SAMPLE_RATE)
-        assert len(result) < len(arr)
+    def test_positive_rate_speeds_up(self, provider):
+        assert provider._rate_to_speed(50) == pytest.approx(1.5)
 
-    def test_negative_rate_lengthens(self):
-        arr = np.ones(1000, dtype=np.float32)
-        result, _ = _apply_rate(arr, -50, _COQUI_SAMPLE_RATE)
-        assert len(result) > len(arr)
+    def test_negative_rate_slows_down(self, provider):
+        assert provider._rate_to_speed(-50) == pytest.approx(0.5)
 
-    def test_sample_rate_preserved(self):
-        arr = np.ones(100, dtype=np.float32)
-        _, sr = _apply_rate(arr, 30, 24000)
-        assert sr == 24000
+    def test_full_positive_rate_maps_to_max_speed(self, provider):
+        assert provider._rate_to_speed(100) == pytest.approx(2.0)
 
-    def test_positive_rate_is_clamped_for_quality(self):
-        arr = np.ones(1000, dtype=np.float32)
-        result, _ = _apply_rate(arr, 50, _COQUI_SAMPLE_RATE)
-        assert len(result) > 800
+    def test_full_negative_rate_maps_to_min_speed(self, provider):
+        assert provider._rate_to_speed(-100) == pytest.approx(0.5)
 
-    def test_negative_rate_is_clamped_for_quality(self):
-        arr = np.ones(1000, dtype=np.float32)
-        result, _ = _apply_rate(arr, -50, _COQUI_SAMPLE_RATE)
-        assert len(result) < 1200
+    def test_rate_is_clamped_to_valid_range(self, provider):
+        assert provider._rate_to_speed(200) == pytest.approx(2.0)
+        assert provider._rate_to_speed(-200) == pytest.approx(0.5)
 
 
 class TestFloatArrayToWavBytes:
@@ -447,6 +543,38 @@ class TestGenerateSpeech:
         # Verify the default speaker was used
         call_kwargs = fake_tts.tts.call_args
         assert call_kwargs.kwargs.get("speaker") == "Claribel Dervla"
+
+    @pytest.mark.asyncio
+    async def test_synthesis_passes_native_speed(self, provider):
+        """Rate should be applied via XTTS's native ``speed`` kwarg, not resampling."""
+        fake_tts = MagicMock()
+        fake_tts.tts.return_value = [0.0] * 24000
+        fake_tts.synthesizer.output_sample_rate = 24000
+
+        provider._tts = fake_tts
+        provider._model_loaded = True
+
+        await provider.generate_speech("Hello.", "Claribel Dervla", rate=50)
+
+        assert fake_tts.tts.call_args.kwargs.get("speed") == pytest.approx(1.5)
+
+    @pytest.mark.asyncio
+    async def test_synthesis_passes_stability_kwargs(self, provider):
+        """Temperature and repetition penalty must reach XTTS."""
+        fake_tts = MagicMock()
+        fake_tts.tts.return_value = [0.0] * 24000
+        fake_tts.synthesizer.output_sample_rate = 24000
+
+        provider._tts = fake_tts
+        provider._model_loaded = True
+
+        await provider.generate_speech("Hello.", "Claribel Dervla")
+
+        kwargs = fake_tts.tts.call_args.kwargs
+        assert kwargs.get("temperature") == pytest.approx(0.75)
+        assert kwargs.get("repetition_penalty") == pytest.approx(10.0)
+        # Bool (True when spaCy is installed, False otherwise) — never a crash
+        assert isinstance(kwargs.get("enable_text_splitting"), bool)
 
     def test_synthesize_blocking_chunks_sentences_and_stitches_pause(self, provider):
         fake_tts = MagicMock()

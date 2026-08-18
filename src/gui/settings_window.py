@@ -185,7 +185,11 @@ class SettingsWindow:
             VRChatOSCTab,
             parent_window=self.parent,
         )
-        self._register_tab_factory("Advanced", AdvancedTab)
+        self._register_tab_factory(
+            "Advanced",
+            AdvancedTab,
+            parent_window=self.window,
+        )
         self._register_tab_factory("TTS Provider", TTSProviderTab)
         self._hydrate_initial_tabs(selected_tab)
         
