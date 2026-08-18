@@ -3,7 +3,6 @@ Audio Output Tab
 Settings for audio output devices, normalization, and microphone passthrough.
 """
 import sys
-import subprocess
 import threading
 import customtkinter as ctk
 from typing import Any, List, Dict
@@ -178,7 +177,9 @@ class AudioOutputTab(BaseTab):
 
         Uses the hardcoded name ``crittssink`` so the user never needs to
         type anything.  The virtual mic appears as "CriTTS_Virtual_Mic" in
-        Discord's input device list.
+        Discord's input device list.  The pactl work lives in
+        ``AudioRouter.ensure_linux_sink_modules`` so the startup auto-setup
+        and this button share one idempotent implementation.
         """
         sink_name = "crittssink"
         self.sink_name_var.set(sink_name)
@@ -189,88 +190,15 @@ class AudioOutputTab(BaseTab):
 
         def _run():
             try:
-                import shutil
-                if not shutil.which("pactl"):
+                if self.audio_router is None:
                     self._after_sink_result(
-                        "⚠ pactl not found. Is PipeWire installed?", error=True
+                        "⚠ Audio router not available.", error=True
                     )
                     return
-
-                # 1. Check / create the null sink (hardcoded name)
-                check = subprocess.run(
-                    ["pactl", "list", "short", "sinks"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                sink_exists = any(
-                    sink_name in (p.strip().lower() for p in line.split("\t"))
-                    for line in check.stdout.splitlines()
-                )
-
-                if not sink_exists:
-                    result = subprocess.run(
-                        ["pactl", "load-module", "module-null-sink",
-                         f"sink_name={sink_name}",
-                         "sink_properties=device.description=CriTTS_Null_Sink"],
-                        capture_output=True, text=True, timeout=10,
-                    )
-                    if result.returncode != 0:
-                        err = result.stderr.strip() or "Unknown error"
-                        self._after_sink_result(
-                            f"❌ Failed to create sink: {err}", error=True
-                        )
-                        return
-
-                # 2. Create virtual mic from the monitor (if not already there)
-                virtual_mic_desc = "CriTTS_Virtual_Mic"
-                virtual_mic_name = f"{sink_name}_mic"
-
-                sources_check = subprocess.run(
-                    ["pactl", "list", "short", "sources"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                mic_exists = any(
-                    virtual_mic_name in line.split("\t")
-                    or virtual_mic_desc in line.split("\t")
-                    for line in sources_check.stdout.splitlines()
-                )
-
-                if not mic_exists:
-                    mic_result = subprocess.run(
-                        ["pactl", "load-module", "module-remap-source",
-                         f"source_name={virtual_mic_name}",
-                         f"source_properties=device.description={virtual_mic_desc}",
-                         f"master={sink_name}.monitor"],
-                        capture_output=True, text=True, timeout=10,
-                    )
-                    if mic_result.returncode != 0:
-                        err = mic_result.stderr.strip() or "Unknown error"
-                        self._after_sink_result(
-                            f"✅ Null sink ready.\n"
-                            f"⚠ Virtual mic failed ({err}).\n"
-                            f"   Check: pactl list sources short | grep {sink_name}",
-                            error=False,
-                        )
-                        return
-
-                # 3. Success
-                self._after_sink_result(
-                    f"✅ Ready! Set Discord input to:\n"
-                    f"   {virtual_mic_desc}",
-                    error=False,
-                )
-
-            except FileNotFoundError:
-                self._after_sink_result(
-                    "⚠ pactl not found. Is PipeWire installed?", error=True
-                )
-            except subprocess.TimeoutExpired:
-                self._after_sink_result(
-                    "⚠ pactl timed out. Check your audio system.", error=True
-                )
+                ok, message = self.audio_router.ensure_linux_sink_modules(sink_name)
+                self._after_sink_result(message, error=not ok)
             except Exception as e:
-                self._after_sink_result(
-                    f"❌ Unexpected error: {e}", error=True
-                )
+                self._after_sink_result(f"❌ Unexpected error: {e}", error=True)
 
         threading.Thread(target=_run, daemon=True).start()
 

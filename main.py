@@ -10,6 +10,7 @@ import os
 import signal
 import atexit
 import logging
+import threading
 import webbrowser
 
 # Configure logging early before any module imports
@@ -146,6 +147,63 @@ class CriTTSApp(ctk.CTk):
         
         # Start microphone passthrough if enabled
         self.after(600, self._init_passthrough)
+
+        # Auto-restore the Linux null sink + virtual mic if routing is configured
+        self.after(700, self._ensure_linux_sink_setup)
+    
+    def _ensure_linux_sink_setup(self):
+        """Auto-create the CriTTS null sink + virtual mic on Linux startup.
+
+        ``pactl load-module`` entries are ephemeral (cleared when the audio
+        server restarts) and are removed on app exit, so users who have already
+        opted into sink routing via ``linux_sink_name`` would otherwise have to
+        click the one-click setup after every launch.  Runs idempotently in the
+        background and reports the result to the main window's status bar.
+        """
+        if not sys.platform.startswith("linux"):
+            return
+        sink_name = (self.settings_manager.get("linux_sink_name") or "").strip()
+        if not sink_name:
+            return
+
+        def _run():
+            try:
+                ok, message = self.audio_router.ensure_linux_sink_modules(sink_name)
+                logger = logging.getLogger(__name__)
+                if ok:
+                    logger.info("Linux sink auto-setup: %s", message)
+                else:
+                    logger.warning("Linux sink auto-setup: %s", message)
+                self._report_linux_sink_status(ok, message)
+            except Exception as e:
+                logging.getLogger(__name__).exception(
+                    "Linux sink auto-setup failed: %s", e
+                )
+                self._report_linux_sink_status(
+                    False, f"❌ Linux sink setup failed: {e}", "error"
+                )
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _report_linux_sink_status(self, ok: bool, message: str, message_type: str | None = None) -> None:
+        """Surface the auto-setup result in the main window's status bar.
+
+        The worker thread marshals back onto the Tk thread via
+        ``MainWindow._safe_after``, which drops the update if the window is
+        closing.  The message is flattened to a single line for the status
+        label (the full detail stays in the log).
+        """
+        if not hasattr(self, "main_window"):
+            return
+        status_text = " ".join(message.split())
+        if message_type is None:
+            message_type = "success" if ok else "warning"
+        self.main_window._safe_after(
+            0,
+            lambda text=status_text, mtype=message_type: self.main_window._set_status(
+                text, "", mtype
+            ),
+        )
     
     def _init_passthrough(self):
         """Initialize microphone passthrough if enabled in settings."""

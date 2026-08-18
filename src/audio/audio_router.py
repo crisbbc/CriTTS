@@ -892,6 +892,98 @@ class AudioRouter:
             except Exception:
                 pass
 
+    @staticmethod
+    def ensure_linux_sink_modules(sink_name: str = "crittssink") -> tuple:
+        """Idempotently create the CriTTS null sink + virtual mic (Linux only).
+
+        ``pactl load-module`` entries are ephemeral — they vanish when the
+        audio server restarts and are removed on app exit — so startup re-runs
+        this to restore routing for users who have already opted in.  Safe to
+        call when the modules already exist (no-op).  Returns ``(ok, message)``
+        where ``ok`` is False only for fatal failures; ``message`` is
+        human-readable status for logging or the settings UI.
+        """
+        if not sys.platform.startswith("linux"):
+            return True, ""
+
+        if not shutil.which("pactl"):
+            return False, "⚠ pactl not found. Is PipeWire installed?"
+
+        # 1. Check / create the null sink (fixed description so cleanup finds it)
+        sink_description = "CriTTS_Null_Sink"
+        try:
+            check = subprocess.run(
+                ["pactl", "list", "short", "sinks"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            return False, "⚠ pactl timed out. Check your audio system."
+        except FileNotFoundError:
+            return False, "⚠ pactl not found. Is PipeWire installed?"
+        except Exception as e:
+            return False, f"❌ Unexpected error: {e}"
+
+        sink_exists = any(
+            sink_name in (part.strip().lower() for part in line.split("\t"))
+            for line in check.stdout.splitlines()
+        )
+        if not sink_exists:
+            try:
+                created = subprocess.run(
+                    ["pactl", "load-module", "module-null-sink",
+                     f"sink_name={sink_name}",
+                     f"sink_properties=device.description={sink_description}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+            except subprocess.TimeoutExpired:
+                return False, "⚠ pactl timed out. Check your audio system."
+            except Exception as e:
+                return False, f"❌ Unexpected error: {e}"
+            if created.returncode != 0:
+                err = created.stderr.strip() or "Unknown error"
+                return False, f"❌ Failed to create sink: {err}"
+
+        # 2. Check / create the virtual mic from the sink monitor
+        virtual_mic_description = "CriTTS_Virtual_Mic"
+        virtual_mic_name = f"{sink_name}_mic"
+        try:
+            sources_check = subprocess.run(
+                ["pactl", "list", "short", "sources"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            return False, "⚠ pactl timed out. Check your audio system."
+        except Exception as e:
+            return False, f"❌ Unexpected error: {e}"
+
+        mic_exists = any(
+            virtual_mic_name in line.split("\t")
+            or virtual_mic_description in line.split("\t")
+            for line in sources_check.stdout.splitlines()
+        )
+        if not mic_exists:
+            try:
+                mic_created = subprocess.run(
+                    ["pactl", "load-module", "module-remap-source",
+                     f"source_name={virtual_mic_name}",
+                     f"source_properties=device.description={virtual_mic_description}",
+                     f"master={sink_name}.monitor"],
+                    capture_output=True, text=True, timeout=10,
+                )
+            except subprocess.TimeoutExpired:
+                return False, "⚠ pactl timed out. Check your audio system."
+            except Exception as e:
+                return False, f"❌ Unexpected error: {e}"
+            if mic_created.returncode != 0:
+                err = mic_created.stderr.strip() or "Unknown error"
+                return True, (
+                    "✅ Null sink ready.\n"
+                    f"⚠ Virtual mic failed ({err}).\n"
+                    f"   Check: pactl list sources short | grep {sink_name}"
+                )
+
+        return True, f"✅ Ready! Set Discord input to:\n   {virtual_mic_description}"
+
     def _route_to_linux_sink(self) -> None:
         """Spawn a daemon thread that polls for the just-created sink input
         and moves it to the configured PulseAudio/PipeWire sink.
