@@ -12,6 +12,10 @@ def _result(stdout="", stderr="", returncode=0):
     return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
 
 
+def test_router_defaults_last_auto_setup_result_to_none():
+    assert AudioRouter().last_linux_sink_result is None
+
+
 @pytest.fixture
 def linux(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")

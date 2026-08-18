@@ -75,6 +75,10 @@ class AudioRouter:
         # Linux PulseAudio sink routing (set externally before playback)
         self._linux_sink_name: str = ""
 
+        # Last startup auto-setup result, surfaced later in the Audio Output
+        # settings tab.  ``(ok, message)`` or ``None`` when it hasn't run yet.
+        self.last_linux_sink_result: Optional[Tuple[bool, str]] = None
+
     @staticmethod
     def _is_truncation_prefix(shorter: str, longer: str) -> bool:
         """Return True when *shorter* is a whitespace-boundary prefix of *longer*.

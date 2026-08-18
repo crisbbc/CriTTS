@@ -172,6 +172,8 @@ class AudioOutputTab(BaseTab):
         )
         self.sink_status_label.pack(anchor="w")
 
+        self._show_last_sink_result()
+
     def _create_null_sink(self):
         """One-click setup: create null sink + virtual mic with a fixed name.
 
@@ -191,14 +193,17 @@ class AudioOutputTab(BaseTab):
         def _run():
             try:
                 if self.audio_router is None:
-                    self._after_sink_result(
-                        "⚠ Audio router not available.", error=True
-                    )
+                    message = "⚠ Audio router not available."
+                    self._record_last_sink_result(False, message)
+                    self._after_sink_result(message, error=True)
                     return
                 ok, message = self.audio_router.ensure_linux_sink_modules(sink_name)
+                self._record_last_sink_result(ok, message)
                 self._after_sink_result(message, error=not ok)
             except Exception as e:
-                self._after_sink_result(f"❌ Unexpected error: {e}", error=True)
+                message = f"❌ Unexpected error: {e}"
+                self._record_last_sink_result(False, message)
+                self._after_sink_result(message, error=True)
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -213,16 +218,47 @@ class AudioOutputTab(BaseTab):
                 if self.audio_router:
                     self.audio_router.cleanup_linux_sink_modules()
                 self.sink_name_var.set("")
-                self._after_sink_result(
-                    "🗑 Removed CriTTS sink + virtual mic.", error=False
-                )
+                message = "🗑 Removed CriTTS sink + virtual mic."
+                self._record_last_sink_result(True, message)
+                self._after_sink_result(message, error=False)
 
             except Exception as e:
-                self._after_sink_result(
-                    f"❌ Cleanup error: {e}", error=True
-                )
+                message = f"❌ Cleanup error: {e}"
+                self._record_last_sink_result(False, message)
+                self._after_sink_result(message, error=True)
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def _record_last_sink_result(self, ok: bool, message: str) -> None:
+        """Persist the latest sink setup/removal result on the shared router.
+
+        Keeping the router in sync means a later tab rebuild (theme refresh or
+        reopening settings) replays the most recent outcome rather than a stale
+        startup result.
+        """
+        router = getattr(self, "audio_router", None)
+        if router is None:
+            return
+        try:
+            router.last_linux_sink_result = (ok, message)
+        except Exception:
+            pass
+
+    def _show_last_sink_result(self) -> None:
+        """Render the latest sink setup/removal result recorded on the router.
+
+        The startup hook runs before (or independently of) this window and
+        stores its ``(ok, message)`` outcome on the shared ``AudioRouter``;
+        manual create/remove actions do the same.  This replays that outcome
+        into the sink status label when the tab is built.
+        """
+        router = getattr(self, "audio_router", None)
+        result = getattr(router, "last_linux_sink_result", None) if router is not None else None
+        if not isinstance(result, tuple) or len(result) != 2:
+            return
+        ok, message = result
+        color = "#e74c3c" if not ok else "#27ae60"
+        self.sink_status_label.configure(text=message, text_color=color)
 
     def _after_sink_result(self, message: str, *, error: bool):
         """Schedule a UI update from the background thread."""

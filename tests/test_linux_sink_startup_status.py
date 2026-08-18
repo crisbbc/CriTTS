@@ -89,6 +89,10 @@ def test_report_success_flattens_message_and_uses_success_type(main_module):
     assert _flush(app) == [
         ("✅ Ready! Set Discord input to: CriTTS_Virtual_Mic", "", "success"),
     ]
+    assert app.audio_router.last_linux_sink_result == (
+        True,
+        "✅ Ready!\nSet Discord input to:\n   CriTTS_Virtual_Mic",
+    )
 
 
 def test_report_failure_uses_warning_type(main_module):
@@ -101,6 +105,10 @@ def test_report_failure_uses_warning_type(main_module):
     assert _flush(app) == [
         ("⚠ pactl not found. Is PipeWire installed?", "", "warning"),
     ]
+    assert app.audio_router.last_linux_sink_result == (
+        False,
+        "⚠ pactl not found. Is PipeWire installed?",
+    )
 
 
 def test_report_explicit_error_type(main_module):
@@ -109,6 +117,15 @@ def test_report_explicit_error_type(main_module):
     main_module.CriTTSApp._report_linux_sink_status(app, False, "❌ boom", "error")
 
     assert _flush(app) == [("❌ boom", "", "error")]
+    assert app.audio_router.last_linux_sink_result == (False, "❌ boom")
+
+
+def test_report_stores_result_on_router_even_without_main_window(main_module):
+    app = SimpleNamespace(audio_router=MagicMock())  # no main_window attribute
+
+    main_module.CriTTSApp._report_linux_sink_status(app, True, "✅ Ready!")
+
+    assert app.audio_router.last_linux_sink_result == (True, "✅ Ready!")
 
 
 def test_report_without_main_window_is_noop(main_module):
@@ -129,6 +146,10 @@ def test_setup_posts_status_when_configured(main_module, monkeypatch):
     assert _flush(app) == [
         ("✅ Ready! Set Discord input to: CriTTS_Virtual_Mic", "", "success"),
     ]
+    assert app.audio_router.last_linux_sink_result == (
+        True,
+        "✅ Ready!\nSet Discord input to:\n   CriTTS_Virtual_Mic",
+    )
 
 
 def test_setup_skips_without_sink_name(main_module, monkeypatch):
@@ -161,3 +182,7 @@ def test_setup_reports_error_status_on_exception(main_module, monkeypatch):
     main_module.CriTTSApp._ensure_linux_sink_setup(app)
 
     assert _flush(app) == [("❌ Linux sink setup failed: boom", "", "error")]
+    assert app.audio_router.last_linux_sink_result == (
+        False,
+        "❌ Linux sink setup failed: boom",
+    )

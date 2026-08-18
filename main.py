@@ -191,8 +191,16 @@ class CriTTSApp(ctk.CTk):
         The worker thread marshals back onto the Tk thread via
         ``MainWindow._safe_after``, which drops the update if the window is
         closing.  The message is flattened to a single line for the status
-        label (the full detail stays in the log).
+        label (the full detail stays in the log).  The raw ``(ok, message)``
+        is also recorded on the shared router so the Audio Output settings
+        tab can render it when it is opened later.
         """
+        router = getattr(self, "audio_router", None)
+        if router is not None:
+            try:
+                router.last_linux_sink_result = (ok, message)
+            except Exception:
+                pass
         if not hasattr(self, "main_window"):
             return
         status_text = " ".join(message.split())
