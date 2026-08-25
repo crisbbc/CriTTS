@@ -18,6 +18,8 @@ from .theme_constants import (
     FONT_LG,
     FONT_WEIGHT_BOLD,
     RADIUS_MD,
+    SPACING_BASE,
+    SPACING_XS,
 )
 
 
@@ -90,14 +92,14 @@ class RecordingOverlay(ctk.CTkToplevel):
             fg_color=COLOR_OVERLAY_BG,
             corner_radius=RADIUS_MD
         )
-        self._frame.pack(fill="both", expand=True, padx=2, pady=2)
+        self._frame.pack(fill="both", expand=True, padx=SPACING_BASE, pady=SPACING_BASE)
         
         # Container for indicator and text
         self._container = ctk.CTkFrame(
             self._frame,
             fg_color="transparent"
         )
-        self._container.pack(fill="both", expand=True, padx=8, pady=6)
+        self._container.pack(fill="both", expand=True, padx=SPACING_XS, pady=SPACING_XS)
         
         # Recording dot indicator
         self._dot_label = ctk.CTkLabel(
@@ -107,7 +109,7 @@ class RecordingOverlay(ctk.CTkToplevel):
             text_color=COLOR_STATUS_IDLE,
             width=20
         )
-        self._dot_label.pack(side="left", padx=(0, 8))
+        self._dot_label.pack(side="left", padx=(0, SPACING_XS))
         
         # Status text container (for text + duration)
         self._text_container = ctk.CTkFrame(
@@ -124,7 +126,7 @@ class RecordingOverlay(ctk.CTkToplevel):
             text_color=COLOR_NEUTRAL_LIGHTEST,
             anchor="w"
         )
-        self._text_label.pack(side="top", fill="x", pady=(0, 2))
+        self._text_label.pack(side="top", fill="x", pady=(0, SPACING_BASE))
         
         # Duration label (hidden by default)
         self._duration_label = ctk.CTkLabel(

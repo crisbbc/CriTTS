@@ -16,7 +16,7 @@ class EdgeTTSProvider(TTSProvider):
 
     def __init__(self, settings_manager=None):
         self._voice_cache = None
-        self._cache_time = 0
+        self._cache_time: float = 0.0
         self._cache_duration = 300  # 5 minutes
         self._settings_manager = settings_manager
 
@@ -237,6 +237,8 @@ class EdgeTTSProvider(TTSProvider):
                     # Non-retryable error or final attempt - log and raise
                     logger.error("Error generating Edge TTS speech: %s", e)
                     raise
+
+        return None  # unreachable while MAX_RETRIES > 0; satisfies the contract
 
     async def validate_voice(self, voice: str) -> bool:
         """Validate if a voice exists in Edge TTS"""

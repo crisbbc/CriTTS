@@ -18,7 +18,7 @@ from .audio_cache import AudioCache, PhraseTracker
 from ..config.settings_manager import SettingsManager
 
 # Import the new language detector module
-from ..utils.language_detector import LanguageDetector, detect_language, get_detector
+from ..utils.language_detector import LanguageDetector, detect_language
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +268,7 @@ class TTSEngine:
         provider_name = self._get_active_provider_name()
         fingerprint = self._get_audio_cache_fingerprint(provider_name)
 
-        for text, voice, count in phrases:
+        for text, voice, _count in phrases:
             if stop_event is not None and stop_event.is_set():
                 break
 
@@ -339,20 +339,26 @@ class TTSEngine:
             except Exception:
                 return default
 
+        def _as_int(value) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+
         parts = []
         if provider_name == "coqui":
             parts.append(f"lang={_get('coqui_language', 'en')}")
             parts.append(f"temp={_get('coqui_temperature', 0.75)}")
             parts.append(f"rep={_get('coqui_repetition_penalty', 10.0)}")
-            parts.append(f"split={int(bool(_get('coqui_enable_text_splitting', True)))}")
+            parts.append(f"split={_as_int(bool(_get('coqui_enable_text_splitting', True)))}")
         elif provider_name == "piper":
             parts.append(f"ns={_get('piper_noise_scale', None)}")
             parts.append(f"nw={_get('piper_noise_w_scale', None)}")
             parts.append(f"sil={_get('piper_sentence_silence', None)}")
 
-        parts.append(f"eq={int(bool(_get('enable_clarity_eq', True)))}")
+        parts.append(f"eq={_as_int(bool(_get('enable_clarity_eq', True)))}")
         parts.append(
-            f"norm={int(bool(_get('enable_normalization', True)))}:"
+            f"norm={_as_int(bool(_get('enable_normalization', True)))}:"
             f"{_get('normalization_type', 'Peak')}"
         )
         parts.append(f"prof={_get('processing_profile', 'balanced')}")
@@ -505,18 +511,19 @@ class TTSEngine:
 
     def handle_committed_provider_change(self) -> None:
         """Apply the small offline-provider unload policy after settings are saved."""
-        active_provider = self._get_active_provider_name()
-        previous_provider = self._committed_provider_name
-        self._committed_provider_name = active_provider
+        with self._provider_init_lock:
+            active_provider = self._get_active_provider_name()
+            previous_provider = self._committed_provider_name
+            self._committed_provider_name = active_provider
 
-        if previous_provider == active_provider:
-            return
+            if previous_provider == active_provider:
+                return
 
-        if previous_provider == "coqui" and self._coqui_provider_instance is not None:
-            try:
-                self._coqui_provider_instance.clear_cache()
-            except Exception as e:
-                logger.warning(f"Failed to clear inactive Coqui TTS cache: {e}")
+            if previous_provider == "coqui" and self._coqui_provider_instance is not None:
+                try:
+                    self._coqui_provider_instance.clear_cache()
+                except Exception as e:
+                    logger.warning(f"Failed to clear inactive Coqui TTS cache: {e}")
     
     def clear_voices_cache(self):
         """Clear the voices cache to force refresh on next call."""
@@ -562,9 +569,9 @@ class TTSEngine:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Handle exceptions
-        processed_results = []
+        processed_results: List[Tuple[Optional[bytes], Optional[str]]] = []
         for i, result in enumerate(results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 processed_results.append((None, f"Error processing text {i+1}: {str(result)}"))
             else:
                 processed_results.append(result)
@@ -766,7 +773,10 @@ class TTSEngine:
             return False
 
         def number_to_words(match):
-            num = int(match.group())
+            try:
+                num = int(match.group())
+            except ValueError:
+                return match.group()
 
             if part_of_larger_number(match) or num >= 1000:
                 return match.group()
@@ -979,7 +989,7 @@ class TTSEngine:
                         actual_voice = detected_voice
                         logger.info("Auto-detected language voice '%s' for text", actual_voice)
         except Exception:
-            pass
+            logger.debug("Auto language voice selection failed", exc_info=True)
 
         # Validate voice before generation (cached); fall back to provider default if mismatched
         if not await self.validate_voice(actual_voice, provider_name=provider_name):
@@ -1179,6 +1189,15 @@ class TTSEngine:
             error_msg = str(e)
             return None, f"TTS generation error: {error_msg}"
     
+    @staticmethod
+    def _should_retry_stream(is_retryable: bool, attempt: int, max_retries: int, stop_event) -> bool:
+        """Decide whether a failed streaming attempt should be retried."""
+        if not is_retryable:
+            return False
+        if attempt >= max_retries:
+            return False
+        return stop_event is None or not stop_event.is_set()
+
     async def stream_speech(
         self, 
         text: str, 
@@ -1232,7 +1251,7 @@ class TTSEngine:
                     custom_voice = self._get_custom_language_voice(text, detected_voice)
                     actual_voice = custom_voice if custom_voice else detected_voice
         except Exception:
-            pass
+            logger.debug("Language detection for synthesis failed", exc_info=True)
         
         # Validate voice before streaming
         if not await self.validate_voice(actual_voice):
@@ -1248,7 +1267,6 @@ class TTSEngine:
         
         logger.debug("Streaming speech with voice=%s, rate=%d, volume=%d, pitch=%d", actual_voice, rate, volume, pitch)
         
-        last_error = None
         for attempt in range(max_retries + 1):
             try:
                 # Stream speech using the provider
@@ -1257,7 +1275,7 @@ class TTSEngine:
                 return  # Success, exit retry loop
                 
             except Exception as e:
-                last_error = e
+                logger.debug("stream_speech attempt failed: %s", e)
                 error_str = str(e).lower()
                 
                 # Check if error is retryable (network/timeout issues)
@@ -1265,7 +1283,7 @@ class TTSEngine:
                     'timeout', 'connection', 'network', 'reset', 'unreachable', 'temporarily'
                 ])
                 
-                if is_retryable and attempt < max_retries and (stop_event is None or not stop_event.is_set()):
+                if self._should_retry_stream(is_retryable, attempt, max_retries, stop_event):
                     logger.warning("Stream attempt %d failed (retryable error: %s), retrying...", attempt + 1, e)
                     await asyncio.sleep(0.5 * (attempt + 1))  # Exponential backoff: 0.5s, 1s, etc.
                     continue
@@ -1648,7 +1666,7 @@ class TTSEngine:
                     return custom_voice
             
         except Exception:
-            pass
+            logger.debug("Custom language voice lookup failed", exc_info=True)
         
         return None
     

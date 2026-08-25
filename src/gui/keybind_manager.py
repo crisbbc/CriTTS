@@ -3,7 +3,6 @@ Keybind Manager Module
 Handles dynamic keybind registration and management for the application.
 Supports both Tkinter application-wide keybinds and system-wide global hotkeys.
 """
-import re
 import logging
 from typing import Dict, Any, Callable
 
@@ -162,7 +161,7 @@ class KeybindManager:
         Args:
             root: Tkinter root window
         """
-        for keybind_string, info in list(self._registered_keybinds.items()):
+        for _keybind_string, info in list(self._registered_keybinds.items()):
             try:
                 tk_format = info.get('tk_format')
                 bind_id = info.get('bind_id')

@@ -41,14 +41,14 @@ def _configure_espeak_path() -> None:
         import piper as _piper_pkg  # type: ignore[import]
         candidates.append(Path(_piper_pkg.__file__).parent / "espeak-ng-data")
     except Exception:
-        pass
+        logger.debug("piper package espeak-ng-data probe failed", exc_info=True)
 
     # Secondary: piper_phonemize (separate package) also ships it
     try:
         import piper_phonemize  # type: ignore[import]
         candidates.append(Path(piper_phonemize.__file__).parent / "espeak-ng-data")
     except Exception:
-        pass
+        logger.debug("piper_phonemize espeak-ng-data probe failed", exc_info=True)
 
     # Tertiary: scan all site-packages roots
     try:
@@ -58,7 +58,7 @@ def _configure_espeak_path() -> None:
             candidates.append(Path(sp) / "piper" / "espeak-ng-data")
             candidates.append(Path(sp) / "piper_phonemize" / "espeak-ng-data")
     except Exception:
-        pass
+        logger.debug("espeak-ng-data path probing failed", exc_info=True)
 
     for candidate in candidates:
         if candidate.is_dir():

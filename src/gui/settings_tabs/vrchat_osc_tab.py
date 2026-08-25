@@ -11,6 +11,8 @@ from ..theme_constants import (
     FONT_MD,
     BUTTON_HEIGHT,
     SPACING_MD,
+    SPACING_BASE,
+    SPACING_SM,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,19 +77,19 @@ class VRChatOSCTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             command=self._on_osc_enabled_toggle
         )
-        self.osc_enabled_check.pack(anchor="w", pady=5)
+        self.osc_enabled_check.pack(anchor="w", pady=SPACING_BASE)
         
-        self.create_setting_label("IP:", parent).pack(anchor="w", pady=(10, 2))
+        self.create_setting_label("IP:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
         
         self.osc_ip_var = ctk.StringVar(value=self.settings.get("vrchat_osc_ip", "127.0.0.1"))
         self.osc_ip_entry = ctk.CTkEntry(parent, textvariable=self.osc_ip_var, width=200)
-        self.osc_ip_entry.pack(anchor="w", pady=2)
+        self.osc_ip_entry.pack(anchor="w", pady=SPACING_BASE)
         
-        self.create_setting_label("Port (default 9000):", parent).pack(anchor="w", pady=(10, 2))
+        self.create_setting_label("Port (default 9000):", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
         
         self.osc_port_var = ctk.StringVar(value=str(self.settings.get("vrchat_osc_port", 9000)))
         self.osc_port_entry = ctk.CTkEntry(parent, textvariable=self.osc_port_var, width=120)
-        self.osc_port_entry.pack(anchor="w", pady=2)
+        self.osc_port_entry.pack(anchor="w", pady=SPACING_BASE)
         
         self.osc_play_sound_var = ctk.BooleanVar(value=self.settings.get("vrchat_osc_play_sound", True))
         self.osc_play_sound_check = ctk.CTkCheckBox(
@@ -96,13 +98,13 @@ class VRChatOSCTab(BaseTab):
             variable=self.osc_play_sound_var, 
             font=ctk.CTkFont(size=FONT_MD)
         )
-        self.osc_play_sound_check.pack(anchor="w", pady=5)
+        self.osc_play_sound_check.pack(anchor="w", pady=SPACING_BASE)
         
         osc_sound_info_label = self.create_helper_text(
             text="Notification sound uses VRChat's built-in chatbox sound. Requires OSC to be enabled and may not work in all VRChat versions.",
             parent=parent,
         )
-        osc_sound_info_label.pack(anchor="w", pady=(0, 5))
+        osc_sound_info_label.pack(anchor="w", pady=(0, SPACING_BASE))
         
         self.osc_send_on_speak_var = ctk.BooleanVar(value=self.settings.get("vrchat_osc_send_on_speak", False))
         self.osc_send_on_speak_check = ctk.CTkCheckBox(
@@ -111,7 +113,7 @@ class VRChatOSCTab(BaseTab):
             variable=self.osc_send_on_speak_var, 
             font=ctk.CTkFont(size=FONT_MD)
         )
-        self.osc_send_on_speak_check.pack(anchor="w", pady=5)
+        self.osc_send_on_speak_check.pack(anchor="w", pady=SPACING_BASE)
         
         ctk.CTkButton(
             parent,
@@ -119,10 +121,10 @@ class VRChatOSCTab(BaseTab):
             command=self._test_osc_connection, 
             width=140, 
             height=BUTTON_HEIGHT
-        ).pack(anchor="w", pady=15)
+        ).pack(anchor="w", pady=SPACING_MD)
         
         self.osc_status_label = self.create_surface_status_label(parent)
-        self.osc_status_label.pack(anchor="w", pady=5)
+        self.osc_status_label.pack(anchor="w", pady=SPACING_BASE)
     
     def _create_viseme_section(self, parent):
         """Create the viseme lip-sync section."""
@@ -130,7 +132,7 @@ class VRChatOSCTab(BaseTab):
             text="Viseme mapping enables realistic lip-sync animation in VRChat via OSC. Requires OSC to be enabled.",
             parent=parent,
         )
-        osc_viseme_info_label.pack(anchor="w", pady=(0, 10))
+        osc_viseme_info_label.pack(anchor="w", pady=(0, SPACING_SM))
         
         self.viseme_enabled_var = ctk.BooleanVar(value=self.settings.get("vrchat_viseme_enabled", False))
         self.viseme_enabled_check = ctk.CTkCheckBox(
@@ -139,9 +141,9 @@ class VRChatOSCTab(BaseTab):
             variable=self.viseme_enabled_var,
             font=ctk.CTkFont(size=FONT_MD)
         )
-        self.viseme_enabled_check.pack(anchor="w", pady=5)
+        self.viseme_enabled_check.pack(anchor="w", pady=SPACING_BASE)
         
-        self.create_setting_label("Viseme Smoothing:", parent).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Viseme Smoothing:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
         
         viseme_smoothing_frame = self.create_inline_frame(parent)
         
@@ -156,7 +158,7 @@ class VRChatOSCTab(BaseTab):
             command=self._on_viseme_smoothing_change,
             width=400
         )
-        self.viseme_smoothing_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self.viseme_smoothing_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
         
         self.viseme_smoothing_value_label = ctk.CTkLabel(
             viseme_smoothing_frame,
@@ -164,7 +166,7 @@ class VRChatOSCTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             width=50
         )
-        self.viseme_smoothing_value_label.pack(side="right", padx=5)
+        self.viseme_smoothing_value_label.pack(side="right", padx=SPACING_BASE)
         
         self.viseme_amplitude_var = ctk.BooleanVar(value=self.settings.get("vrchat_voice_amplitude_enabled", False))
         self.viseme_amplitude_check = ctk.CTkCheckBox(
@@ -173,7 +175,7 @@ class VRChatOSCTab(BaseTab):
             variable=self.viseme_amplitude_var,
             font=ctk.CTkFont(size=FONT_MD)
         )
-        self.viseme_amplitude_check.pack(anchor="w", pady=5)
+        self.viseme_amplitude_check.pack(anchor="w", pady=SPACING_BASE)
         
         # Store viseme widgets for enabling/disabling
         self._viseme_widgets = [
@@ -189,7 +191,7 @@ class VRChatOSCTab(BaseTab):
             text="Shows a typing animation in VRChat's chatbox while TTS is playing.",
             parent=parent,
         )
-        typing_indicator_info_label.pack(anchor="w", pady=(0, 10))
+        typing_indicator_info_label.pack(anchor="w", pady=(0, SPACING_SM))
         
         self.typing_animation_var = ctk.BooleanVar(value=self.settings.get("vrchat_osc_typing_animation", False))
         self.typing_animation_check = ctk.CTkCheckBox(
@@ -198,9 +200,9 @@ class VRChatOSCTab(BaseTab):
             variable=self.typing_animation_var,
             font=ctk.CTkFont(size=FONT_MD)
         )
-        self.typing_animation_check.pack(anchor="w", pady=5)
+        self.typing_animation_check.pack(anchor="w", pady=SPACING_BASE)
         
-        self.create_setting_label("Typing Indicator Timeout:", parent).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Typing Indicator Timeout:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
         
         typing_timeout_frame = self.create_inline_frame(parent)
         
@@ -215,7 +217,7 @@ class VRChatOSCTab(BaseTab):
             command=self._on_typing_timeout_change,
             width=400
         )
-        self.typing_timeout_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self.typing_timeout_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
         
         self.typing_timeout_value_label = ctk.CTkLabel(
             typing_timeout_frame,
@@ -223,9 +225,9 @@ class VRChatOSCTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             width=50
         )
-        self.typing_timeout_value_label.pack(side="right", padx=5)
+        self.typing_timeout_value_label.pack(side="right", padx=SPACING_BASE)
         
-        self.create_setting_label("Message Cooldown:", parent).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Message Cooldown:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
         
         message_cooldown_frame = self.create_inline_frame(parent)
         
@@ -240,7 +242,7 @@ class VRChatOSCTab(BaseTab):
             command=self._on_message_cooldown_change,
             width=400
         )
-        self.message_cooldown_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self.message_cooldown_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
         
         self.message_cooldown_value_label = ctk.CTkLabel(
             message_cooldown_frame,
@@ -248,13 +250,13 @@ class VRChatOSCTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             width=50
         )
-        self.message_cooldown_value_label.pack(side="right", padx=5)
+        self.message_cooldown_value_label.pack(side="right", padx=SPACING_BASE)
         
         message_cooldown_info_label = self.create_helper_text(
             text="Time to wait after sending a message before typing animation can restart. Gives others time to read your message.",
             parent=parent,
         )
-        message_cooldown_info_label.pack(anchor="w", pady=(0, 5))
+        message_cooldown_info_label.pack(anchor="w", pady=(0, SPACING_BASE))
         
         self._typing_indicator_widgets = [
             self.typing_animation_check,
@@ -270,13 +272,13 @@ class VRChatOSCTab(BaseTab):
             try:
                 widget.configure(state="normal" if osc_enabled else "disabled")
             except Exception:
-                pass
+                logger.debug("Widget state update failed", exc_info=True)
         
         for widget in self._typing_indicator_widgets:
             try:
                 widget.configure(state="normal" if osc_enabled else "disabled")
             except Exception:
-                pass
+                logger.debug("Widget state update failed", exc_info=True)
         
         if not osc_enabled:
             self.viseme_enabled_var.set(False)
@@ -286,7 +288,7 @@ class VRChatOSCTab(BaseTab):
             try:
                 self.parent_window.main_window.refresh_vrchat_osc()
             except Exception:
-                pass
+                logger.debug("VRChat OSC tab refresh failed", exc_info=True)
     
     def _on_viseme_smoothing_change(self, value):
         """Update viseme smoothing label when slider changes."""
@@ -296,7 +298,7 @@ class VRChatOSCTab(BaseTab):
             try:
                 self.parent_window.main_window.refresh_vrchat_osc()
             except Exception:
-                pass
+                logger.debug("VRChat OSC tab refresh failed", exc_info=True)
     
     def _on_typing_timeout_change(self, value):
         """Update typing timeout label when slider changes."""
@@ -306,7 +308,7 @@ class VRChatOSCTab(BaseTab):
             try:
                 self.parent_window.main_window.refresh_vrchat_osc()
             except Exception:
-                pass
+                logger.debug("VRChat OSC tab refresh failed", exc_info=True)
     
     def _on_message_cooldown_change(self, value):
         """Update message cooldown label when slider changes."""
@@ -316,7 +318,7 @@ class VRChatOSCTab(BaseTab):
             try:
                 self.parent_window.main_window.refresh_vrchat_osc()
             except Exception:
-                pass
+                logger.debug("VRChat OSC tab refresh failed", exc_info=True)
     
     def _test_osc_connection(self):
         """Test OSC configuration."""

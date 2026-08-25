@@ -16,6 +16,10 @@ from ..theme_constants import (
     FONT_SM,
     FONT_MD,
     FONT_WEIGHT_BOLD,
+    SPACING_BASE,
+    SPACING_MD,
+    SPACING_SM,
+    SPACING_XS,
 )
 
 
@@ -53,7 +57,7 @@ class KeybindsTab(BaseTab):
             "Keybinds work application-wide regardless of focus. Click 'Set' to capture key combinations.",
             parent=keybinds_content,
         )
-        self.info_label.pack(anchor="w", pady=(0, 6))
+        self.info_label.pack(anchor="w", pady=(0, SPACING_XS))
 
         self.warning_label = self.create_helper_text(
             self.format_surface_status_text(
@@ -62,7 +66,7 @@ class KeybindsTab(BaseTab):
             ),
             parent=keybinds_content,
         )
-        self.warning_label.pack(anchor="w", pady=(0, 15))
+        self.warning_label.pack(anchor="w", pady=(0, SPACING_MD))
 
         keybinds = self.settings.get("keybinds", {})
         defaults = {
@@ -83,13 +87,13 @@ class KeybindsTab(BaseTab):
             "Note: Speak is triggered by pressing Enter in the text box. The keybinds below control other actions.",
             parent=keybinds_content,
         )
-        self.speak_info_label.pack(anchor="w", pady=(0, 12))
+        self.speak_info_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         ctk.CTkLabel(
             keybinds_content,
             text="System-Wide Hotkeys:",
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(5, 5))
+        ).pack(anchor="w", pady=(SPACING_BASE, SPACING_BASE))
 
         self.global_hotkeys_var = ctk.BooleanVar(value=self.settings.get("global_hotkeys_enabled", False))
         self.global_hotkeys_check = ctk.CTkCheckBox(
@@ -98,23 +102,23 @@ class KeybindsTab(BaseTab):
             variable=self.global_hotkeys_var,
             font=ctk.CTkFont(size=FONT_MD)
         )
-        self.global_hotkeys_check.pack(anchor="w", pady=5)
+        self.global_hotkeys_check.pack(anchor="w", pady=SPACING_BASE)
 
         self.global_hotkeys_info_label = self.create_helper_text(
             "When enabled, keybinds for Stop, Clear, Settings, and Voice Input will work system-wide. Requires the 'keyboard' library and administrator privileges on some systems.",
             parent=keybinds_content,
         )
-        self.global_hotkeys_info_label.pack(anchor="w", pady=(0, 12))
+        self.global_hotkeys_info_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         ctk.CTkLabel(
             keybinds_content,
             text="Application Keybinds:",
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(5, 10))
+        ).pack(anchor="w", pady=(SPACING_BASE, SPACING_SM))
 
         for action in ("stop", "clear", "open_settings", "voice_input"):
             row = ctk.CTkFrame(keybinds_content, fg_color="transparent")
-            row.pack(fill="x", pady=4)
+            row.pack(fill="x", pady=SPACING_BASE)
             
             ctk.CTkLabel(
                 row, 
@@ -122,13 +126,13 @@ class KeybindsTab(BaseTab):
                 font=ctk.CTkFont(size=FONT_MD), 
                 width=160, 
                 anchor="w"
-            ).pack(side="left", padx=(0, 10))
+            ).pack(side="left", padx=(0, SPACING_SM))
             
             var = ctk.StringVar(value=keybinds.get(action, defaults.get(action, "")))
             self.keybind_vars[action] = var
             
             entry = ctk.CTkEntry(row, textvariable=var, width=200, font=ctk.CTkFont(size=FONT_MD))
-            entry.pack(side="left", padx=5)
+            entry.pack(side="left", padx=SPACING_BASE)
             
             capture_btn = ctk.CTkButton(
                 row,
@@ -138,7 +142,7 @@ class KeybindsTab(BaseTab):
                 width=60,
                 height=BUTTON_HEIGHT
             )
-            capture_btn.pack(side="left", padx=5)
+            capture_btn.pack(side="left", padx=SPACING_BASE)
             self.keybind_capture_buttons[action] = capture_btn
             
             validation_label = ctk.CTkLabel(
@@ -148,7 +152,7 @@ class KeybindsTab(BaseTab):
                 width=110,
                 text_color=surface_theme["text_secondary"],
             )
-            validation_label.pack(side="left", padx=5)
+            validation_label.pack(side="left", padx=SPACING_BASE)
             self.keybind_validation_labels[action] = validation_label
             
             entry.bind("<KeyRelease>", lambda e, a=action: self._validate_keybind_entry(a))

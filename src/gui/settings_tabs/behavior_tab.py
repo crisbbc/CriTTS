@@ -6,7 +6,7 @@ import customtkinter as ctk
 from typing import Any, List, Dict
 
 from .base_tab import BaseTab
-from ..theme_constants import BUTTON_HEIGHT, FONT_MD, FONT_SM, FONT_WEIGHT_BOLD
+from ..theme_constants import BUTTON_HEIGHT, FONT_MD, FONT_SM, FONT_WEIGHT_BOLD, SPACING_BASE, SPACING_MD, SPACING_SM
 
 
 class BehaviorTab(BaseTab):
@@ -17,19 +17,19 @@ class BehaviorTab(BaseTab):
         self.setup_layout()
 
         behavior_section, behavior_content = self.create_section_surface("Behavior")
-        behavior_section.pack(fill="x", pady=(0, 15))
+        behavior_section.pack(fill="x", pady=(0, SPACING_MD))
         self._create_behavior_section(behavior_content)
 
         transcription_section, transcription_content = self.create_section_surface("Text Transcription")
-        transcription_section.pack(fill="x", pady=(0, 15))
+        transcription_section.pack(fill="x", pady=(0, SPACING_MD))
         self._create_transcription_section(transcription_content)
 
         refinement_section, refinement_content = self.create_section_surface("Transcription Refinement")
-        refinement_section.pack(fill="x", pady=(0, 15))
+        refinement_section.pack(fill="x", pady=(0, SPACING_MD))
         self._create_refinement_section(refinement_content)
 
         preprocessing_section, preprocessing_content = self.create_section_surface("Audio Pre-processing")
-        preprocessing_section.pack(fill="x", pady=(0, 15))
+        preprocessing_section.pack(fill="x", pady=(0, SPACING_MD))
         self._create_preprocessing_section(preprocessing_content)
 
         corrections_section, corrections_content = self.create_section_surface("Word Corrections")
@@ -42,7 +42,7 @@ class BehaviorTab(BaseTab):
             "Choose which text is sent to TTS when you press Speak.",
             parent=parent,
         )
-        self.behavior_desc_label.pack(anchor="w", pady=(0, 10))
+        self.behavior_desc_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         speak_mode = self.settings.get("speak_mode", "current_line")
         self.speak_mode_current_line_var = ctk.BooleanVar(value=(speak_mode == "current_line"))
@@ -52,13 +52,13 @@ class BehaviorTab(BaseTab):
             variable=self.speak_mode_current_line_var,
             font=ctk.CTkFont(size=FONT_MD),
         )
-        self.speak_mode_check.pack(anchor="w", pady=5)
+        self.speak_mode_check.pack(anchor="w", pady=SPACING_BASE)
 
         self.behavior_speak_mode_hint_label = self.create_helper_text(
             "Current line: only the line where the cursor is will be spoken. All text: entire textbox.",
             parent=parent,
         )
-        self.behavior_speak_mode_hint_label.pack(anchor="w", pady=(5, 10))
+        self.behavior_speak_mode_hint_label.pack(anchor="w", pady=(SPACING_BASE, SPACING_SM))
 
         self.auto_language_var = ctk.BooleanVar(
             value=self.settings.get("auto_language_detection", False)
@@ -69,13 +69,13 @@ class BehaviorTab(BaseTab):
             variable=self.auto_language_var,
             font=ctk.CTkFont(size=FONT_MD),
         )
-        self.auto_language_check.pack(anchor="w", pady=5)
+        self.auto_language_check.pack(anchor="w", pady=SPACING_BASE)
 
         self.behavior_auto_lang_desc_label = self.create_helper_text(
             "When enabled, the system will automatically detect the language of your text and select the most appropriate voice.",
             parent=parent,
         )
-        self.behavior_auto_lang_desc_label.pack(anchor="w", pady=(0, 10))
+        self.behavior_auto_lang_desc_label.pack(anchor="w", pady=(0, SPACING_SM))
 
     def _create_transcription_section(self, parent: ctk.CTkFrame):
         """Create the text transcription section."""
@@ -83,7 +83,7 @@ class BehaviorTab(BaseTab):
             "Settings for voice input and automatic speech-to-text behaviour.",
             parent=parent,
         )
-        self.transcription_desc_label.pack(anchor="w", pady=(0, 10))
+        self.transcription_desc_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         self.stt_auto_speak_var = ctk.BooleanVar(value=self.settings.get("stt_auto_speak", False))
         self.stt_auto_speak_check = ctk.CTkCheckBox(
@@ -92,28 +92,28 @@ class BehaviorTab(BaseTab):
             variable=self.stt_auto_speak_var,
             font=ctk.CTkFont(size=FONT_MD),
         )
-        self.stt_auto_speak_check.pack(anchor="w", pady=5)
+        self.stt_auto_speak_check.pack(anchor="w", pady=SPACING_BASE)
 
         self.stt_auto_speak_desc_label = self.create_helper_text(
             "When enabled, text from voice input will be automatically spoken after transcription completes.",
             parent=parent,
         )
-        self.stt_auto_speak_desc_label.pack(anchor="w", pady=(0, 10))
+        self.stt_auto_speak_desc_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         ctk.CTkLabel(
             parent,
             text="Voice Input Language:",
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
-        ).pack(anchor="w", pady=(10, 5))
+        ).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
 
         self.stt_language_info_label = self.create_helper_text(
             "Language for speech recognition when using the Voice Input button.",
             parent=parent,
         )
-        self.stt_language_info_label.pack(anchor="w", pady=(0, 10))
+        self.stt_language_info_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         stt_language_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        stt_language_frame.pack(fill="x", pady=5)
+        stt_language_frame.pack(fill="x", pady=SPACING_BASE)
 
         self.stt_language_var = ctk.StringVar(value=self.settings.get("stt_language", "en-US"))
         self.stt_language_dropdown = ctk.CTkOptionMenu(
@@ -139,22 +139,22 @@ class BehaviorTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             width=200,
         )
-        self.stt_language_dropdown.pack(side="left", padx=5)
+        self.stt_language_dropdown.pack(side="left", padx=SPACING_BASE)
 
         ctk.CTkLabel(
             parent,
             text="Voice Input Device:",
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
-        ).pack(anchor="w", pady=(10, 5))
+        ).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
 
         self.mic_device_info_label = self.create_helper_text(
             "Microphone used for voice input. Leave as 'Default' to use the system default.",
             parent=parent,
         )
-        self.mic_device_info_label.pack(anchor="w", pady=(0, 10))
+        self.mic_device_info_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         mic_device_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        mic_device_frame.pack(fill="x", pady=5)
+        mic_device_frame.pack(fill="x", pady=SPACING_BASE)
 
         self._input_devices: List[Dict] = []
         self.stt_mic_device_var = ctk.StringVar()
@@ -167,7 +167,7 @@ class BehaviorTab(BaseTab):
             width=400,
             state="readonly",
         )
-        self.stt_mic_device_dropdown.pack(side="left", padx=(0, 5))
+        self.stt_mic_device_dropdown.pack(side="left", padx=(0, SPACING_BASE))
 
         ctk.CTkButton(
             mic_device_frame,
@@ -184,7 +184,7 @@ class BehaviorTab(BaseTab):
             "Post-processing options for voice input transcription.",
             parent=parent,
         )
-        self.refinement_desc_label.pack(anchor="w", pady=(0, 10))
+        self.refinement_desc_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         self.stt_capitalize_var = ctk.BooleanVar(value=self.settings.get("stt_capitalize", True))
         self.stt_capitalize_check = ctk.CTkCheckBox(
@@ -193,7 +193,7 @@ class BehaviorTab(BaseTab):
             variable=self.stt_capitalize_var,
             font=ctk.CTkFont(size=FONT_MD),
         )
-        self.stt_capitalize_check.pack(anchor="w", pady=5)
+        self.stt_capitalize_check.pack(anchor="w", pady=SPACING_BASE)
 
         self.stt_add_punctuation_var = ctk.BooleanVar(
             value=self.settings.get("stt_add_punctuation", False)
@@ -204,7 +204,7 @@ class BehaviorTab(BaseTab):
             variable=self.stt_add_punctuation_var,
             font=ctk.CTkFont(size=FONT_MD),
         )
-        self.stt_add_punctuation_check.pack(anchor="w", pady=5)
+        self.stt_add_punctuation_check.pack(anchor="w", pady=SPACING_BASE)
 
         self.stt_apply_abbreviations_var = ctk.BooleanVar(
             value=self.settings.get("stt_apply_abbreviations", False)
@@ -215,13 +215,13 @@ class BehaviorTab(BaseTab):
             variable=self.stt_apply_abbreviations_var,
             font=ctk.CTkFont(size=FONT_MD),
         )
-        self.stt_apply_abbreviations_check.pack(anchor="w", pady=5)
+        self.stt_apply_abbreviations_check.pack(anchor="w", pady=SPACING_BASE)
 
         self.stt_abbreviations_hint_label = self.create_helper_text(
             "Uses the abbreviations defined in the Abbreviations tab.",
             parent=parent,
         )
-        self.stt_abbreviations_hint_label.pack(anchor="w", pady=(0, 10))
+        self.stt_abbreviations_hint_label.pack(anchor="w", pady=(0, SPACING_SM))
 
     def _create_preprocessing_section(self, parent: ctk.CTkFrame):
         """Create the audio pre-processing section."""
@@ -229,7 +229,7 @@ class BehaviorTab(BaseTab):
             "Audio processing applied before transcription to improve accuracy.",
             parent=parent,
         )
-        self.preprocessing_desc_label.pack(anchor="w", pady=(0, 10))
+        self.preprocessing_desc_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         self.stt_highpass_filter_var = ctk.BooleanVar(
             value=self.settings.get("stt_highpass_filter", True)
@@ -240,22 +240,22 @@ class BehaviorTab(BaseTab):
             variable=self.stt_highpass_filter_var,
             font=ctk.CTkFont(size=FONT_MD),
         )
-        self.stt_highpass_filter_check.pack(anchor="w", pady=5)
+        self.stt_highpass_filter_check.pack(anchor="w", pady=SPACING_BASE)
 
         self.highpass_hint_label = self.create_helper_text(
             "Reduces low-frequency rumble and background noise.",
             parent=parent,
         )
-        self.highpass_hint_label.pack(anchor="w", pady=(0, 10))
+        self.highpass_hint_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         ctk.CTkLabel(
             parent,
             text="Minimum Recording Duration:",
             font=ctk.CTkFont(size=FONT_MD),
-        ).pack(anchor="w", pady=(10, 5))
+        ).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
 
         min_duration_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        min_duration_frame.pack(fill="x", pady=5)
+        min_duration_frame.pack(fill="x", pady=SPACING_BASE)
 
         self.stt_min_duration_var = ctk.IntVar(value=self.settings.get("stt_min_duration_ms", 300))
         self.stt_min_duration_slider = ctk.CTkSlider(
@@ -267,7 +267,7 @@ class BehaviorTab(BaseTab):
             command=self._on_stt_min_duration_change,
             width=400,
         )
-        self.stt_min_duration_slider.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.stt_min_duration_slider.pack(side="left", fill="x", expand=True, padx=(0, SPACING_BASE))
 
         self.stt_min_duration_value_label = ctk.CTkLabel(
             min_duration_frame,
@@ -281,16 +281,16 @@ class BehaviorTab(BaseTab):
             "Recordings shorter than this are rejected as accidental clicks.",
             parent=parent,
         )
-        self.min_duration_hint_label.pack(anchor="w", pady=(0, 10))
+        self.min_duration_hint_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         ctk.CTkLabel(
             parent,
             text="Silence Threshold:",
             font=ctk.CTkFont(size=FONT_MD),
-        ).pack(anchor="w", pady=(10, 5))
+        ).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
 
         silence_threshold_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        silence_threshold_frame.pack(fill="x", pady=5)
+        silence_threshold_frame.pack(fill="x", pady=SPACING_BASE)
 
         self.stt_silence_threshold_var = ctk.IntVar(
             value=self.settings.get("stt_silence_threshold", 200)
@@ -304,7 +304,7 @@ class BehaviorTab(BaseTab):
             command=self._on_stt_silence_threshold_change,
             width=400,
         )
-        self.stt_silence_threshold_slider.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.stt_silence_threshold_slider.pack(side="left", fill="x", expand=True, padx=(0, SPACING_BASE))
 
         self.stt_silence_threshold_value_label = ctk.CTkLabel(
             silence_threshold_frame,
@@ -318,16 +318,16 @@ class BehaviorTab(BaseTab):
             "RMS threshold for silence detection. Higher values require louder audio.",
             parent=parent,
         )
-        self.silence_threshold_hint_label.pack(anchor="w", pady=(0, 10))
+        self.silence_threshold_hint_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         ctk.CTkLabel(
             parent,
             text="Minimum Confidence Threshold:",
             font=ctk.CTkFont(size=FONT_MD),
-        ).pack(anchor="w", pady=(10, 5))
+        ).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
 
         confidence_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        confidence_frame.pack(fill="x", pady=5)
+        confidence_frame.pack(fill="x", pady=SPACING_BASE)
 
         current_confidence = int(self.settings.get("stt_confidence_threshold", 0.0) * 100)
         self.stt_confidence_threshold_var = ctk.IntVar(value=current_confidence)
@@ -340,7 +340,7 @@ class BehaviorTab(BaseTab):
             command=self._on_stt_confidence_change,
             width=400,
         )
-        self.stt_confidence_threshold_slider.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.stt_confidence_threshold_slider.pack(side="left", fill="x", expand=True, padx=(0, SPACING_BASE))
 
         self.stt_confidence_threshold_value_label = ctk.CTkLabel(
             confidence_frame,
@@ -354,7 +354,7 @@ class BehaviorTab(BaseTab):
             "Reject transcriptions with confidence below this threshold. 0% = disabled.",
             parent=parent,
         )
-        self.confidence_hint_label.pack(anchor="w", pady=(0, 10))
+        self.confidence_hint_label.pack(anchor="w", pady=(0, SPACING_SM))
 
     def _create_corrections_section(self, parent: ctk.CTkFrame):
         """Create the word corrections section."""
@@ -362,7 +362,7 @@ class BehaviorTab(BaseTab):
             "Fix recurring misrecognitions. For example, map 'critts' to 'CriTTS'.",
             parent=parent,
         )
-        self.corrections_desc_label.pack(anchor="w", pady=(0, 10))
+        self.corrections_desc_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         self.corrections_text = ctk.CTkTextbox(
             parent,
@@ -371,7 +371,7 @@ class BehaviorTab(BaseTab):
             height=100,
             **self.get_input_surface_style(),
         )
-        self.corrections_text.pack(fill="x", pady=(0, 10))
+        self.corrections_text.pack(fill="x", pady=(0, SPACING_SM))
 
         corrections_dict = self.settings.get("stt_corrections", {})
         if corrections_dict:

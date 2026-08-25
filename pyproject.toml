@@ -1,0 +1,52 @@
+[project]
+name = "critts"
+version = "2.0.0"
+description = "A modern, free Text-to-Speech application with a sleek GUI (Edge/Piper/Coqui)"
+requires-python = ">=3.10"
+
+# ---------------------------------------------------------------------------
+# Ruff — fast Python linting.  Pragmatic rule set: real errors and bug risks
+# without forcing a mass style migration of the existing codebase.
+# Run:  uvx ruff check src/ main.py scripts/
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [".venv", "__pycache__"]
+
+[tool.ruff.lint]
+select = [
+    "E4",   # pycodestyle errors (imports, lines subset)
+    "E7",   # pycodestyle (statements)
+    "E9",   # pycodestyle (runtime errors)
+    "F",    # pyflakes (undefined names, unused imports/vars)
+    "B",    # flake8-bugbear (likely bugs)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests construct objects via __new__ and attach stub attributes freely, and
+# stub sys.modules (e.g. customtkinter) before importing the modules under
+# test, so imports intentionally appear after non-import statements.
+"tests/*" = ["B", "E402"]
+# main.py intentionally configures logging and sys.path before importing app
+# modules (documented in its module docstring).
+"main.py" = ["E402"]
+# Viseme constants intentionally use single-letter names (A/E/I/O/U map to
+# VRChat's viseme indices).
+"src/vrchat/viseme_mapper.py" = ["E741"]
+
+# ---------------------------------------------------------------------------
+# mypy — gradual typing.  Not strict; missing imports are ignored because the
+# heavy optional deps (torch, TTS) may not be installed in dev environments.
+# Run:  uv run mypy src/config src/tts/text_preprocessor.py
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true

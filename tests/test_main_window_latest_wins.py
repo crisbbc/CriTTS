@@ -1,6 +1,10 @@
 from unittest.mock import AsyncMock, MagicMock
 import sys
 
+# Tests construct MainWindow via __new__ and attach stub attributes freely;
+# static attribute checking doesn't apply to that pattern.
+# pyright: reportAttributeAccessIssue=false
+
 sys.modules.setdefault("customtkinter", MagicMock())
 
 from src.gui.main_window import LatestWinsTextAnalysisScheduler, MainWindow
@@ -190,6 +194,8 @@ def _make_window():
     window = MainWindow.__new__(MainWindow)
     window.text_input = _StubTextInput()
     window.root = _StubRoot()
+    # ChatboxController is created in __init__; stub it for __new__-built windows
+    window._chatbox = MagicMock()
     window._is_typing_active = False
     window._refresh_calls = 0
     window._refresh_after_text_mutation = lambda: setattr(

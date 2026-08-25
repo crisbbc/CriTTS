@@ -1,5 +1,4 @@
 """Tests for VoiceTab provider-driven voice reload behavior."""
-import asyncio
 import threading
 from unittest.mock import AsyncMock, MagicMock
 import sys

@@ -8,7 +8,7 @@ from tkinter import filedialog
 from typing import Any, List, Dict
 
 from .base_tab import BaseTab
-from ..theme_constants import BUTTON_HEIGHT, FONT_SM, FONT_MD
+from ..theme_constants import BUTTON_HEIGHT, FONT_SM, FONT_MD, SPACING_BASE, SPACING_SM, SPACING_XS
 
 
 class SoundboardTab(BaseTab):
@@ -25,7 +25,7 @@ class SoundboardTab(BaseTab):
             "Map slots to local audio files. During Speak, [1]..[99] will play mapped slots instead of being spoken as text.",
             parent=soundboard_content,
         )
-        self.info_label.pack(anchor="w", pady=(0, 10))
+        self.info_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         self.enabled_var = ctk.BooleanVar(value=self.settings.get("soundboard_enabled", True))
         self.enabled_checkbox = ctk.CTkCheckBox(
@@ -34,13 +34,13 @@ class SoundboardTab(BaseTab):
             variable=self.enabled_var,
             font=ctk.CTkFont(size=FONT_MD),
         )
-        self.enabled_checkbox.pack(anchor="w", pady=(0, 12))
+        self.enabled_checkbox.pack(anchor="w", pady=(0, SPACING_SM))
 
         stored_slots = self.settings.get("soundboard_slots", {})
         self.slot_vars: Dict[str, ctk.StringVar] = {}
 
         slots_frame = ctk.CTkFrame(soundboard_content, fg_color="transparent")
-        slots_frame.pack(fill="both", expand=True, pady=(0, 12))
+        slots_frame.pack(fill="both", expand=True, pady=(0, SPACING_SM))
 
         for slot_num in range(1, 11):
             slot_key = str(slot_num)
@@ -49,7 +49,7 @@ class SoundboardTab(BaseTab):
                 default_path = ""
 
             row = ctk.CTkFrame(slots_frame, fg_color="transparent")
-            row.pack(fill="x", pady=4)
+            row.pack(fill="x", pady=SPACING_BASE)
 
             ctk.CTkLabel(
                 row,
@@ -57,7 +57,7 @@ class SoundboardTab(BaseTab):
                 font=ctk.CTkFont(size=FONT_MD),
                 width=80,
                 anchor="w",
-            ).pack(side="left", padx=(0, 6))
+            ).pack(side="left", padx=(0, SPACING_XS))
 
             self.slot_vars[slot_key] = ctk.StringVar(value=default_path)
 
@@ -66,7 +66,7 @@ class SoundboardTab(BaseTab):
                 textvariable=self.slot_vars[slot_key],
                 font=ctk.CTkFont(size=FONT_SM),
             )
-            entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+            entry.pack(side="left", fill="x", expand=True, padx=(0, SPACING_XS))
 
             browse_button = ctk.CTkButton(
                 row,
@@ -75,7 +75,7 @@ class SoundboardTab(BaseTab):
                 height=BUTTON_HEIGHT,
                 command=lambda slot=slot_key: self._browse_slot(slot),
             )
-            browse_button.pack(side="left", padx=(0, 4))
+            browse_button.pack(side="left", padx=(0, SPACING_BASE))
 
             clear_button = ctk.CTkButton(
                 row,

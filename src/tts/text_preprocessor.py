@@ -4,8 +4,17 @@ Handles text preprocessing including abbreviation expansion before TTS generatio
 """
 import re
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_slot_number(digits: str) -> int:
+    """Convert a soundboard token's digit group to an int (0 if malformed)."""
+    try:
+        return int(digits)
+    except ValueError:
+        return 0
 
 
 class TextPreprocessor:
@@ -34,7 +43,7 @@ class TextPreprocessor:
             ]
         return self._compiled_patterns
 
-    def preprocess_text(self, text: str, abbreviations: dict = None) -> str:
+    def preprocess_text(self, text: str, abbreviations: Optional[dict] = None) -> str:
         """
         Preprocess text for TTS generation with abbreviation expansion.
         
@@ -76,7 +85,7 @@ class TextPreprocessor:
         result = text
         
         for pattern, _abbrev, expansion in self._get_compiled_patterns(abbreviations):
-            def replace_match(match):
+            def replace_match(match, expansion=expansion):
                 matched_text = match.group(0)
                 # Preserve casing style
                 if matched_text.isupper():
@@ -139,7 +148,8 @@ class TextPreprocessor:
                 if text_segment.strip():
                     segments.append({"type": "text", "content": text_segment})
 
-            slot_num = int(match.group(1))
+            token_digits = match.group(1)
+            slot_num = _parse_slot_number(token_digits)
             if 1 <= slot_num <= 99:
                 segments.append({"type": "sound", "slot": str(slot_num)})
             else:

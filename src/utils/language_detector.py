@@ -13,6 +13,7 @@ try:
     import langid
     _LANGID_AVAILABLE = True
 except ImportError:
+    langid = None  # type: ignore[assignment]
     _LANGID_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -474,7 +475,7 @@ class LanguageDetector:
             return None
         
         # Find dominant script
-        dominant_lang = max(script_counts, key=script_counts.get)
+        dominant_lang = max(script_counts, key=lambda lang: script_counts[lang])
         dominant_count = script_counts[dominant_lang]
         
         # Calculate confidence based on proportion
@@ -496,9 +497,9 @@ class LanguageDetector:
     
     def _detect_with_langid(self, text: str) -> Optional[LanguageDetectionResult]:
         """Detect language using langid library."""
-        if not _LANGID_AVAILABLE:
+        if langid is None or not _LANGID_AVAILABLE:
             return None
-        
+
         try:
             # langid returns (language, confidence) where confidence is log probability
             lang, confidence = langid.classify(text)
@@ -641,7 +642,7 @@ class LanguageDetector:
                 lang_counts[lang] = lang_counts.get(lang, 0) + len(segment)
             
             if lang_counts:
-                return max(lang_counts, key=lang_counts.get)
+                return max(lang_counts, key=lambda lang: lang_counts[lang])
         
         return result.language
     

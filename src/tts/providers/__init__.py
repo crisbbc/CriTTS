@@ -22,7 +22,7 @@ class TTSProvider(ABC):
         pass
     
     @abstractmethod
-    async def generate_speech(self, text: str, voice: str, rate: int = 0, volume: int = 100, pitch: int = 0) -> bytes:
+    async def generate_speech(self, text: str, voice: str, rate: int = 0, volume: int = 100, pitch: int = 0, stop_event=None) -> Optional[bytes]:
         """Generate speech from text using the specified voice.
         
         Args:
@@ -31,9 +31,11 @@ class TTSProvider(ABC):
             rate: Speech rate adjustment (-100 to 100, 0 is normal)
             volume: Volume level (0 to 100, 100 is normal)
             pitch: Pitch adjustment (-100 to 100, 0 is normal)
+            stop_event: Optional threading.Event to signal cancellation
             
         Returns:
-            Audio bytes in the provider's format
+            Audio bytes in the provider's format, or None if generation
+            was cancelled via *stop_event*.
         """
         pass
     

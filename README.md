@@ -7,6 +7,7 @@ A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS support
 ## Features
 
 ### Core TTS
+
 - **Free Online TTS Engine**: Uses Microsoft Edge's online TTS service (no API key required)
 - **Offline TTS Engines**: Choose [Piper TTS](https://github.com/rhasspy/piper) for fast local playback or Coqui XTTS v2 for higher-quality offline synthesis
 - **100+ Voices**: Access to all Microsoft Edge voices plus curated Piper and Coqui offline voices
@@ -15,6 +16,7 @@ A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS support
 - **Custom Language Mappings**: Set preferred voices for each language
 
 ### Audio Processing
+
 - **Audio Routing**: Route TTS output to any audio device (VB-Cable on Windows, virtual sinks on Linux/macOS)
 - **Linux One-Click Setup**: Auto-creates a null sink + Discord-compatible virtual microphone — no terminal needed (Settings → Audio → Create Null Sink), auto-cleans on exit
 - **Microphone Passthrough**: Route your real microphone alongside TTS for voice mixing
@@ -24,12 +26,14 @@ A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS support
 - **Stereo Enhancement**: Converts mono TTS to natural-sounding stereo
 
 ### Performance
+
 - **Persistent Audio Cache**: Generated audio is cached to disk for instant replay
 - **LRU Cache Eviction**: Configurable cache size with automatic cleanup
 - **Phrase Pre-generation**: Frequently used phrases can be pre-generated
 - **Streaming Playback**: Experimental low-latency mode starts playing before generation completes
 
 ### GUI
+
 - **Modern Interface**: Built with CustomTkinter for a sleek, modern look
 - **Dark/Light Mode**: Switch between themes or follow system setting
 - **Voice Search & Filters**: Search by name, filter by language/region/gender
@@ -38,11 +42,13 @@ A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS support
 - **Recording Overlay**: Compact always-on-top overlay showing recording state with pulsing indicator (draggable, toggleable)
 
 ### Voice Input (STT)
+
 - **Speech-to-Text**: Record microphone audio and transcribe using Google Web Speech API
 - **Auto-Speak**: Optionally speak transcribed text automatically
 - **Language Support**: Configure recognition language in Settings → Behavior
 
 ### VRChat Integration
+
 - **OSC Chatbox**: Send TTS text to VRChat's in-game chatbox
 - **Viseme Animation**: Automatic lip-sync for your avatar
 - **Voice Amplitude**: Real-time mouth movement based on audio volume
@@ -51,6 +57,7 @@ A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS support
 ## Installation
 
 ### Prerequisites
+
 - Python 3.8 or higher
 - **Tkinter** (GUI toolkit — bundled with python.org installer on Windows/macOS; on Linux you may need a separate package)
   - **Arch**: `sudo pacman -S tk`
@@ -105,20 +112,29 @@ python main.py
 ### Dependencies
 
 ```
-customtkinter
+customtkinter>=5.2.0
 edge-tts>=7.2.3
 piper-tts>=1.2.0
 coqui-tts[codec]>=0.27.5
-spacy[ja]
+spacy[ja]>=3.7.0
 langid>=1.1.6
-sounddevice
+sounddevice>=0.4.6
 soundfile>=0.12.0
 numpy>=1.21.0
 scipy>=1.9.0
 pyloudnorm>=0.1.0
 python-osc>=1.8.0
-SpeechRecognition
+SpeechRecognition>=3.10.0
 keyboard>=0.13.5
+```
+
+### Development
+
+Lint and type-check with the configs in `pyproject.toml`:
+
+```
+uvx ruff check src/ main.py scripts/ tests/
+uvx mypy --python-executable .venv/bin/python src/config src/tts/text_preprocessor.py
 ```
 
 ## Usage
@@ -143,12 +159,14 @@ Click the **🎙 Voice** button (or press `Ctrl+Shift+V`) to start recording. Cl
 Access settings by clicking the "Settings" button or pressing `Ctrl+,`
 
 #### Voice Tab
+
 - Select voice from the list (100+ voices available)
 - Adjust rate, volume, and pitch
 - Preview voices before selecting
 - Manage favorite voices
 
 #### Audio Output Tab
+
 - Select output device
 - Enable/disable normalization
 - Choose normalization type (Peak, RMS, LUFS)
@@ -160,36 +178,44 @@ Access settings by clicking the "Settings" button or pressing `Ctrl+,`
   - Adjust passthrough volume (0-200%)
 
 #### Appearance Tab
+
 - Switch between Dark, Light, or System theme
 - **Button Visibility**: Choose which buttons appear in the main window (Speak, Stop, Clear, Voice, Overlay). Settings button is always visible.
 
 #### Abbreviations Tab
+
 - Define text expansion shortcuts (e.g., "idk" → "I don't know")
 
 #### Keybinds Tab
+
 - Customize all keyboard shortcuts
 
 #### Behavior Tab
+
 - Configure speak mode (current line or all text)
 - Enable auto language detection
 - Set language-to-voice mappings
 
 #### Soundboard Tab
+
 - Map soundboard slots to local audio files
 - Enable or disable inline soundboard command parsing for tokens like `[1]`
 
 #### VRChat OSC Tab
+
 - Enable OSC integration
 - Configure chatbox settings
 - Set up viseme/amplitude for lip-sync
 
 #### Advanced Tab
+
 - Manage audio cache settings
 - **Phrase Pre-generation**: Enable/disable automatic phrase tracking, set minimum uses and max phrase counts, and pre-generate your most-used phrases so they play instantly
 - Select processing profile
 - Enable streaming playback (experimental)
 
 #### TTS Provider Tab
+
 - Switch between **Edge TTS (Online)**, **Piper TTS (Offline Fast)**, and **Coqui TTS (Offline High Quality)**
 - Review provider-specific capabilities before saving
 - Configure Coqui GPU selection and speech language when using Coqui TTS
@@ -220,7 +246,7 @@ While a model is downloading or loading, the **status bar** at the bottom of the
 ### Available Piper Voices
 
 | Voice | Locale | Gender | Quality |
-|-------|--------|--------|---------|
+| ------- | -------- | -------- | --------- |
 | English (US) – Lessac | en-US | Male | Medium |
 | English (US) – Ryan | en-US | Male | High |
 | English (US) – Amy | en-US | Female | Low |
@@ -278,6 +304,7 @@ CriTTS provides a **fully automatic one-click setup** for Linux audio routing. N
 3. Click **Speak** — TTS audio is automatically routed to the null sink (not your speakers) and appears as microphone input
 
 **What happens under the hood:**
+
 - TTS audio plays to the null sink via `pactl move-sink-input` (automatic, no user action needed)
 - The null sink's audio is mirrored to a virtual microphone via `module-remap-source`
 - Cleanup is automatic when CriTTS exits (no leftover modules)
@@ -289,6 +316,7 @@ CriTTS provides a **fully automatic one-click setup** for Linux audio routing. N
 > **Tip:** If Discord doesn't show "CriTTS_Virtual_Mic" right away, restart Discord — it caches the device list on startup.
 
 **Manual setup (if you prefer the terminal):**
+
 ```bash
 # Create the null sink
 pactl load-module module-null-sink sink_name=crittssink sink_properties=device.description=CriTTS_Null_Sink
@@ -338,7 +366,7 @@ When enabled, CriTTS creates a real-time audio stream from your selected microph
 ## Audio Processing Profiles
 
 | Profile | Sample Rate | Anti-Aliasing | Stereo Width | Best For |
-|---------|-------------|---------------|--------------|----------|
+| --------- | ------------- | --------------- | -------------- | ---------- |
 | Fast Preview | Original | None | None | Quick testing |
 | Balanced | 48kHz | Kaiser β=5 | 0.3 | General use (default) |
 | High Quality | 48kHz | Kaiser β=8 | 0.5 | Important content |
@@ -346,7 +374,7 @@ When enabled, CriTTS creates a real-time audio stream from your selected microph
 ## Normalization Types
 
 | Type | Description | Best For |
-|------|-------------|----------|
+| ------ | ------------- | ---------- |
 | **Peak** | Limits maximum amplitude to -1dB | General use, prevents clipping |
 | **RMS** | Ensures consistent loudness | Multi-voice projects |
 | **LUFS** | Professional loudness standards (-14 LUFS) | Streaming, broadcast |
@@ -421,7 +449,7 @@ CriTTS/
 ## Keyboard Shortcuts
 
 | Default Shortcut | Action |
-|------------------|--------|
+| ------------------ | -------- |
 | `Escape` | Stop playback |
 | `Ctrl+T` | Clear text |
 | `Ctrl+,` | Open Settings |
@@ -434,6 +462,7 @@ All shortcuts are customizable in Settings > Keybinds.
 ## Troubleshooting
 
 ### No Audio Output
+
 1. Check output device in Settings > Audio Output
 2. Ensure device is not muted in system settings
 3. Try "System Default" device
@@ -441,27 +470,32 @@ All shortcuts are customizable in Settings > Keybinds.
 ### Audio Routing Not Working
 
 **Windows:**
+
 1. Verify VB-Cable is installed correctly
 2. Check Discord input device is "CABLE Output"
 3. Disable noise suppression in Discord
 
 **Linux:**
+
 1. Verify the null sink is loaded: `pactl list sinks short | grep crittssink`
 2. Verify the virtual mic exists: `pactl list sources short | grep CriTTS_Virtual_Mic`
 3. Restart Discord if it doesn't show "CriTTS_Virtual_Mic" in input devices
 4. Check that no other process is using the same sink
 
 ### TTS Not Working
+
 1. Check internet connection (edge-tts requires internet)
 2. Verify firewall is not blocking Python
 3. Try refreshing voices in Settings
 
 ### Piper Model Download Stuck / Failed
+
 1. Ensure you have an internet connection for the **first** use of a Piper voice (models are downloaded once from Hugging Face and cached locally)
 2. The status bar shows download progress — wait for "Loading Piper model…" to complete before speaking
 3. Cached models are stored in `~/.critts/piper_voices/` — delete the folder to force a fresh download
 
 ### VRChat Integration Issues
+
 1. Ensure OSC is enabled in VRChat settings
 2. Check IP/port configuration (default: 127.0.0.1:9000)
 3. Use "Test Connection" in Settings > VRChat OSC
@@ -486,6 +520,4 @@ This project is open source. Feel free to modify and distribute.
 
 ---
 
-
 **Enjoy CriTTS Recoded!** 🎙️
-

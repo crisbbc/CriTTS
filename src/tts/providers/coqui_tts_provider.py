@@ -19,6 +19,8 @@ import numpy as np
 from . import TTSProvider
 from .coqui_metadata import COQUI_VOICES as _COQUI_VOICES, VOICE_NAMES as _VOICE_NAMES, XTTS_LANGUAGES as _XTTS_LANGUAGES
 
+logger = logging.getLogger(__name__)
+
 # Patch missing isin_mps_friendly for transformers >= 4.46 before TTS imports it
 try:
     import transformers.pytorch_utils as _tpu
@@ -26,9 +28,7 @@ try:
         import torch as _torch
         _tpu.isin_mps_friendly = _torch.isin
 except Exception:
-    pass
-
-logger = logging.getLogger(__name__)
+    logger.debug("torch compatibility patch failed", exc_info=True)
 
 # XTTS v2 outputs 24 kHz audio
 _COQUI_SAMPLE_RATE = 24000
@@ -303,7 +303,7 @@ class CoquiTTSProvider(TTSProvider):
                 )
                 return "cpu"
         except Exception:
-            pass
+            logger.debug("GPU availability probe failed; assuming CPU", exc_info=True)
         return "cpu"
 
     @staticmethod
@@ -398,6 +398,9 @@ class CoquiTTSProvider(TTSProvider):
                     "Coqui TTS model failed to load. "
                     "Check the status bar for details and ensure you have an internet connection for the first-time download (~1.8 GB)."
                 )
+            # Bind to a local so narrowing survives into the closure below
+            # (pyright cannot narrow ``self._tts`` across nested functions).
+            tts = self._tts
 
             if stop_event and stop_event.is_set():
                 return None
@@ -434,16 +437,16 @@ class CoquiTTSProvider(TTSProvider):
                     import torch  # noqa: PLC0415
 
                     with torch.inference_mode():
-                        return self._tts.tts(**kwargs)
+                        return tts.tts(**kwargs)
                 except ImportError:
-                    return self._tts.tts(**kwargs)
+                    return tts.tts(**kwargs)
 
             if stop_event and stop_event.is_set():
                 return None
 
             # Detect actual sample rate from model if available
             try:
-                sample_rate = self._tts.synthesizer.output_sample_rate
+                sample_rate = tts.synthesizer.output_sample_rate
             except AttributeError:
                 sample_rate = _COQUI_SAMPLE_RATE
 

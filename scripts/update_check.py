@@ -12,7 +12,6 @@ Strategy:
     data (settings.json, venv, etc.).
 """
 import json
-import os
 import shutil
 import stat
 import sys

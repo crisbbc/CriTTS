@@ -10,10 +10,12 @@ from typing import Any, Callable, Optional, List, Dict
 
 from .base_tab import BaseTab
 from ..theme_constants import (
-    FONT_XS, FONT_SM, FONT_MD, FONT_XL, FONT_WEIGHT_BOLD,
+    FONT_XS, FONT_SM, FONT_MD, FONT_WEIGHT_BOLD,
     BUTTON_HEIGHT, BUTTON_WIDTH_DEFAULT,
     COLOR_DANGER, COLOR_DANGER_HOVER,
     SPACING_MD,
+    SPACING_BASE,
+    SPACING_SM,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,13 +93,6 @@ class AdvancedTab(BaseTab):
         """Create the advanced tab content."""
         self.setup_layout()
 
-        # Main title
-        ctk.CTkLabel(
-            self.scroll,
-            text="Advanced Settings",
-            font=ctk.CTkFont(size=FONT_XL, weight=FONT_WEIGHT_BOLD)
-        ).pack(anchor="w", pady=(10, 5))
-        
         advanced_desc_label = self.create_helper_text(
             text="Configure cache, performance, and experimental features. Changes take effect after saving.",
             parent=self.scroll,
@@ -158,13 +153,13 @@ class AdvancedTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             command=self._on_proxy_toggle
         )
-        self.proxy_enabled_check.pack(anchor="w", pady=5)
+        self.proxy_enabled_check.pack(anchor="w", pady=SPACING_BASE)
 
         # Proxy settings frame (to be toggled)
         self.proxy_frame = self.create_inline_frame(parent)
 
         # Proxy Type
-        type_frame = self.create_inline_frame(self.proxy_frame, pady=2)
+        type_frame = self.create_inline_frame(self.proxy_frame, pady=SPACING_BASE)
         self.create_setting_label("Proxy Type:", type_frame, width=120).pack(side="left")
 
         self.proxy_type_var = ctk.StringVar(value=self.settings.get("proxy_type", "http"))
@@ -176,10 +171,10 @@ class AdvancedTab(BaseTab):
             state="readonly",
             width=150
         )
-        self.proxy_type_dropdown.pack(side="left", padx=5)
+        self.proxy_type_dropdown.pack(side="left", padx=SPACING_BASE)
 
         # Proxy Server
-        server_frame = self.create_inline_frame(self.proxy_frame, pady=2)
+        server_frame = self.create_inline_frame(self.proxy_frame, pady=SPACING_BASE)
         self.create_setting_label("Server (IP:Port):", server_frame, width=120).pack(side="left")
 
         self.proxy_server_var = ctk.StringVar(value=self.settings.get("proxy_server", ""))
@@ -190,10 +185,10 @@ class AdvancedTab(BaseTab):
             placeholder_text="e.g. 127.0.0.1:8080",
             width=250
         )
-        self.proxy_server_entry.pack(side="left", padx=5)
+        self.proxy_server_entry.pack(side="left", padx=SPACING_BASE)
 
         # Proxy Username
-        user_frame = self.create_inline_frame(self.proxy_frame, pady=2)
+        user_frame = self.create_inline_frame(self.proxy_frame, pady=SPACING_BASE)
         self.create_setting_label("Username (opt):", user_frame, width=120).pack(side="left")
 
         self.proxy_username_var = ctk.StringVar(value=self.settings.get("proxy_username", ""))
@@ -204,10 +199,10 @@ class AdvancedTab(BaseTab):
             placeholder_text="Optional",
             width=250
         )
-        self.proxy_username_entry.pack(side="left", padx=5)
+        self.proxy_username_entry.pack(side="left", padx=SPACING_BASE)
 
         # Proxy Password
-        pass_frame = self.create_inline_frame(self.proxy_frame, pady=2)
+        pass_frame = self.create_inline_frame(self.proxy_frame, pady=SPACING_BASE)
         self.create_setting_label("Password (opt):", pass_frame, width=120).pack(side="left")
 
         self.proxy_password_var = ctk.StringVar(value=self.settings.get("proxy_password", ""))
@@ -219,7 +214,7 @@ class AdvancedTab(BaseTab):
             placeholder_text="Optional",
             width=250
         )
-        self.proxy_password_entry.pack(side="left", padx=5)
+        self.proxy_password_entry.pack(side="left", padx=SPACING_BASE)
 
         # Initial state update
         self._on_proxy_toggle()
@@ -243,10 +238,10 @@ class AdvancedTab(BaseTab):
             state="disabled",
             **self.get_input_surface_style(),
         )
-        self.cache_stats_text.pack(fill="x", pady=5)
+        self.cache_stats_text.pack(fill="x", pady=SPACING_BASE)
         
         # Cache buttons frame
-        cache_buttons_frame = self.create_inline_frame(parent, pady=10)
+        cache_buttons_frame = self.create_inline_frame(parent, pady=SPACING_SM)
         
         self.clear_cache_button = ctk.CTkButton(
             cache_buttons_frame,
@@ -258,7 +253,7 @@ class AdvancedTab(BaseTab):
             fg_color=COLOR_DANGER,
             hover_color=COLOR_DANGER_HOVER
         )
-        self.clear_cache_button.pack(side="left", padx=5)
+        self.clear_cache_button.pack(side="left", padx=SPACING_BASE)
         
         self.refresh_stats_button = ctk.CTkButton(
             cache_buttons_frame,
@@ -268,7 +263,7 @@ class AdvancedTab(BaseTab):
             width=BUTTON_WIDTH_DEFAULT,
             height=BUTTON_HEIGHT
         )
-        self.refresh_stats_button.pack(side="left", padx=5)
+        self.refresh_stats_button.pack(side="left", padx=SPACING_BASE)
         
         # Cache enabled checkbox
         self.cache_enabled_var = ctk.BooleanVar(value=self.settings.get("audio_cache_enabled", True))
@@ -278,10 +273,10 @@ class AdvancedTab(BaseTab):
             variable=self.cache_enabled_var,
             font=ctk.CTkFont(size=FONT_MD)
         )
-        self.cache_enabled_check.pack(anchor="w", pady=5)
+        self.cache_enabled_check.pack(anchor="w", pady=SPACING_BASE)
         
         # Max cache size slider
-        self.create_setting_label("Maximum Cache Size:", parent).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Maximum Cache Size:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
         
         cache_size_frame = self.create_inline_frame(parent)
         
@@ -295,7 +290,7 @@ class AdvancedTab(BaseTab):
             command=self._on_cache_size_change,
             width=400
         )
-        self.cache_size_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self.cache_size_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
         
         self.cache_size_value_label = ctk.CTkLabel(
             cache_size_frame,
@@ -303,7 +298,7 @@ class AdvancedTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             width=80
         )
-        self.cache_size_value_label.pack(side="right", padx=5)
+        self.cache_size_value_label.pack(side="right", padx=SPACING_BASE)
 
     def _create_pregeneration_section(self, parent):
         """Create the phrase pre-generation section."""
@@ -316,10 +311,10 @@ class AdvancedTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             command=self._on_pregenerate_enabled_toggle,
         )
-        self.pregenerate_enabled_check.pack(anchor="w", pady=5)
+        self.pregenerate_enabled_check.pack(anchor="w", pady=SPACING_BASE)
 
         # Minimum uses slider
-        self.create_setting_label("Minimum Uses:", parent).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Minimum Uses:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
         min_uses_frame = self.create_inline_frame(parent)
         self.pregenerate_min_uses_var = ctk.IntVar(
             value=int(self.settings.get("pregenerate_min_uses", 3))
@@ -333,17 +328,17 @@ class AdvancedTab(BaseTab):
             command=self._on_min_uses_change,
             width=400,
         )
-        self.pregenerate_min_uses_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self.pregenerate_min_uses_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
         self.pregenerate_min_uses_value_label = ctk.CTkLabel(
             min_uses_frame,
             text=f"{self.pregenerate_min_uses_var.get()}",
             font=ctk.CTkFont(size=FONT_MD),
             width=80,
         )
-        self.pregenerate_min_uses_value_label.pack(side="right", padx=5)
+        self.pregenerate_min_uses_value_label.pack(side="right", padx=SPACING_BASE)
 
         # Max phrases slider
-        self.create_setting_label("Max Phrases:", parent).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Max Phrases:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
         max_phrases_frame = self.create_inline_frame(parent)
         self.pregenerate_max_phrases_var = ctk.IntVar(
             value=int(self.settings.get("pregenerate_max_phrases", 20))
@@ -357,17 +352,17 @@ class AdvancedTab(BaseTab):
             command=self._on_max_phrases_change,
             width=400,
         )
-        self.pregenerate_max_phrases_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self.pregenerate_max_phrases_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
         self.pregenerate_max_phrases_value_label = ctk.CTkLabel(
             max_phrases_frame,
             text=f"{self.pregenerate_max_phrases_var.get()}",
             font=ctk.CTkFont(size=FONT_MD),
             width=80,
         )
-        self.pregenerate_max_phrases_value_label.pack(side="right", padx=5)
+        self.pregenerate_max_phrases_value_label.pack(side="right", padx=SPACING_BASE)
 
         # Action button + status
-        pregen_buttons_frame = self.create_inline_frame(parent, pady=10)
+        pregen_buttons_frame = self.create_inline_frame(parent, pady=SPACING_SM)
         self.pregenerate_button = ctk.CTkButton(
             pregen_buttons_frame,
             text="Pre-generate Common Phrases",
@@ -376,12 +371,12 @@ class AdvancedTab(BaseTab):
             width=BUTTON_WIDTH_DEFAULT,
             height=BUTTON_HEIGHT,
         )
-        self.pregenerate_button.pack(side="left", padx=5)
+        self.pregenerate_button.pack(side="left", padx=SPACING_BASE)
         self.pregenerate_status_label = self.create_surface_status_label(
             pregen_buttons_frame,
             wraplength=220,
         )
-        self.pregenerate_status_label.pack(side="left", padx=10)
+        self.pregenerate_status_label.pack(side="left", padx=SPACING_SM)
 
         self.create_helper_text(
             text=(
@@ -390,7 +385,7 @@ class AdvancedTab(BaseTab):
             ),
             parent=parent,
             font_size=FONT_XS,
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=(0, SPACING_SM))
 
         if not enabled:
             self.pregenerate_button.configure(state="disabled")
@@ -453,7 +448,7 @@ class AdvancedTab(BaseTab):
             except Exception as e:
                 logger.error("Phrase pre-generation exception: %s", e)
                 self._schedule_on_ui_thread(
-                    lambda: self._pregenerate_done(-1, error=str(e))
+                    lambda err=str(e): self._pregenerate_done(-1, error=err)
                 )
             finally:
                 if loop:
@@ -506,7 +501,7 @@ class AdvancedTab(BaseTab):
     def _create_performance_section(self, parent):
         """Create the performance settings section."""
         # Processing profile dropdown
-        self.create_setting_label("Processing Profile:", parent).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Processing Profile:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
         
         self.processing_profile_var = ctk.StringVar(value=self.settings.get("processing_profile", "balanced"))
         self.processing_profile_dropdown = ctk.CTkComboBox(
@@ -517,16 +512,16 @@ class AdvancedTab(BaseTab):
             state="readonly",
             width=200
         )
-        self.processing_profile_dropdown.pack(anchor="w", pady=5)
+        self.processing_profile_dropdown.pack(anchor="w", pady=SPACING_BASE)
         
         self.create_helper_text(
             text="Fast Preview: No resampling, no stereo enhancement | Balanced: 48 kHz resampling with subtle speech-friendly stereo | High Quality: 48 kHz resampling with gentle stereo enhancement",
             parent=parent,
             font_size=FONT_XS,
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=(0, SPACING_SM))
         
         # Text cache size
-        self.create_setting_label("Text Cache Size:", parent).pack(anchor="w", pady=(10, 5))
+        self.create_setting_label("Text Cache Size:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
         
         text_cache_frame = self.create_inline_frame(parent)
         
@@ -537,12 +532,12 @@ class AdvancedTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             width=100
         )
-        self.text_cache_entry.pack(side="left", padx=5)
+        self.text_cache_entry.pack(side="left", padx=SPACING_BASE)
         
         self.create_helper_text(
             text="Number of processed text entries to cache (100-10000)",
             parent=text_cache_frame,
-        ).pack(side="left", padx=5)
+        ).pack(side="left", padx=SPACING_BASE)
 
     def _create_experimental_section(self, parent):
         """Create the experimental features section."""
@@ -550,7 +545,7 @@ class AdvancedTab(BaseTab):
             text="⚠ Experimental features may be unstable or change in future versions.",
             parent=parent,
         )
-        experimental_warning_label.pack(anchor="w", pady=(0, 10))
+        experimental_warning_label.pack(anchor="w", pady=(0, SPACING_SM))
         
         # Streaming playback checkbox
         self.streaming_playback_var = ctk.BooleanVar(value=self.settings.get("enable_streaming_playback", False))
@@ -560,14 +555,14 @@ class AdvancedTab(BaseTab):
             variable=self.streaming_playback_var,
             font=ctk.CTkFont(size=FONT_MD)
         )
-        self.streaming_playback_check.pack(anchor="w", pady=5)
+        self.streaming_playback_check.pack(anchor="w", pady=SPACING_BASE)
         
         streaming_desc_label = self.create_helper_text(
             text="Starts playing audio as soon as the first chunks arrive from Edge TTS, reducing the delay before you hear speech. Best for longer text. Note: Audio normalization and viseme sync use estimated timing in streaming mode.",
             parent=parent,
             font_size=FONT_XS,
         )
-        streaming_desc_label.pack(anchor="w", pady=(0, 10))
+        streaming_desc_label.pack(anchor="w", pady=(0, SPACING_SM))
     
     def _on_clear_cache(self):
         """Clear the audio cache with user confirmation."""
@@ -603,7 +598,7 @@ class AdvancedTab(BaseTab):
             else:
                 self.cache_stats_text.insert("1.0", "TTS engine not available.")
         except Exception as e:
-            logger.error(f"Error getting cache statistics: %s", e)
+            logger.error("Error getting cache statistics: %s", e)
             self.cache_stats_text.insert("1.0", f"Error retrieving cache statistics: {e}")
         
         self.cache_stats_text.configure(state="disabled")

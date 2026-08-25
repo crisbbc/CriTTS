@@ -3,15 +3,10 @@ Main Window GUI Module
 Primary application window with text input, controls, and status display.
 """
 import customtkinter as ctk
-import asyncio
-import queue
 import threading
 import tkinter as tk
-from dataclasses import dataclass
 from typing import Optional, Callable
 import os
-import time
-import datetime
 import logging
 
 from collections import OrderedDict
@@ -20,7 +15,19 @@ from ..tts.text_preprocessor import TextPreprocessor
 from ..gui.keybind_manager import KeybindManager
 from ..vrchat import VRChatOSCClient
 from ..vrchat.viseme_mapper import VisemeMapper, AmplitudeAnalyzer
+from ..vrchat.chatbox_controller import ChatboxController
 from .recording_overlay import RecordingOverlay
+from .gui_utils import (
+    STTState,
+    DeferredTextAnalysisRequest,
+    LatestWinsTextAnalysisScheduler,
+)
+from .mixins.text_editor_mixin import TextEditorMixin
+from .mixins.tts_pipeline_mixin import TTSPipelineMixin
+from .mixins.stt_mixin import STTMixin
+from .mixins.animation_mixin import AnimationMixin
+from .mixins.quick_controls_mixin import QuickControlsMixin
+from .mixins.integrations_mixin import IntegrationsMixin
 from .theme_constants import (
     SPACING_SM, SPACING_MD, SPACING_LG,
     COLOR_SUCCESS, COLOR_SUCCESS_HOVER,
@@ -43,101 +50,14 @@ from .theme_constants import (
 )
 
 
-# =============================================================================
-# STT STATE MACHINE
-# =============================================================================
-
-class STTState:
-    """State machine states for Speech-to-Text operations."""
-    IDLE = "idle"                    # Ready to record
-    RECORDING = "recording"          # Currently recording audio
-    TRANSCRIBING = "transcribing"    # Processing audio (transcription in progress)
-    ERROR = "error"                  # Error state (will auto-reset)
-
-
-@dataclass(frozen=True)
-class DeferredTextAnalysisRequest:
-    """Token identifying one deferred text-analysis request.
-
-    The analyzed text is intentionally *not* carried here: reading the whole
-    text widget on every keystroke is the dominant cost of the voice-indicator
-    update path, so the current document is read lazily once the debounce
-    timer actually fires (and only when this request is still the latest).
-    """
-    generation: int
-    text: Optional[str] = None
-
-
-class LatestWinsTextAnalysisScheduler:
-    """Track deferred analysis requests so only the newest one may apply."""
-
-    def __init__(self):
-        self._latest_generation = 0
-
-    def next_request(self, text: Optional[str] = None) -> DeferredTextAnalysisRequest:
-        self._latest_generation += 1
-        return DeferredTextAnalysisRequest(generation=self._latest_generation, text=text)
-
-    def is_latest(self, request: DeferredTextAnalysisRequest) -> bool:
-        return request.generation == self._latest_generation
-
-
-class OscAmplitudeForwarder:
-    """Forward VRChat voice amplitude on a dedicated thread.
-
-    The amplitude callback fires on PortAudio's realtime audio thread, where a
-    blocking UDP send can underrun audio.  This class hands the value to a
-    daemon thread that coalesces to the newest sample and performs the OSC send
-    off the audio thread.
-    """
-
-    def __init__(self, send_callback: Callable[[float], None]):
-        self._send_callback = send_callback
-        self._queue: "queue.Queue" = queue.Queue(maxsize=1)
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(
-            target=self._run, name="osc-amplitude-forwarder", daemon=True
-        )
-        self._thread.start()
-
-    def update(self, amplitude: float) -> None:
-        """Publish a new amplitude value, keeping only the latest."""
-        try:
-            self._queue.put_nowait(amplitude)
-        except queue.Full:
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self._queue.put_nowait(amplitude)
-            except queue.Full:
-                pass
-
-    def _run(self) -> None:
-        while not self._stop_event.is_set():
-            try:
-                amplitude = self._queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            try:
-                self._send_callback(amplitude)
-            except Exception:
-                pass
-
-    def stop(self) -> None:
-        self._stop_event.set()
-        thread = self._thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=0.5)
-        self._thread = None
-
-
-
-
-
-
-class MainWindow:
+class MainWindow(
+    TextEditorMixin,
+    TTSPipelineMixin,
+    STTMixin,
+    AnimationMixin,
+    QuickControlsMixin,
+    IntegrationsMixin,
+):
     """Main application window for CriTTS Recoded."""
     
     def __init__(
@@ -149,6 +69,7 @@ class MainWindow:
         on_open_settings: Callable,
         icon_path: Optional[str] = None,
         stt_engine=None
+
     ):
         """
         Initialize the main window.
@@ -223,13 +144,15 @@ class MainWindow:
         self._viseme_mapper: Optional[VisemeMapper] = None
         self._amplitude_analyzer: Optional[AmplitudeAnalyzer] = None
         
-        # Typing animation state variables
-        self._typing_animation_timer = None
-        self._typing_debounce_timer = None
-        self._typing_animation_state = 0
-        self._is_typing_active = False
-        self._last_typing_time = 0
-        self._last_message_sent_time = 0  # Track when last message was sent for cooldown
+        # Typing animation / chatbox state lives in the ChatboxController;
+        # the wrappers below keep the original method names for callers/tests.
+        self._chatbox = ChatboxController(
+            get_client=lambda: self.osc_client,
+            settings=self.settings,
+            status_cb=self._set_status,
+            schedule_cb=self._safe_after,
+            cancel_cb=self._cancel_after,
+        )
         
         # Voice indicator debounce timer
         self._voice_indicator_timer = None
@@ -257,10 +180,6 @@ class MainWindow:
         self._setup_osc_client()
         self._setup_recording_overlay()
         self._setup_coqui_status_callback()
-
-
-
-    
     def _safe_after(self, delay_ms: int, callback):
         """Schedule a Tk callback unless shutdown has invalidated callbacks."""
         if not getattr(self, "_async_callbacks_active", True):
@@ -404,7 +323,7 @@ class MainWindow:
             hover_color=COLOR_SUCCESS_HOVER,
             corner_radius=RADIUS_MD
         )
-        self.speak_button.pack(side="left", padx=(0, SPACING_SM), pady=SPACING_SM)
+        self.speak_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
         
         # Stop button - danger styling
         self.stop_button = ctk.CTkButton(
@@ -419,7 +338,7 @@ class MainWindow:
             state="disabled",
             corner_radius=RADIUS_MD
         )
-        self.stop_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        self.stop_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
         
         # Clear button - subtle styling
         self.clear_button = ctk.CTkButton(
@@ -433,7 +352,7 @@ class MainWindow:
             hover_color=COLOR_NEUTRAL,
             corner_radius=RADIUS_MD
         )
-        self.clear_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        self.clear_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
         
         # Voice input button - accent styling (for STT)
         self.voice_button = ctk.CTkButton(
@@ -447,7 +366,7 @@ class MainWindow:
             hover_color=COLOR_ACCENT_HOVER,
             corner_radius=RADIUS_MD
         )
-        self.voice_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        self.voice_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
         
         # Overlay toggle button - secondary styling
         overlay_color = COLOR_PRIMARY if self._overlay_visible else COLOR_NEUTRAL_MEDIUM
@@ -463,7 +382,7 @@ class MainWindow:
             hover_color=overlay_hover,
             corner_radius=RADIUS_MD
         )
-        self.overlay_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        self.overlay_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
         
         # Settings button - accent styling
         self.settings_button = ctk.CTkButton(
@@ -477,7 +396,7 @@ class MainWindow:
             hover_color=COLOR_PRIMARY_HOVER,
             corner_radius=RADIUS_MD
         )
-        self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
         
         # Quick controls toggle button - always visible, toggles the slider panel
         self._quick_controls_visible = self.settings.get("quick_controls_visible", False)
@@ -494,7 +413,7 @@ class MainWindow:
             hover_color=qc_hover,
             corner_radius=RADIUS_MD
         )
-        self.controls_toggle_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        self.controls_toggle_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
         
         # Quick controls panel (collapsible) - row 3
         self._create_quick_controls()
@@ -555,33 +474,6 @@ class MainWindow:
         self.apply_button_visibility()
 
     
-    def _get_line_tag_bounds(self, cursor_index: str) -> tuple[str, str]:
-        """Return the text bounds used for the highlighted line tag."""
-        line_num = cursor_index.split(".")[0]
-        return f"{line_num}.0", f"{line_num}.end"
-
-    def _highlight_current_line(self):
-        """Incrementally retag only the old and new active line."""
-        new_start, new_end = self._get_line_tag_bounds(self.text_input.index("insert"))
-        current_ranges = self.text_input.tag_ranges("current_line")
-
-        if current_ranges:
-            for range_index in range(0, len(current_ranges), 2):
-                current_start = str(current_ranges[range_index])
-                current_end = str(current_ranges[range_index + 1])
-
-                if current_start == new_start and current_end == new_end:
-                    return
-
-                self.text_input.tag_remove("current_line", current_start, current_end)
-
-        self.text_input.tag_add("current_line", new_start, new_end)
-
-    def _refresh_after_text_mutation(self):
-        """Refresh lightweight editor state after any text mutation."""
-        self._highlight_current_line()
-        self._schedule_voice_indicator_update()
-    
     def _on_window_resize(self, event):
         """Coalesce window <Configure> events into one status-label rewrap.
 
@@ -624,155 +516,6 @@ class MainWindow:
         except Exception:
             pass  # Ignore errors during resize
 
-    
-    def _bind_text_editing_shortcuts(self):
-        """Bind text editing shortcuts with higher priority to prevent custom keybind interference."""
-        # These bindings ensure standard text editing works properly
-        text_shortcuts = {
-            "<Control-a>": lambda e: self._on_text_select_all(),
-            "<Control-c>": lambda e: self._on_text_copy(),
-            "<Control-v>": lambda e: self._on_text_paste(),
-            "<Control-x>": lambda e: self._on_text_cut(),
-            "<Control-z>": lambda e: self._on_text_undo(),
-        }
-        
-        for sequence, handler in text_shortcuts.items():
-            self.text_input.bind(sequence, handler)
-    
-    def _on_text_select_all(self):
-        """Select all text in the input."""
-        self.text_input.tag_add("sel", "1.0", "end")
-        self.text_input.mark_set("insert", "end")
-        return "break"
-    
-    def _on_text_copy(self):
-        """Copy selected text to clipboard."""
-        try:
-            selected = self.text_input.get("sel.first", "sel.last")
-            self.root.clipboard_clear()
-            self.root.clipboard_append(selected)
-        except Exception:
-            pass  # No selection
-        return "break"
-    
-    def _on_text_paste(self):
-        """Paste text from clipboard."""
-        try:
-            clipboard_text = self.root.clipboard_get()
-            self.text_input.insert("insert", clipboard_text)
-            self._refresh_after_text_mutation()
-        except Exception:
-            pass  # Clipboard empty or error
-        return "break"
-    
-    def _on_text_cut(self):
-        """Cut selected text to clipboard."""
-        try:
-            selected = self.text_input.get("sel.first", "sel.last")
-            self.root.clipboard_clear()
-            self.root.clipboard_append(selected)
-            self.text_input.delete("sel.first", "sel.last")
-            self._refresh_after_text_mutation()
-        except Exception:
-            pass  # No selection
-        return "break"
-    
-    def _on_text_undo(self):
-        """Undo last action (limited support)."""
-        try:
-            self.text_input.edit_undo()
-        except Exception:
-            pass  # Nothing to undo
-        return "break"
-    
-    def _on_enter_key(self, event):
-        """Handle Enter key press - prevent line breaks unless Shift is held."""
-        # Only trigger speak action, don't insert newline
-        self._on_speak()
-        return "break"  # Prevent default Enter behavior (new line)
-    
-    def _on_shift_enter_key(self, event):
-        """Handle Shift+Enter key press - allow line breaks."""
-        # Allow default Shift+Enter behavior (new line)
-        return "continue"  # Allow default behavior
-
-    def _setup_text_context_menu(self):
-        """Create and bind right-click context menu for text input."""
-        self._text_context_menu = tk.Menu(self.root, tearoff=0)
-        edit_menu = tk.Menu(self._text_context_menu, tearoff=0)
-        edit_menu.add_command(label="Cut", command=self._on_text_cut)
-        edit_menu.add_command(label="Copy", command=self._on_text_copy)
-        edit_menu.add_command(label="Paste", command=self._on_text_paste)
-        edit_menu.add_separator()
-        edit_menu.add_command(label="Select All", command=self._on_text_select_all)
-        self._text_context_menu.add_cascade(label="Edit", menu=edit_menu)
-
-        self._text_sound_token_menu = tk.Menu(self._text_context_menu, tearoff=0)
-        self._text_context_menu.add_cascade(label="Insert Sound Token", menu=self._text_sound_token_menu)
-        self._rebuild_text_token_menu()
-
-        # Windows/Linux right-click is Button-3; include additional bindings for macOS compatibility.
-        self.text_input.bind("<Button-3>", self._show_text_context_menu, add="+")
-        self.text_input.bind("<Button-2>", self._show_text_context_menu, add="+")
-        self.text_input.bind("<Control-Button-1>", self._show_text_context_menu, add="+")
-
-    def _get_soundboard_slots_for_menu(self) -> list:
-        """Return sorted slot numbers for context-menu token insertion."""
-        soundboard_slots = self.settings.get("soundboard_slots", {})
-        if not isinstance(soundboard_slots, dict):
-            return [str(i) for i in range(1, 11)]
-
-        slots = []
-        for key in soundboard_slots.keys():
-            if isinstance(key, str) and key.isdigit():
-                slot_num = int(key)
-                if 1 <= slot_num <= 99:
-                    slots.append(slot_num)
-
-        if not slots:
-            slots = list(range(1, 11))
-
-        return [str(slot) for slot in sorted(set(slots))]
-
-    def _rebuild_text_token_menu(self):
-        """Rebuild token menu so it tracks current soundboard settings."""
-        if self._text_sound_token_menu is None:
-            return
-
-        self._text_sound_token_menu.delete(0, "end")
-        for slot in self._get_soundboard_slots_for_menu():
-            self._text_sound_token_menu.add_command(
-                label=f"Insert [{slot}]",
-                command=lambda s=slot: self._insert_soundboard_token(s),
-            )
-
-    def _show_text_context_menu(self, event):
-        """Show the text context menu at mouse position."""
-        if self._text_context_menu is None:
-            return "break"
-
-        self._rebuild_text_token_menu()
-
-        try:
-            click_index = self.text_input.index(f"@{event.x},{event.y}")
-            self.text_input.mark_set("insert", click_index)
-        except Exception:
-            pass
-
-        self.text_input.focus_set()
-
-        try:
-            self._text_context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self._text_context_menu.grab_release()
-
-        return "break"
-
-    def _insert_soundboard_token(self, slot: str):
-        """Insert a soundboard token at the current cursor position."""
-        self.text_input.insert("insert", f"[{slot}]")
-        self._refresh_after_text_mutation()
-        self.text_input.focus_set()
     
     def _bind_shortcuts(self):
         """Bind keyboard shortcuts dynamically from settings."""
@@ -919,179 +662,6 @@ class MainWindow:
 
 
     
-    def _update_status(self):
-        """Update status label with current voice and device."""
-        voice = self.settings.get("voice", "Default")
-        device_idx = self.settings.get("device_index")
-        
-        if device_idx is not None:
-            devices = self.audio_router.get_audio_devices()
-            device_name = next(
-                (d['name'] for d in devices if d['index'] == device_idx),
-                "Unknown Device"
-            )
-        else:
-            device_name = "Default Device"
-        
-        self.status_label.configure(
-            text=f"Voice: {voice} | Output: {device_name}"
-        )
-        
-        # Update voice indicator
-        self._update_voice_indicator()
-    
-    def _update_voice_indicator(self):
-        """Update the voice indicator label with current voice information."""
-        self._update_voice_indicator_for_text(self.text_input.get("1.0", "end-1c"))
-
-    def _is_latest_voice_indicator_request(self, request: Optional[DeferredTextAnalysisRequest]) -> bool:
-        """Return whether deferred voice-indicator work may still update the UI."""
-        return request is None or self._voice_indicator_scheduler.is_latest(request)
-
-    def _update_voice_indicator_for_text(
-        self,
-        text: str,
-        request: Optional[DeferredTextAnalysisRequest] = None,
-    ):
-        """Update the voice indicator label for a specific text snapshot."""
-        voice = self.settings.get("voice", "Default")
-        auto_language = self.settings.get("auto_language_detection", False)
-        
-        if auto_language:
-            text = text.strip()
-            if text:
-                detected_lang = self.tts_engine._detect_language_from_text(text)
-                voice_short_name = self.tts_engine._detect_language_voice(text)
-
-                if not self._is_latest_voice_indicator_request(request):
-                    return
-
-                if detected_lang and voice_short_name:
-                    language_mappings = self.settings.get("language_voice_mappings", {})
-                    custom_voice = language_mappings.get(detected_lang)
-                    
-                    if custom_voice:
-                        voice_name = custom_voice
-                    else:
-                        voice_info = self.tts_engine.get_voice_info(voice_short_name)
-                        if voice_info:
-                            voice_name = f"{voice_info['name']} ({voice_info['locale']})"
-                        else:
-                            voice_name = voice_short_name
-                    
-                    lang_names = {
-                        "zh": "Chinese",
-                        "ja": "Japanese", 
-                        "ko": "Korean",
-                        "ru": "Russian",
-                        "ar": "Arabic",
-                        "hi": "Hindi",
-                        "es": "Spanish",
-                        "pt": "Portuguese",
-                        "fr": "French",
-                        "de": "German",
-                        "it": "Italian",
-                        "en": "English"
-                    }
-                    
-                    detected_lang_name = lang_names.get(detected_lang, detected_lang.title())
-                    new_text = f"{voice_name} (Auto: {detected_lang_name})"
-                    new_color = "green"
-
-                    if not self._is_latest_voice_indicator_request(request):
-                        return
-
-                    self._animate_voice_indicator(new_text, new_color)
-                else:
-                    self.voice_indicator_value.configure(
-                        text=f"{voice} (Auto: Unknown)",
-                        text_color="orange"
-                    )
-            else:
-                self.voice_indicator_value.configure(
-                    text=f"{voice} (Auto: No text)",
-                    text_color="gray"
-                )
-        else:
-            self.voice_indicator_value.configure(
-                text=voice,
-                text_color="gray"
-            )
-
-    def _schedule_voice_indicator_update(self):
-        """Debounce expensive voice-indicator analysis with latest-wins semantics."""
-        if self._voice_indicator_timer:
-            self._cancel_after(self._voice_indicator_timer)
-            self._voice_indicator_timer = None
-
-        # Do NOT snapshot the document here: ``text_input.get()`` copies the
-        # entire text on every keystroke.  The text is read lazily when the
-        # debounce timer fires, at most once per 300ms quiet period.
-        request = self._voice_indicator_scheduler.next_request()
-
-        self._voice_indicator_timer = self._safe_after(
-            300,
-            lambda pending_request=request: self._run_scheduled_voice_indicator_update(pending_request),
-        )
-
-    def _run_scheduled_voice_indicator_update(self, request: DeferredTextAnalysisRequest):
-        """Run deferred voice-indicator analysis only if it is still current."""
-        self._voice_indicator_timer = None
-
-        if not getattr(self, "_async_callbacks_active", True):
-            return
-        if not self._voice_indicator_scheduler.is_latest(request):
-            return
-
-        text = self.text_input.get("1.0", "end-1c")
-        self._update_voice_indicator_for_text(text, request=request)
-    
-    def _animate_voice_indicator(self, new_text: str, new_color: str):
-        """Animate the voice indicator with smooth transitions."""
-        # Guard: Skip if already animating to prevent orphaned animation chains
-        if self._voice_indicator_animating:
-            return
-        
-        current_text = self.voice_indicator_value.cget("text")
-        
-        # Only animate if the text actually changed
-        if current_text != new_text:
-            self._voice_indicator_animating = True
-            # Fade out current text
-            self._fade_out_text(0.15, lambda: self._fade_in_text_safe(new_text, new_color, 0.15))
-    
-    def _fade_in_text_safe(self, new_text: str, new_color: str, duration: float):
-        """Fade in the new text with animation state cleanup."""
-        try:
-            self._fade_in_text(new_text, new_color, duration)
-        finally:
-            self._voice_indicator_animating = False
-    
-    def _fade_out_text(self, duration: float, callback):
-        """Fade out the current text (simplified to single-step clear)."""
-        # CustomTkinter doesn't support alpha/color interpolation, so just clear and callback
-        self.voice_indicator_value.configure(text="")
-        if callback:
-            callback()
-    
-    def _fade_in_text(self, new_text: str, new_color: str, duration: float):
-        """Fade in the new text."""
-        self.voice_indicator_value.configure(text=new_text, text_color=new_color)
-        # Simple fade in by changing opacity of the label
-        self._pulse_label(self.voice_indicator_value, duration)
-    
-    def _pulse_label(self, label, duration: float):
-        """Create a subtle pulse animation for a label.
-        
-        Note: CustomTkinter doesn't support alpha/opacity animation directly.
-        This method is kept as a placeholder for potential future enhancements.
-        """
-        # CustomTkinter doesn't support alpha interpolation
-        # The label is already visible with the new text/color
-        pass
-
-
-    
     def _on_text_changed(self):
         """Handle text input changes for typing animation."""
         self._schedule_voice_indicator_update()
@@ -1101,68 +671,11 @@ class MainWindow:
     
     def _handle_typing_animation(self):
         """Handle typing animation for VRChat OSC chatbox."""
-        # Guard: Don't restart typing animation while speaking
-        # This prevents KeyRelease events (like Enter key release) from restarting
-        # the animation that was just stopped by _on_speak()
-        if self._speaking:
-            return
-        
-        # Check if OSC is enabled and connected
-        if not self.osc_client or not self.settings.get("vrchat_osc_enabled", False):
-            return
-        
-        # Check if typing animation is enabled
-        if not self.settings.get("vrchat_osc_typing_animation", False):
-            return
-        
-        # Check if we're in the cooldown period after a message was sent
-        # This gives others time to read the message before typing animation starts
-        cooldown_seconds = self.settings.get("vrchat_osc_message_cooldown", 3.0)
-        time_since_message = time.time() - self._last_message_sent_time
-        if time_since_message < cooldown_seconds:
-            return
-        
-        # Update last typing time
-        self._last_typing_time = time.time()
-        
-        # If not already typing, start typing animation
-        if not self._is_typing_active:
-            self._is_typing_active = True
-            # Send typing indicator ON
-            self.osc_client.send_typing_indicator(True)
-            # Start animation timer
-            self._animate_typing_indicator()
-        
-        # Reset debounce timer
-        if self._typing_debounce_timer:
-            self._cancel_after(self._typing_debounce_timer)
-        
-        # Set new debounce timer to stop typing after timeout
-        timeout_seconds = self.settings.get("vrchat_osc_typing_timeout", 2.0)
-        self._typing_debounce_timer = self._safe_after(int(timeout_seconds * 1000), self._stop_typing_animation)
+        self._chatbox.handle_typing(self._speaking)
     
     def _animate_typing_indicator(self):
         """Animate the typing indicator with dots."""
-        if not self._is_typing_active:
-            return
-        
-        # Cycle through animation states: "Typing.", "Typing..", "Typing..."
-        animation_texts = ["Typing.", "Typing..", "Typing..."]
-        current_text = animation_texts[self._typing_animation_state]
-        
-        # Send current animation text to chatbox (only if OSC is enabled)
-        if self.osc_client and self.settings.get("vrchat_osc_enabled", False):
-            self.osc_client.send_to_chatbox(
-                current_text,
-                play_notification_sound=False,
-                show_keyboard=True
-            )
-        
-        # Increment animation state
-        self._typing_animation_state = (self._typing_animation_state + 1) % 3
-        
-        # Schedule next animation frame (1500ms interval to match VRChat rate limit)
-        self._typing_animation_timer = self._safe_after(1500, self._animate_typing_indicator)
+        self._chatbox.animate_typing()
     
     def _stop_typing_animation(self, send_clear: bool = True):
         """Stop the typing animation.
@@ -1172,511 +685,12 @@ class MainWindow:
                        when the actual message will replace the typing text,
                        avoiding VRChat's rate limit on chatbox messages.
         """
-        # Cancel animation timer
-        if self._typing_animation_timer:
-            self._cancel_after(self._typing_animation_timer)
-            self._typing_animation_timer = None
-        
-        # Cancel debounce timer
-        if self._typing_debounce_timer:
-            self._cancel_after(self._typing_debounce_timer)
-            self._typing_debounce_timer = None
-        
-        # Send typing indicator OFF (only if OSC is enabled)
-        if self.osc_client and self.settings.get("vrchat_osc_enabled", False):
-            self.osc_client.send_typing_indicator(False)
-        
-        # Clear chatbox (only if OSC is enabled and send_clear is True)
-        # Skip clearing when the actual message will replace the typing text,
-        # to avoid consuming VRChat's rate limit slot
-        if send_clear and self.osc_client and self.settings.get("vrchat_osc_enabled", False):
-            self.osc_client.clear_chatbox()
-        
-        # Reset state
-        self._is_typing_active = False
-        self._typing_animation_state = 0
-    
-    def _on_speak(self):
-        """Handle speak button click."""
-        # Stop typing animation when speaking (skip clear to avoid rate limit)
-        if self._is_typing_active:
-            self._stop_typing_animation(send_clear=False)
-        
-        with self._speaking_lock:
-            if self._speaking:
-                return
-            self._speaking = True
-        
-        speak_mode = self.settings.get("speak_mode", "current_line")
-        if speak_mode == "current_line":
-            cursor_index = self.text_input.index("insert")
-            line_num = cursor_index.split(".")[0]
-            text = self.text_input.get(f"{line_num}.0", f"{line_num}.end").strip()
-        else:
-            text = self.text_input.get("1.0", "end-1c").strip()
-        if not text:
-            with self._speaking_lock:
-                self._speaking = False
-            self._update_ui_speaking(False)
-            self._show_error("Current line is empty. Please type some text.")
-            return
-        
-        # Get abbreviations from settings and expand text (with LRU cache)
-        abbreviations = self.settings.get("abbreviations", {})
-        if abbreviations:
-            # Use a stable, content-based cache key instead of id()
-            cache_key = (text, tuple(sorted(abbreviations.items())))
-            if cache_key in self._abbreviation_cache:
-                # Cache hit: move to end (most recently used) for LRU
-                processed_text = self._abbreviation_cache.pop(cache_key)
-                self._abbreviation_cache[cache_key] = processed_text
-            else:
-                # Cache miss: evict oldest (first) item if at capacity
-                while len(self._abbreviation_cache) >= self._abbreviation_cache_max_size:
-                    self._abbreviation_cache.popitem(last=False)
-                processed_text = self._text_preprocessor.expand_abbreviations(text, abbreviations)
-                self._abbreviation_cache[cache_key] = processed_text
-        else:
-            processed_text = text
-        
-        # Send to VRChat chatbox if OSC is enabled and send_on_speak is True
-        if self.osc_client and self.settings.get("vrchat_osc_send_on_speak", False):
-            try:
-                # Wait for VRChat's rate limit cooldown before sending the message
-                # This ensures the message is sent after the typing animation text
-                # VRChat enforces ~1.5 seconds between chatbox messages
-                elapsed = time.time() - self.osc_client._last_chatbox_send_time
-                wait_time = max(0, 1.5 - elapsed)
-                send_args = (
-                    processed_text,
-                    self.settings.get("vrchat_osc_play_sound", True),
-                    False
-                )
-                if wait_time > 0:
-                    self._safe_after(int(wait_time * 1000), lambda args=send_args: self._send_chatbox_message(*args))
-                else:
-                    self._send_chatbox_message(*send_args)
-            except Exception:
-                self._set_status("Failed to send to VRChat chatbox", "⚠️")
-        
-        # Start a fresh speak generation with its own stop event.  A previous
-        # worker still winding down keeps its own (already-set) event, so it
-        # cannot observe this speak's cleared stop signal or clobber the new
-        # worker's state when it finally exits.
-        self._speak_generation += 1
-        generation = self._speak_generation
-        stop_event = threading.Event()
-        self._stop_event = stop_event
+        self._chatbox.stop_typing(send_clear)
 
-        self._update_ui_speaking(True)
-        self._set_status("Generating speech...", "⏳", "speaking")
-
-        # Run TTS in background thread to avoid blocking UI
-        self._worker_thread = threading.Thread(
-            target=self._speak_async,
-            args=(processed_text, stop_event, generation),
-            daemon=True,
-        )
-        self._worker_thread.start()
-
-
-
-
-    
-    def _speak_async(self, text: str, stop_event: threading.Event, generation: int):
-        """Run TTS generation and playback in async context."""
-        loop = None
-        try:
-            # Create new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            # Get settings
-            voice = self.settings.get("voice", "en-US-AriaNeural")
-            rate = self.settings.get("rate", 0)
-            volume = self.settings.get("volume", 100)
-            pitch = self.settings.get("pitch", 0)
-            device_idx = self.settings.get("device_index")
-
-            # Linux: configure PulseAudio/PipeWire sink auto-routing.
-            # PortAudio on most Linux systems only ships the ALSA backend,
-            # so PULSE_SINK has no effect.  AudioRouter._route_to_linux_sink()
-            # polls for the just-opened stream and moves it with pactl.
-            if self.audio_router.is_linux:
-                linux_sink = self.settings.get("linux_sink_name", "")
-                self.audio_router.set_linux_sink_name(linux_sink)
-
-            enable_normalization = self.settings.get("enable_normalization", True)
-            normalization_type = self.settings.get("normalization_type", "Peak")
-            processing_profile = self.settings.get("processing_profile", "balanced")
-            enable_streaming = self.settings.get("enable_streaming_playback", False)
-            soundboard_enabled = self.settings.get("soundboard_enabled", True)
-            soundboard_slots = self.settings.get("soundboard_slots", {})
-            if not isinstance(soundboard_slots, dict):
-                soundboard_slots = {}
-
-            # Check if stop was requested before generation
-            if stop_event.is_set():
-                return
-
-            # When soundboard is disabled, keep text untouched so tokens are spoken normally.
-            if soundboard_enabled:
-                segments = self._text_preprocessor.split_soundboard_segments(text)
-            else:
-                segments = [{"type": "text", "content": text}]
-
-            has_sound_tokens = any(segment.get("type") == "sound" for segment in segments)
-
-            # Check if streaming is enabled (only for plain text playback).
-            if enable_streaming and not has_sound_tokens and len(segments) == 1 and segments[0].get("type") == "text":
-                # Use streaming playback for lower latency
-                success = loop.run_until_complete(
-                    self._speak_streaming_async(text, voice, rate, volume, pitch, device_idx, processing_profile, stop_event, enable_normalization, normalization_type)
-                )
-            else:
-                success = True
-
-                for segment in segments:
-                    if stop_event.is_set():
-                        return
-
-                    segment_type = segment.get("type")
-
-                    if segment_type == "text":
-                        segment_text = segment.get("content", "")
-                        if not segment_text.strip():
-                            continue
-
-                        self._safe_after(0, lambda: self._set_status("Generating speech...", "🔊", "speaking"))
-
-                        audio_data, error = loop.run_until_complete(
-                            self.tts_engine.generate_speech(segment_text, voice, rate, volume, pitch, stop_event)
-                        )
-
-                        if stop_event.is_set():
-                            return
-
-                        if error:
-                            self._safe_after(0, lambda e=error: self._show_error(f"TTS Error: {e}"))
-                            return
-
-                        if not audio_data:
-                            continue
-
-                        self._safe_after(0, lambda: self._set_status("Playing audio...", "▶️", "speaking"))
-                        success = loop.run_until_complete(
-                            self._play_audio_segment(
-                                audio_data,
-                                segment_text,
-                                rate,
-                                device_idx,
-                                enable_normalization,
-                                normalization_type,
-                                processing_profile,
-                                enable_viseme=True,
-                            )
-                        )
-
-                        if stop_event.is_set():
-                            return
-
-                        if not success:
-                            self._safe_after(0, lambda: self._show_error("Failed to play audio to device."))
-                            return
-
-                    elif segment_type == "sound":
-                        slot = str(segment.get("slot", ""))
-                        slot_path = soundboard_slots.get(slot, "")
-
-                        if slot_path is None:
-                            slot_path = ""
-                        if not isinstance(slot_path, str):
-                            slot_path = str(slot_path)
-
-                        slot_path = slot_path.strip()
-
-                        if not slot_path:
-                            self._safe_after(
-                                0,
-                                lambda s=slot: self._set_status(
-                                    f"Soundboard slot [{s}] is empty. Skipping.",
-                                    "⚠️",
-                                    "warning"
-                                )
-                            )
-                            continue
-
-                        if not os.path.isfile(slot_path):
-                            self._safe_after(
-                                0,
-                                lambda s=slot, p=slot_path: self._set_status(
-                                    f"Soundboard slot [{s}] file not found: {p}",
-                                    "⚠️",
-                                    "warning"
-                                )
-                            )
-                            continue
-
-                        try:
-                            with open(slot_path, "rb") as f:
-                                slot_audio_data = f.read()
-                        except Exception as file_error:
-                            self._safe_after(
-                                0,
-                                lambda s=slot, e=str(file_error): self._set_status(
-                                    f"Failed loading soundboard slot [{s}]: {e}",
-                                    "⚠️",
-                                    "warning"
-                                )
-                            )
-                            continue
-
-                        if not slot_audio_data:
-                            self._safe_after(
-                                0,
-                                lambda s=slot: self._set_status(
-                                    f"Soundboard slot [{s}] file is empty. Skipping.",
-                                    "⚠️",
-                                    "warning"
-                                )
-                            )
-                            continue
-
-                        self._safe_after(
-                            0,
-                            lambda s=slot: self._set_status(
-                                f"Playing sound slot [{s}]...",
-                                "🎵",
-                                "speaking"
-                            )
-                        )
-                        success = loop.run_until_complete(
-                            self._play_audio_segment(
-                                slot_audio_data,
-                                f"[{slot}]",
-                                rate,
-                                device_idx,
-                                enable_normalization,
-                                normalization_type,
-                                processing_profile,
-                                enable_viseme=False,
-                            )
-                        )
-
-                        if stop_event.is_set():
-                            return
-
-                        if not success:
-                            self._safe_after(
-                                0,
-                                lambda s=slot: self._set_status(
-                                    f"Failed to play soundboard slot [{s}].",
-                                    "⚠️",
-                                    "warning"
-                                )
-                            )
-                            continue
-
-            # Do not show Finished or success UI when user stopped or playback was interrupted
-            if stop_event.is_set():
-                return
-            if not success:
-                self._safe_after(0, lambda: self._show_error("Failed to play audio to device."))
-                return
-            self._safe_after(0, lambda: self._set_status("Finished", "✅"))
-            
-        except Exception as e:
-            self._safe_after(0, lambda: self._show_error(f"Error: {str(e)}"))
-        finally:
-            if loop:
-                loop.close()
-            # Only the current generation may reset shared speak state.  A late
-            # worker finishing after a newer speak started must leave the newer
-            # worker's state untouched.
-            with self._speaking_lock:
-                if generation == self._speak_generation:
-                    self._speaking = False
-                    self._worker_thread = None
-            if generation == self._speak_generation:
-                self._safe_after(0, lambda: self._update_ui_speaking(False))
-
-    async def _play_audio_segment(
-        self,
-        audio_data: bytes,
-        segment_text: str,
-        speech_rate: int,
-        device_idx,
-        enable_normalization: bool,
-        normalization_type: str,
-        processing_profile: str,
-        enable_viseme: bool,
-    ) -> bool:
-        """Play a single prepared audio segment using existing routing settings."""
-        voice_amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
-        enable_clarity_eq = self.settings.get("enable_clarity_eq", True)
-        try:
-            prepared_audio = await self.audio_router.prepare_audio_for_playback(
-                audio_data,
-                enable_normalization=enable_normalization,
-                normalization_type=normalization_type,
-                processing_profile=processing_profile,
-                enable_clarity_eq=enable_clarity_eq,
-            )
-        except RuntimeError:
-            return False
-
-        if enable_viseme and self._viseme_mapper is not None and self.osc_client is not None:
-            amplitude_callback = None
-            if voice_amplitude_enabled and self._amplitude_analyzer is not None:
-                amplitude_callback = self._amplitude_analyzer.get_amplitude
-
-            self._viseme_mapper.start_viseme_animation(
-                segment_text,
-                self.osc_client.send_viseme,
-                duration=prepared_audio.duration_seconds,
-                speech_rate=speech_rate,
-                amplitude_callback=amplitude_callback,
-            )
-
-        if voice_amplitude_enabled and self._amplitude_analyzer is not None and self.osc_client is not None:
-            forwarder = self._get_amplitude_forwarder()
-
-            def amplitude_callback_with_osc(amplitude: float):
-                """Update the analyzer and hand amplitude to the OSC forwarder."""
-                self._amplitude_analyzer.update_amplitude(amplitude)
-                forwarder.update(amplitude)
-
-            return await self.audio_router.play_audio_with_amplitude(
-                audio_data,
-                48000,
-                device_idx,
-                enable_normalization,
-                normalization_type,
-                amplitude_callback=amplitude_callback_with_osc,
-                processing_profile=processing_profile,
-                enable_clarity_eq=enable_clarity_eq,
-                prepared_audio=prepared_audio,
-            )
-
-        return await self.audio_router.play_audio_to_device(
-            audio_data,
-            48000,
-            device_idx,
-            enable_normalization,
-            normalization_type,
-            processing_profile,
-            enable_clarity_eq=enable_clarity_eq,
-            prepared_audio=prepared_audio,
-        )
-    
-    async def _speak_streaming_async(self, text: str, voice: str, rate: int, volume: int, pitch: int, device_idx, processing_profile: str, stop_event: threading.Event, enable_normalization: bool = True, normalization_type: str = "Peak") -> bool:
-        """
-        Stream TTS generation and playback for lower latency.
-        
-        This method starts playing audio as soon as the first chunks arrive,
-        rather than waiting for the entire audio to be generated.
-        
-        Args:
-            text: Text to speak
-            voice: Voice identifier
-            rate: Speech rate
-            volume: Volume level
-            pitch: Pitch adjustment
-            device_idx: Output device index
-            processing_profile: Processing profile name
-            enable_normalization: Whether to apply normalization
-            normalization_type: Type of normalization ("Peak", "RMS", "LUFS", or "None")
-        """
-        try:
-            # Update status
-            self._safe_after(0, lambda: self._set_status("Streaming speech...", "🔊"))
-            
-            # Check if voice amplitude feature is enabled for VRChat
-            voice_amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
-            enable_clarity_eq = self.settings.get("enable_clarity_eq", True)
-            
-            # Start viseme animation if enabled (use estimated duration for streaming)
-            if self._viseme_mapper is not None and self.osc_client is not None:
-                # Estimate duration based on text length and speech rate
-                # Average speaking rate is ~150 words per minute, ~5 chars per word
-                estimated_duration = len(text) / 5 / 150 * 60  # seconds
-                # Adjust for speech rate
-                if rate != 0:
-                    estimated_duration *= (100 - rate) / 100
-                
-                # Get amplitude callback if enabled
-                amplitude_callback = None
-                if voice_amplitude_enabled and self._amplitude_analyzer is not None:
-                    amplitude_callback = self._amplitude_analyzer.get_amplitude
-                
-                self._viseme_mapper.start_viseme_animation(
-                    text, 
-                    self.osc_client.send_viseme, 
-                    duration=estimated_duration,
-                    speech_rate=rate,
-                    amplitude_callback=amplitude_callback
-                )
-            
-            # Create the audio chunk generator
-            audio_generator = self.tts_engine.stream_speech(
-                text, voice, rate, volume, pitch, stop_event
-            )
-            
-            # Create amplitude callback for streaming playback if VRChat voice amplitude is enabled
-            streaming_amplitude_callback = None
-            if voice_amplitude_enabled and self._amplitude_analyzer is not None and self.osc_client is not None:
-                forwarder = self._get_amplitude_forwarder()
-
-                def streaming_amplitude_callback_with_osc(amplitude: float):
-                    """Update the analyzer and hand amplitude to the OSC forwarder."""
-                    self._amplitude_analyzer.update_amplitude(amplitude)
-                    forwarder.update(amplitude)
-                streaming_amplitude_callback = streaming_amplitude_callback_with_osc
-            
-            # Play streaming audio
-            success = await self.audio_router.play_audio_streaming(
-                audio_generator,
-                48000,
-                device_idx,
-                processing_profile,
-                stop_event,
-                enable_normalization,
-                normalization_type,
-                amplitude_callback=streaming_amplitude_callback,
-                enable_clarity_eq=enable_clarity_eq,
-            )
-            
-            return success
-            
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Streaming playback error: {e}")
-            return False
-
-
-
-    
-    def _on_stop(self):
-        """Handle stop button click."""
-        # Stop typing animation when aborting (clear chatbox since no message will replace it)
-        if self._is_typing_active:
-            self._stop_typing_animation(send_clear=True)
-        
-        # Set stop event to signal background thread to stop
-        self._stop_event.set()
-        self.audio_router.stop_playback()
-        if self._viseme_mapper is not None:
-            self._viseme_mapper.stop_viseme_animation()
-        with self._speaking_lock:
-            self._speaking = False
-        self._update_ui_speaking(False)
-        self._set_status("Stopped", "⏹")
-
-    
     def _on_clear(self):
         """Handle clear button click."""
         # Stop typing animation when clearing (clear chatbox since no message will replace it)
-        if self._is_typing_active:
+        if self._chatbox.is_typing_active:
             self._stop_typing_animation(send_clear=True)
         
         self.text_input.delete("1.0", "end")
@@ -1687,574 +701,8 @@ class MainWindow:
         """Handle settings button click."""
         self.on_open_settings()
     
-    def _on_toggle_overlay(self):
-        """Handle overlay toggle button click."""
-        previous_visible = self._overlay_visible
-        next_visible = not previous_visible
-        self.settings.set("overlay_visible", next_visible)
-        if not self.settings.save_settings():
-            self.settings.set("overlay_visible", previous_visible)
-            self._overlay_visible = previous_visible
-            self._show_error("Could not save overlay visibility.")
-            return
-
-        self._overlay_visible = next_visible
-        # Update overlay visibility
-        if self._overlay_visible:
-            self._recording_overlay.show_overlay()
-            # Sync current recording state (using state machine)
-            is_recording = (self._stt_state == STTState.RECORDING)
-            self._recording_overlay.set_recording(is_recording)
-            # Update button appearance to active
-            self.overlay_button.configure(
-                fg_color=COLOR_PRIMARY,
-                hover_color=COLOR_PRIMARY_HOVER
-            )
-        else:
-            self._recording_overlay.hide_overlay()
-            # Update button appearance to inactive
-            self.overlay_button.configure(
-                fg_color=COLOR_NEUTRAL_MEDIUM,
-                hover_color=COLOR_NEUTRAL
-            )
     
-    # =========================================================================
-    # STT STATE MANAGEMENT
-    # =========================================================================
     
-    def _set_stt_state(self, new_state: str):
-        """
-        Safely transition STT state and update UI accordingly.
-        
-        This method ensures the voice button is always in a consistent state
-        and handles timeout management for transcription operations.
-        
-        Args:
-            new_state: One of STTState constants (IDLE, RECORDING, TRANSCRIBING, ERROR)
-        """
-        old_state = self._stt_state
-        self._stt_state = new_state
-        
-        logger = logging.getLogger(__name__)
-        logger.debug(f"STT state transition: {old_state} -> {new_state}")
-        
-        # Cancel any existing timeout timer
-        if self._stt_timeout_timer:
-            self._cancel_after(self._stt_timeout_timer)
-            self._stt_timeout_timer = None
-        
-        # Stop spinner animation if not transcribing
-        if new_state != STTState.TRANSCRIBING:
-            self._stop_stt_spinner()
-        
-        # Update UI based on new state
-        if new_state == STTState.IDLE:
-            self._restore_voice_button()
-            
-        elif new_state == STTState.RECORDING:
-            self.voice_button.configure(
-                text="⏹  Stop Voice",
-                fg_color=COLOR_DANGER,
-                hover_color=COLOR_DANGER_HOVER,
-                state="normal"
-            )
-            # Sync overlay state
-            if self._overlay_visible and self._recording_overlay:
-                self._recording_overlay.set_recording(True)
-                
-        elif new_state == STTState.TRANSCRIBING:
-            self.voice_button.configure(
-                text="⏳  Transcribing...",
-                fg_color=COLOR_TRANSCRIBING,
-                state="disabled"
-            )
-            # Sync overlay state
-            if self._overlay_visible and self._recording_overlay:
-                self._recording_overlay.set_recording(False)
-            # Start spinner animation
-            self._start_stt_spinner()
-            # Set timeout to restore button if transcription hangs
-            self._stt_timeout_timer = self._safe_after(
-                self._STT_TIMEOUT_MS,
-                self._on_stt_timeout
-            )
-            
-        elif new_state == STTState.ERROR:
-            self.voice_button.configure(
-                text="⚠  Error",
-                fg_color=COLOR_DANGER,
-                hover_color=COLOR_DANGER_HOVER,
-                state="normal"
-            )
-            # Sync overlay state
-            if self._overlay_visible and self._recording_overlay:
-                self._recording_overlay.set_recording(False)
-            # Auto-reset to IDLE after 2 seconds
-            self._safe_after(2000, lambda: self._set_stt_state(STTState.IDLE))
-    
-    def _on_stt_timeout(self):
-        """Handle transcription timeout - restore button and show error."""
-        self._stt_timeout_timer = None
-        
-        if self._stt_state == STTState.TRANSCRIBING:
-            self._set_status("⚠ Transcription timed out (30s)", "⚠️")
-            self._set_stt_state(STTState.ERROR)
-    
-    def _start_stt_spinner(self):
-        """Start the loading spinner animation on voice button during transcription."""
-        self._stt_spinner_running = True
-        self._stt_spinner_index = 0
-        self._animate_stt_spinner()
-    
-    def _animate_stt_spinner(self):
-        """Animate the spinner frames during transcription."""
-        if not self._stt_spinner_running:
-            return
-        
-        if self._stt_state == STTState.TRANSCRIBING:
-            # Update button text with current spinner frame
-            frame = self._stt_spinner_frames[self._stt_spinner_index]
-            try:
-                self.voice_button.configure(text=f"{frame}  Transcribing...")
-            except Exception:
-                pass  # Button may have been destroyed
-            
-            # Cycle through frames
-            self._stt_spinner_index = (self._stt_spinner_index + 1) % len(self._stt_spinner_frames)
-            
-            # Schedule next frame
-            self._safe_after(400, self._animate_stt_spinner)
-    
-    def _stop_stt_spinner(self):
-        """Stop the spinner animation."""
-        self._stt_spinner_running = False
-    
-    # =========================================================================
-    # STT EVENT HANDLERS
-    # =========================================================================
-    
-    def _on_voice_input(self):
-        """Handle voice input button click - toggle recording."""
-        self._on_voice_input_toggle()
-    
-    def _on_voice_input_toggle(self):
-        """Handle voice input toggle keybind - toggle recording based on current state."""
-        if not self.stt_engine:
-            self._set_status("Voice input not available", "⚠️")
-            return
-        
-        if self._stt_state == STTState.IDLE:
-            # Start recording
-            success = self.stt_engine.start_listening()
-            if success:
-                self._set_stt_state(STTState.RECORDING)
-                self._set_status("🎙 Listening… press keybind again to stop", "🎙")
-            else:
-                self._set_status("Failed to start voice recording", "⚠️")
-                
-        elif self._stt_state == STTState.RECORDING:
-            # Stop recording and start transcription
-            self._set_stt_state(STTState.TRANSCRIBING)
-            self._set_status("⏳ Transcribing…", "⏳")
-            self.stt_engine.stop_and_transcribe(
-                on_result=self._on_stt_result_safe,
-                on_error=self._on_stt_error_safe
-            )
-    
-    def _on_stt_result_safe(self, text: str):
-        """Handle successful STT transcription with guaranteed state restoration."""
-        # Use root.after to safely update UI from background thread
-        self._safe_after(0, lambda: self._handle_stt_result_safe(text))
-    
-    def _handle_stt_result_safe(self, text: str):
-        """Safely handle STT result with guaranteed state restoration."""
-        try:
-            self._insert_stt_text(text)
-        except Exception as e:
-            logging.getLogger(__name__).error("Error processing STT result: %s", e)
-            self._set_status(f"⚠ Error processing text: {e}", "⚠️")
-            self._set_stt_state(STTState.ERROR)
-        else:
-            # Only transition to IDLE if no exception occurred
-            self._set_stt_state(STTState.IDLE)
-    
-    def _on_stt_error_safe(self, exception: Exception):
-        """Handle STT error with guaranteed state restoration."""
-        # Use root.after to safely update UI from background thread
-        self._safe_after(0, lambda: self._handle_stt_error_safe(exception))
-    
-    def _handle_stt_error_safe(self, exception: Exception):
-        """Safely handle STT error with guaranteed state restoration."""
-        try:
-            self._handle_stt_error(exception)
-        finally:
-            # Always restore to ERROR state (which auto-resets to IDLE)
-            self._set_stt_state(STTState.ERROR)
-    
-    def _on_stt_result(self, text: str):
-        """Handle successful STT transcription (called from background thread)."""
-        # Use root.after to safely update UI from background thread
-        self._safe_after(0, lambda: self._insert_stt_text(text))
-    
-    def _insert_stt_text(self, text: str):
-        """Insert transcribed text into the text input (called on main thread)."""
-        # Apply abbreviation expansion if enabled
-        apply_abbreviations = self.settings.get("stt_apply_abbreviations", False)
-        if apply_abbreviations:
-            abbreviations = self.settings.get("abbreviations", {})
-            if abbreviations:
-                text = self._text_preprocessor.expand_abbreviations(text, abbreviations)
-        
-        # Apply word corrections if configured
-        corrections = self.settings.get("stt_corrections", {})
-        if corrections:
-            text = self._apply_stt_corrections(text, corrections)
-        
-        # Insert text at current cursor position
-        self.text_input.insert("insert", text)
-        self._refresh_after_text_mutation()
-        
-        # Update status
-        self._set_status("✅ Voice input added", "✅")
-        
-        # Check if auto-speak is enabled and automatically speak the text
-        if self.settings.get("stt_auto_speak", False) and text.strip():
-            # Automatically trigger speak after a short delay to let UI update
-            self._safe_after(100, self._on_speak)
-
-    def _send_chatbox_message(self, text: str, play_notification_sound: bool, show_keyboard: bool):
-        """Send a message to the VRChat chatbox and track cooldown timing."""
-        if not self.osc_client:
-            return
-
-        try:
-            self.osc_client.send_to_chatbox(
-                text,
-                play_notification_sound=play_notification_sound,
-                show_keyboard=show_keyboard
-            )
-            self._last_message_sent_time = time.time()
-        except Exception:
-            self._set_status("Failed to send to VRChat chatbox", "⚠️")
-
-    @staticmethod
-    def _apply_stt_corrections(text: str, corrections: dict) -> str:
-        """Apply word-level corrections to STT text."""
-        if not corrections or not text:
-            return text
-
-        words = text.split()
-        corrected_words = []
-
-        for word in words:
-            word_lower = word.lower()
-            if word_lower in corrections:
-                correction = corrections[word_lower]
-                if word.isupper():
-                    correction = correction.upper()
-                elif word and word[0].isupper():
-                    correction = correction.capitalize()
-                corrected_words.append(correction)
-            else:
-                corrected_words.append(word)
-
-        return " ".join(corrected_words)
-    
-    def _on_stt_error(self, exception: Exception):
-        """Handle STT error (called from background thread)."""
-        # Use root.after to safely update UI from background thread
-        self._safe_after(0, lambda: self._handle_stt_error(exception))
-    
-    def _handle_stt_error(self, exception: Exception):
-        """Handle STT error on main thread."""
-        # Show appropriate error message
-        import speech_recognition as sr
-        if isinstance(exception, sr.UnknownValueError):
-            self._set_status("⚠ Could not understand audio", "⚠️")
-        elif isinstance(exception, sr.RequestError):
-            self._set_status("⚠ Network error - check connection", "⚠️")
-        else:
-            self._set_status(f"⚠ Voice input error: {str(exception)}", "⚠️")
-    
-    def _restore_voice_button(self):
-        """Restore voice button to idle state."""
-        self.voice_button.configure(
-            text="🎙  Voice",
-            fg_color=COLOR_ACCENT,
-            hover_color=COLOR_ACCENT_HOVER,
-            state="normal"
-        )
-        # Sync overlay state
-        if self._overlay_visible and self._recording_overlay:
-            self._recording_overlay.set_recording(False)
-    
-    def on_stt_auto_stop(self):
-        """
-        Handle STT auto-stop event (called from STTEngine when buffer limit is hit).
-        
-        This method is called from the audio callback thread, so it uses root.after
-        to safely update the UI on the main thread.
-        """
-        # Schedule UI update on main thread
-        self._safe_after(0, self._handle_stt_auto_stop)
-    
-    def _handle_stt_auto_stop(self):
-        """Handle STT auto-stop on the main thread."""
-        # If we were recording, transition to transcribing
-        if self._stt_state == STTState.RECORDING:
-            self._set_stt_state(STTState.TRANSCRIBING)
-            self._set_status("⏳ Transcribing…", "⏳")
-            self.stt_engine.stop_and_transcribe(
-                on_result=self._on_stt_result_safe,
-                on_error=self._on_stt_error_safe
-            )
-        
-        # Update status to inform user
-        self._set_status("⚠ Recording auto-stopped (5 min limit reached)", "⚠️")
-    
-    # =========================================================================
-    # BUTTON ANIMATION SYSTEM
-    # =========================================================================
-    
-    def _update_ui_speaking(self, speaking: bool):
-        """
-        Update UI state based on speaking status with smooth animations.
-        
-        This method handles the visual feedback for TTS operations, including
-        button state transitions and loading animations.
-        """
-        if speaking:
-            # Start speaking animation
-            self._tts_speaking = True
-            self._start_speaking_animation()
-            
-            # Animate speak button to disabled/speaking state
-            self._animate_button(self.speak_button, "disabled", "▶  Speaking...", COLOR_NEUTRAL_MEDIUM, ANIMATION_NORMAL)
-            # Animate stop button to active state
-            self._animate_button(self.stop_button, "normal", "⏹  Stop", COLOR_WARNING, ANIMATION_NORMAL)
-            # Animate clear button to disabled state
-            self._animate_button(self.clear_button, "disabled", "🗑  Clear", COLOR_NEUTRAL, ANIMATION_NORMAL)
-        else:
-            # Stop speaking animation
-            self._tts_speaking = False
-            self._stop_speaking_animation()
-            
-            # Animate speak button back to normal
-            self._animate_button(self.speak_button, "normal", "▶  Speak", COLOR_SUCCESS, ANIMATION_NORMAL)
-            # Animate stop button back to disabled
-            self._animate_button(self.stop_button, "disabled", "⏹  Stop", COLOR_NEUTRAL_MEDIUM, ANIMATION_NORMAL)
-            # Animate clear button back to normal
-            self._animate_button(self.clear_button, "normal", "🗑  Clear", COLOR_NEUTRAL_MEDIUM, ANIMATION_NORMAL)
-    
-    def _start_speaking_animation(self):
-        """Start the speaking animation with animated dots."""
-        self._speaking_animation_running = True
-        self._speaking_animation_index = 0
-        self._speaking_animation_frames = ["▶  Speaking.", "▶  Speaking..", "▶  Speaking..."]
-        self._animate_speaking_button()
-    
-    def _animate_speaking_button(self):
-        """Animate the speaking button with cycling dots."""
-        if not self._speaking_animation_running:
-            return
-        
-        if self._tts_speaking:
-            try:
-                frame = self._speaking_animation_frames[self._speaking_animation_index]
-                self.speak_button.configure(text=frame)
-            except Exception:
-                pass  # Button may have been destroyed
-            
-            # Cycle through frames
-            self._speaking_animation_index = (self._speaking_animation_index + 1) % len(self._speaking_animation_frames)
-            
-            # Schedule next frame (500ms for smooth animation)
-            self._safe_after(500, self._animate_speaking_button)
-    
-    def _stop_speaking_animation(self):
-        """Stop the speaking animation."""
-        self._speaking_animation_running = False
-    
-    def _animate_button(self, button, state: str, text: str, color: str, duration: float):
-        """
-        Animate a button with smooth color and text transitions.
-        
-        Args:
-            button: The CTkButton to animate
-            state: Target state ("normal" or "disabled")
-            text: Target button text
-            color: Target foreground color
-            duration: Animation duration in seconds
-        """
-        # Store original color for hover effect
-        button._original_color = color
-        
-        # Animate color change with pulse effect
-        self._animate_button_color(button, color, duration)
-        
-        # Update text and state
-        button.configure(text=text, state=state)
-    
-    def _animate_button_color(self, button, target_color: str, duration: float):
-        """
-        Animate button color transition.
-        
-        Uses a multi-step color transition for smoother animation.
-        """
-        # Get current color
-        try:
-            current_color = button.cget("fg_color")
-        except Exception:
-            current_color = target_color
-        
-        # If colors are the same, no animation needed
-        if current_color == target_color:
-            return
-        
-        # CustomTkinter doesn't support direct color interpolation,
-        # so we use a stepped transition effect
-        self._transition_button_color(button, current_color, target_color, 3, duration)
-    
-    def _transition_button_color(self, button, from_color: str, to_color: str, steps: int, total_duration: float):
-        """
-        Transition button color through intermediate steps.
-        
-        Creates a smoother visual transition by briefly flashing through
-        an intermediate state.
-        """
-        if steps <= 0:
-            button.configure(fg_color=to_color)
-            return
-        
-        # For the first step, set to target color immediately with pulse effect
-        button.configure(fg_color=to_color)
-        
-        # Add a subtle scale pulse effect
-        self._pulse_button(button, to_color, total_duration)
-    
-    def _pulse_button(self, button, target_color: str, duration: float):
-        """
-        Create a pulse effect for button animation.
-        
-        This adds visual feedback by briefly expanding the button width
-        then returning to normal size.
-        """
-        try:
-            # Add a subtle scale effect by changing size slightly
-            # Use the constant to prevent width accumulation on rapid repeated calls
-            button.configure(width=BUTTON_WIDTH_DEFAULT + 4)
-            
-            def reset_size():
-                try:
-                    button.configure(width=BUTTON_WIDTH_DEFAULT)
-                except Exception:
-                    pass  # Button may have been destroyed or reconfigured
-            
-            self._safe_after(int(duration * 300), reset_size)
-        except Exception:
-            pass  # Button may not support width configuration
-    
-    def _set_status(self, message: str, icon: str = "", message_type: str = "info"):
-        """Update status message with enhanced formatting and visual indicators."""
-        # Format message with timestamp for better logging
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        formatted_message = f"[{timestamp}] {message}"
-        
-        # Animate status text change
-        self._animate_status_change(f"{icon} {formatted_message}" if icon else formatted_message, message_type)
-        
-        # Update activity indicator based on message type
-        self._animate_activity_indicator(message_type)
-    
-    def _animate_status_change(self, new_text: str, message_type: str):
-        """Animate the status text change with smooth transitions."""
-        current_text = self.status_label.cget("text")
-        
-        # Only animate if text changed
-        if current_text != new_text:
-            # Fade out current text
-            self._fade_out_status(0.1, lambda: self._fade_in_status(new_text, 0.1))
-    
-    def _fade_out_status(self, duration: float, callback):
-        """Fade out the current status text (simplified to single-step clear)."""
-        # CustomTkinter doesn't support alpha/color interpolation, so just clear and callback
-        self.status_label.configure(text="")
-        if callback:
-            callback()
-    
-    def _fade_in_status(self, new_text: str, duration: float):
-        """Fade in the new status text."""
-        self.status_label.configure(text=new_text)
-        # Pulse effect for the new status
-        self._pulse_label(self.status_label, duration)
-    
-    def _animate_activity_indicator(self, message_type: str):
-        """Animate the activity indicator based on message type."""
-        # Get target color based on message type
-        color_map = {
-            "speaking": "#2ecc71",  # Green for active
-            "error": "#e74c3c",     # Red for error
-            "warning": "#f39c12",   # Orange for warning
-            "success": "#27ae60",   # Dark green for success
-            "info": "gray60"        # Gray for normal
-        }
-        
-        target_color = color_map.get(message_type, "gray60")
-        
-        # Animate color change
-        self._animate_indicator_color(self.activity_indicator, target_color, 0.2)
-    
-    def _animate_indicator_color(self, indicator, target_color: str, duration: float):
-        """Animate indicator color transition."""
-        indicator.configure(text_color=target_color)
-        # Add a subtle pulse effect
-        self._pulse_label(indicator, duration)
-    
-    def _set_progress(self, message: str, animated: bool = False):
-        """
-        Update progress indicator with optional animation.
-        
-        Args:
-            message: Progress message to display
-            animated: If True, show animated loading indicator
-        """
-        if animated:
-            # Start animated progress
-            self._progress_animation_running = True
-            self._progress_animation_index = 0
-            self._progress_base_message = message
-            self._animate_progress()
-        else:
-            # Stop any running animation
-            self._progress_animation_running = False
-            self.progress_label.configure(text=message)
-        
-        if message:
-            self.progress_label.pack(side="right", padx=5)
-        else:
-            self.progress_label.pack_forget()
-    
-    def _animate_progress(self):
-        """Animate the progress indicator with cycling dots."""
-        if not self._progress_animation_running:
-            return
-        
-        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-        frame = frames[self._progress_animation_index]
-        
-        try:
-            self.progress_label.configure(text=f"{frame} {self._progress_base_message}")
-        except Exception:
-            pass
-        
-        self._progress_animation_index = (self._progress_animation_index + 1) % len(frames)
-        
-        # Schedule next frame (80ms for smooth spinner)
-        self._safe_after(80, self._animate_progress)
-    
-    def _stop_progress_animation(self):
-        """Stop the progress animation."""
-        self._progress_animation_running = False
     
     def _show_error(self, message: str):
         """Show error message in status and popup."""
@@ -2273,14 +721,14 @@ class MainWindow:
             font=ctk.CTkFont(size=12),
             wraplength=350
         )
-        label.pack(padx=20, pady=20)
+        label.pack(padx=SPACING_LG, pady=SPACING_LG)
         
         ok_button = ctk.CTkButton(
             dialog,
             text="OK",
             command=dialog.destroy
         )
-        ok_button.pack(pady=10)
+        ok_button.pack(pady=SPACING_SM)
         
         # Center dialog
         dialog.update_idletasks()
@@ -2319,34 +767,6 @@ class MainWindow:
         self.progress_label.configure(text_color=colors["text_muted"])
         self._apply_quick_controls_theme(mode)
 
-    def _apply_quick_controls_theme(self, mode: str):
-        """Recolor quick controls surfaces to match the active appearance mode."""
-        colors = get_theme_colors(mode)
-        self.quick_controls_frame.configure(fg_color=colors["bg_secondary"])
-        self._qc_rate_label.configure(text_color=colors["text_secondary"])
-        self._qc_volume_label.configure(text_color=colors["text_secondary"])
-        self._qc_pitch_label.configure(text_color=colors["text_secondary"])
-
-        self.controls_toggle_button.configure(
-            **self._get_toggle_button_theme_colors(
-                colors=colors,
-                is_active=self._quick_controls_visible,
-            )
-        )
-
-    @staticmethod
-    def _get_toggle_button_theme_colors(colors: dict, is_active: bool) -> dict:
-        """Return the active or neutral theme colors for toggle-style control buttons."""
-        if is_active:
-            return {
-                "fg_color": colors["button_active"],
-                "hover_color": colors["button_active_hover"],
-            }
-        return {
-            "fg_color": colors["button_neutral"],
-            "hover_color": colors["button_neutral_hover"],
-        }
-    
     def refresh_status(self):
         """Refresh status display (called after settings change)."""
         self._abbreviation_cache.clear()
@@ -2381,17 +801,16 @@ class MainWindow:
         self.controls_toggle_button.pack_forget()
         self.settings_button.pack_forget()
         
-        # Re-pack only visible toggleable buttons in fixed order
+        # Re-pack everything left-to-right in fixed order; expand=True makes
+        # buttons spread out evenly when the window is stretched.
         for name, button in toggleable_buttons:
             if name in visible_buttons:
-                button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
-        
-        # Always re-pack controls toggle button before settings button
+                button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
+
+        self.settings_button.pack_forget()
+        self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
         self.controls_toggle_button.pack_forget()
-        self.controls_toggle_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
-        
-        # Always re-pack settings button last
-        self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
+        self.controls_toggle_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
 
         # Enforce a minimum width wide enough to always show every visible button.
         # Each button occupies BUTTON_WIDTH_DEFAULT + 2 * SPACING_SM horizontal space.
@@ -2400,193 +819,6 @@ class MainWindow:
         required = n_visible * (BUTTON_WIDTH_DEFAULT + 2 * SPACING_SM) + 2 * SPACING_MD
         self.root.minsize(max(required, WINDOW_MAIN_MIN_WIDTH), WINDOW_MAIN_MIN_HEIGHT)
     
-    # =========================================================================
-    # QUICK CONTROLS PANEL
-    # =========================================================================
-
-    def _create_quick_controls(self):
-        """Create the collapsible quick controls panel with rate/volume/pitch sliders."""
-        self.quick_controls_frame = ctk.CTkFrame(
-            self.main_frame,
-            fg_color=COLOR_BG_SECONDARY,
-            corner_radius=RADIUS_MD
-        )
-        self.quick_controls_frame.grid(
-            row=3, column=0, padx=SPACING_MD, pady=(0, SPACING_SM), sticky="ew"
-        )
-        self.quick_controls_frame.grid_columnconfigure(0, weight=1)
-
-        # Inner row that holds all slider groups side-by-side
-        self._qc_inner = ctk.CTkFrame(self.quick_controls_frame, fg_color="transparent")
-        self._qc_inner.pack(fill="x", padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM))
-
-        # --- Rate slider (always shown) ---
-        self._qc_rate_group = ctk.CTkFrame(self._qc_inner, fg_color="transparent")
-        self._qc_rate_group.pack(side="left", fill="x", expand=True, padx=(0, SPACING_SM))
-        self._qc_rate_var = ctk.IntVar(value=self.settings.get("rate", 0))
-        self._qc_rate_label = ctk.CTkLabel(
-            self._qc_rate_group,
-            text=f"Speed: {self._qc_rate_var.get():+d}%",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color=COLOR_NEUTRAL_LIGHTER
-        )
-        self._qc_rate_label.pack(anchor="w")
-        ctk.CTkSlider(
-            self._qc_rate_group,
-            from_=-100, to=100, number_of_steps=200,
-            variable=self._qc_rate_var,
-            command=self._on_quick_rate_change
-        ).pack(fill="x")
-
-        # --- Volume slider (always shown) ---
-        self._qc_volume_group = ctk.CTkFrame(self._qc_inner, fg_color="transparent")
-        self._qc_volume_group.pack(side="left", fill="x", expand=True, padx=SPACING_SM)
-        self._qc_volume_var = ctk.IntVar(value=self.settings.get("volume", 100))
-        self._qc_volume_label = ctk.CTkLabel(
-            self._qc_volume_group,
-            text=f"Volume: {self._qc_volume_var.get()}%",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color=COLOR_NEUTRAL_LIGHTER
-        )
-        self._qc_volume_label.pack(anchor="w")
-        ctk.CTkSlider(
-            self._qc_volume_group,
-            from_=0, to=100, number_of_steps=100,
-            variable=self._qc_volume_var,
-            command=self._on_quick_volume_change
-        ).pack(fill="x")
-
-        # --- Pitch slider (Edge TTS only) ---
-        self._qc_pitch_group = ctk.CTkFrame(self._qc_inner, fg_color="transparent")
-        self._qc_pitch_var = ctk.IntVar(value=self.settings.get("pitch", 0))
-        self._qc_pitch_label = ctk.CTkLabel(
-            self._qc_pitch_group,
-            text=f"Pitch: {self._qc_pitch_var.get():+d}%",
-            font=ctk.CTkFont(size=FONT_SM),
-            text_color=COLOR_NEUTRAL_LIGHTER
-        )
-        self._qc_pitch_label.pack(anchor="w")
-        ctk.CTkSlider(
-            self._qc_pitch_group,
-            from_=-100, to=100, number_of_steps=200,
-            variable=self._qc_pitch_var,
-            command=self._on_quick_pitch_change
-        ).pack(fill="x")
-
-        # Apply provider-specific slider visibility and show/hide the panel
-        self._update_quick_controls_provider()
-        if not self._quick_controls_visible:
-            self.quick_controls_frame.grid_remove()
-
-    def _toggle_quick_controls(self):
-        """Show or hide the quick controls panel."""
-        previous_visible = self._quick_controls_visible
-        next_visible = not previous_visible
-        self.settings.set("quick_controls_visible", next_visible)
-        if not self.settings.save_settings():
-            self.settings.set("quick_controls_visible", previous_visible)
-            self._quick_controls_visible = previous_visible
-            self._show_error("Could not save quick controls visibility.")
-            return
-
-        self._quick_controls_visible = next_visible
-
-        if self._quick_controls_visible:
-            self.quick_controls_frame.grid()
-        else:
-            self.quick_controls_frame.grid_remove()
-
-        self._apply_quick_controls_theme(self.settings.get("appearance_mode", "Dark"))
-
-    def _update_quick_controls_provider(self):
-        """Show pitch slider for all providers (Coqui does not use temperature controls)."""
-        if self._qc_pitch_group.winfo_manager() == "pack":
-            return
-        self._qc_pitch_group.pack(side="left", fill="x", expand=True, padx=(SPACING_SM, 0))
-
-    def refresh_quick_controls(self):
-        """Sync quick controls sliders from current settings (called after settings save)."""
-        try:
-            rate = self.settings.get("rate", 0)
-            if self._qc_rate_var.get() != rate:
-                self._qc_rate_var.set(rate)
-                self._qc_rate_label.configure(text=f"Speed: {rate:+d}%")
-
-            volume = self.settings.get("volume", 100)
-            if self._qc_volume_var.get() != volume:
-                self._qc_volume_var.set(volume)
-                self._qc_volume_label.configure(text=f"Volume: {volume}%")
-
-            pitch = self.settings.get("pitch", 0)
-            if self._qc_pitch_var.get() != pitch:
-                self._qc_pitch_var.set(pitch)
-                self._qc_pitch_label.configure(text=f"Pitch: {pitch:+d}%")
-
-            next_visible = self.settings.get("quick_controls_visible", False)
-            visibility_changed = self._quick_controls_visible != next_visible
-            self._quick_controls_visible = next_visible
-            if visibility_changed:
-                if self._quick_controls_visible:
-                    self.quick_controls_frame.grid()
-                else:
-                    self.quick_controls_frame.grid_remove()
-                self._apply_quick_controls_theme(self.settings.get("appearance_mode", "Dark"))
-
-            if self._qc_pitch_group.winfo_manager() != "pack":
-                self._update_quick_controls_provider()
-        except Exception:
-            pass
-
-    def _persist_quick_control_value(self, key, value, variable, label, format_label):
-        """Persist a quick-control setting and restore the previous value on failure."""
-        previous_value = self.settings.get(key, value)
-        if previous_value == value:
-            if variable.get() != previous_value:
-                variable.set(previous_value)
-            return True
-        self.settings.set(key, value)
-        if self.settings.save_settings():
-            label.configure(text=format_label(value))
-            return True
-
-        self.settings.set(key, previous_value)
-        variable.set(previous_value)
-        label.configure(text=format_label(previous_value))
-        self._show_error("Could not save quick controls.")
-        return False
-
-    def _on_quick_rate_change(self, value):
-        """Handle quick controls rate slider change."""
-        v = int(round(float(value)))
-        self._persist_quick_control_value(
-            "rate",
-            v,
-            self._qc_rate_var,
-            self._qc_rate_label,
-            lambda current_value: f"Speed: {current_value:+d}%",
-        )
-
-    def _on_quick_volume_change(self, value):
-        """Handle quick controls volume slider change."""
-        v = int(round(float(value)))
-        self._persist_quick_control_value(
-            "volume",
-            v,
-            self._qc_volume_var,
-            self._qc_volume_label,
-            lambda current_value: f"Volume: {current_value}%",
-        )
-
-    def _on_quick_pitch_change(self, value):
-        """Handle quick controls pitch slider change."""
-        v = int(round(float(value)))
-        self._persist_quick_control_value(
-            "pitch",
-            v,
-            self._qc_pitch_var,
-            self._qc_pitch_label,
-            lambda current_value: f"Pitch: {current_value:+d}%",
-        )
 
     def set_text(self, text: str):
         """Set text in the input area."""
@@ -2599,161 +831,3 @@ class MainWindow:
         """Get text from the input area."""
         return self.text_input.get("1.0", "end-1c")
     
-    def _setup_osc_client(self):
-        """Setup OSC client for VRChat chatbox integration."""
-        # Disconnect existing client if any
-        if self.osc_client:
-            try:
-                self.osc_client.disconnect()
-            except Exception:
-                pass
-            self.osc_client = None
-        
-        # Check if OSC is enabled
-        if not self.settings.get("vrchat_osc_enabled", False):
-            # Also clear viseme mapper when OSC is disabled
-            self._setup_viseme_mapper()
-            return
-        
-        # Get OSC settings
-        ip = self.settings.get("vrchat_osc_ip", "127.0.0.1")
-        port = self.settings.get("vrchat_osc_port", 9000)
-        
-        # Create and connect client
-        try:
-            self.osc_client = VRChatOSCClient(ip=ip, port=port)
-            if self.osc_client.connect():
-                self._set_status(f"OSC connected to {ip}:{port}", "✅")
-            else:
-                self._set_status(f"OSC failed to connect to {ip}:{port}", "⚠️")
-                self.osc_client = None
-        except Exception:
-            self._set_status("OSC setup failed", "⚠️")
-            self.osc_client = None
-        
-        # Setup viseme mapper after OSC client is configured
-        self._setup_viseme_mapper()
-
-    def refresh_vrchat_osc(self):
-        """Refresh OSC client and viseme mapping after settings updates."""
-        self._setup_osc_client()
-    
-    def _setup_viseme_mapper(self):
-        """Setup viseme mapper for VRChat lip-sync integration."""
-        # Stop and clear existing viseme mapper if any
-        if self._viseme_mapper is not None:
-            self._viseme_mapper.stop_viseme_animation()
-            self._viseme_mapper = None
-        
-        self._amplitude_analyzer = None
-        
-        # Check if viseme is enabled and OSC client is connected
-        viseme_enabled = self.settings.get("vrchat_viseme_enabled", False)
-        if not viseme_enabled:
-            return
-        
-        if self.osc_client is None:
-            return
-        
-        # Get viseme settings
-        smoothing = self.settings.get("vrchat_viseme_smoothing", 0.5)
-        amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
-        
-        # Instantiate viseme mapper
-        self._viseme_mapper = VisemeMapper(smoothing=smoothing)
-        
-        # Instantiate amplitude analyzer if amplitude mode is enabled
-        if amplitude_enabled:
-            self._amplitude_analyzer = AmplitudeAnalyzer()
-    
-    def _setup_recording_overlay(self):
-        """Setup the recording overlay window."""
-        # Create the overlay
-        self._recording_overlay = RecordingOverlay(self.root)
-        
-        # Show or hide based on saved preference
-        if self._overlay_visible:
-            self._recording_overlay.show_overlay()
-        else:
-            self._recording_overlay.hide_overlay()
-
-    def _setup_coqui_status_callback(self):
-        """Register a status callback on the Coqui TTS provider.
-
-        The callback is invoked from a background thread whenever the Coqui
-        model is being downloaded or loaded, allowing the status bar to surface
-        progress information to the user.
-        """
-        if hasattr(self.tts_engine, "set_coqui_status_callback"):
-            self.tts_engine.set_coqui_status_callback(self._on_coqui_status)
-
-    def _on_coqui_status(self, message: str) -> None:
-        """Called (from a background thread) with a Coqui model status message."""
-        self._safe_after(0, lambda msg=message: self._set_status(msg, "⬇️", "info"))
-
-    def _get_amplitude_forwarder(self) -> "OscAmplitudeForwarder":
-        """Return the shared OSC amplitude forwarder, creating it on demand."""
-        if self._amplitude_forwarder is None:
-            self._amplitude_forwarder = OscAmplitudeForwarder(
-                self._forward_voice_amplitude
-            )
-        return self._amplitude_forwarder
-
-    def _forward_voice_amplitude(self, amplitude: float) -> None:
-        """Send the current amplitude to the active OSC client (off the audio thread)."""
-        if self.osc_client is not None:
-            self.osc_client.send_voice_amplitude(amplitude)
-    
-    def shutdown(self):
-        """Gracefully shutdown the main window and wait for worker threads."""
-        if not self._async_callbacks_active:
-            return
-        # Invalidate callbacks before stopping workers.  Their finally blocks
-        # can still run while this method joins the worker.
-        self._async_callbacks_active = False
-
-        # Stop typing animation if active
-        if self._is_typing_active:
-            self._stop_typing_animation()
-        
-        # Signal stop to any running TTS operation
-        self._stop_event.set()
-        
-        # Stop audio playback
-        self.audio_router.stop_playback()
-        
-        # Stop viseme animation if active
-        if self._viseme_mapper is not None:
-            self._viseme_mapper.stop_viseme_animation()
-        
-        # Disconnect OSC client
-        if self.osc_client:
-            try:
-                self.osc_client.disconnect()
-            except Exception:
-                pass
-            self.osc_client = None
-        
-        # Stop the OSC amplitude forwarder thread
-        if self._amplitude_forwarder is not None:
-            self._amplitude_forwarder.stop()
-            self._amplitude_forwarder = None
-
-        # Shutdown STT engine if available
-        if self.stt_engine:
-            self.stt_engine.shutdown()
-        
-        # Destroy recording overlay if it exists
-        if self._recording_overlay:
-            try:
-                self._recording_overlay.destroy()
-            except Exception:
-                pass
-            self._recording_overlay = None
-        
-        # Wait for worker threads to complete (with timeout)
-        if self._worker_thread and self._worker_thread.is_alive():
-            self._worker_thread.join(timeout=2.0)
-        
-        # Unregister all keybinds
-        self.keybind_manager.unregister_all(self.root)

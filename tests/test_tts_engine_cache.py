@@ -5,7 +5,6 @@ Verifies that the voices cache is automatically busted whenever the active
 TTS provider changes, so that switching between Edge TTS and Coqui TTS
 always returns the new provider's voice list rather than stale cached data.
 """
-import asyncio
 import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch

@@ -4,11 +4,15 @@ Settings for audio output devices, normalization, and microphone passthrough.
 """
 import sys
 import threading
+import logging
 import customtkinter as ctk
 from typing import Any, List, Dict
 
 from .base_tab import BaseTab
-from ..theme_constants import BUTTON_HEIGHT, FONT_SM, FONT_MD
+from ..theme_constants import BUTTON_HEIGHT, FONT_SM, FONT_MD, SPACING_BASE, SPACING_MD, SPACING_SM, SPACING_XS
+
+
+logger = logging.getLogger(__name__)
 
 
 class AudioOutputTab(BaseTab):
@@ -19,14 +23,14 @@ class AudioOutputTab(BaseTab):
         self.setup_layout()
 
         output_section, output_content = self.create_section_surface("Playback Device")
-        output_section.pack(fill="x", pady=(0, 15))
+        output_section.pack(fill="x", pady=(0, SPACING_MD))
 
         self._platform = self._detect_platform()
         self.output_device_info_label = self.create_helper_text(
             self._get_playback_device_info_text(),
             parent=output_content,
         )
-        self.output_device_info_label.pack(anchor="w", pady=(0, 8))
+        self.output_device_info_label.pack(anchor="w", pady=(0, SPACING_XS))
 
         self.device_var = ctk.StringVar()
         self.device_dropdown = ctk.CTkComboBox(
@@ -37,7 +41,7 @@ class AudioOutputTab(BaseTab):
             dropdown_font=ctk.CTkFont(size=FONT_SM),
             state="readonly",
         )
-        self.device_dropdown.pack(fill="x", pady=(0, 8))
+        self.device_dropdown.pack(fill="x", pady=(0, SPACING_XS))
         self.device_dropdown.configure(command=lambda _: self._update_device_info())
 
         self.vbcable_warning_label = self.create_helper_text(
@@ -45,7 +49,7 @@ class AudioOutputTab(BaseTab):
             parent=output_content,
             text_color=self.get_surface_status_text_color(),
         )
-        self.vbcable_warning_label.pack(anchor="w", pady=(0, 12))
+        self.vbcable_warning_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         self.refresh_devices_button = ctk.CTkButton(
             output_content,
@@ -57,7 +61,7 @@ class AudioOutputTab(BaseTab):
         self.refresh_devices_button.pack(anchor="w")
 
         device_info_section, device_info_content = self.create_section_surface("Device Information")
-        device_info_section.pack(fill="x", pady=(0, 15))
+        device_info_section.pack(fill="x", pady=(0, SPACING_MD))
 
         self.device_info_text = ctk.CTkTextbox(
             device_info_content,
@@ -70,13 +74,13 @@ class AudioOutputTab(BaseTab):
         self.device_info_text.pack(fill="x")
 
         normalization_section, normalization_content = self.create_section_surface("Audio Normalization")
-        normalization_section.pack(fill="x", pady=(0, 15))
+        normalization_section.pack(fill="x", pady=(0, SPACING_MD))
         self._create_normalization_section(normalization_content)
 
         # Linux-only: PulseAudio sink auto-routing
         if self._platform == "linux":
             sink_section, sink_content = self.create_section_surface("PulseAudio Sink Routing")
-            sink_section.pack(fill="x", pady=(0, 15))
+            sink_section.pack(fill="x", pady=(0, SPACING_MD))
             self._create_sink_routing_section(sink_content)
 
         passthrough_section, passthrough_content = self.create_section_surface("Microphone Passthrough")
@@ -93,13 +97,13 @@ class AudioOutputTab(BaseTab):
             "Normalization helps maintain consistent audio levels and prevents clipping.",
             parent=parent,
         )
-        norm_info.pack(anchor="w", pady=(0, 10))
+        norm_info.pack(anchor="w", pady=(0, SPACING_SM))
 
         ctk.CTkLabel(
             parent,
             text="Normalization Type:",
             font=ctk.CTkFont(size=FONT_MD),
-        ).pack(anchor="w", pady=(5, 5))
+        ).pack(anchor="w", pady=(SPACING_BASE, SPACING_BASE))
 
         self.norm_var = ctk.StringVar(value=self.settings.get("normalization_type", "Peak"))
         self.norm_dropdown = ctk.CTkComboBox(
@@ -110,13 +114,13 @@ class AudioOutputTab(BaseTab):
             state="readonly",
             width=200,
         )
-        self.norm_dropdown.pack(anchor="w", pady=(0, 8))
+        self.norm_dropdown.pack(anchor="w", pady=(0, SPACING_XS))
 
         self.norm_types_label = self.create_helper_text(
             "Peak: Prevents clipping | RMS: Consistent loudness | LUFS: Professional standard | None: No processing",
             parent=parent,
         )
-        self.norm_types_label.pack(anchor="w", pady=(0, 10))
+        self.norm_types_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         self.enable_norm_var = ctk.BooleanVar(value=self.settings.get("enable_normalization", True))
         self.enable_norm_check = ctk.CTkCheckBox(
@@ -135,7 +139,7 @@ class AudioOutputTab(BaseTab):
             "Cleanup on app exit is automatic.",
             parent=parent,
         )
-        sink_info.pack(anchor="w", pady=(0, 10))
+        sink_info.pack(anchor="w", pady=(0, SPACING_SM))
 
         # Hidden var to track the sink name for settings
         self.sink_name_var = ctk.StringVar(
@@ -144,7 +148,7 @@ class AudioOutputTab(BaseTab):
 
         # Button row
         button_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        button_frame.pack(anchor="w", pady=(0, 6))
+        button_frame.pack(anchor="w", pady=(0, SPACING_XS))
 
         self.create_sink_button = ctk.CTkButton(
             button_frame,
@@ -153,7 +157,7 @@ class AudioOutputTab(BaseTab):
             command=self._create_null_sink,
             height=BUTTON_HEIGHT,
         )
-        self.create_sink_button.pack(side="left", padx=(0, 8))
+        self.create_sink_button.pack(side="left", padx=(0, SPACING_XS))
 
         self.cleanup_sink_button = ctk.CTkButton(
             button_frame,
@@ -242,7 +246,7 @@ class AudioOutputTab(BaseTab):
         try:
             router.last_linux_sink_result = (ok, message)
         except Exception:
-            pass
+            logger.debug("Failed to record Linux sink result on router", exc_info=True)
 
     def _show_last_sink_result(self) -> None:
         """Render the latest sink setup/removal result recorded on the router.
@@ -279,7 +283,7 @@ class AudioOutputTab(BaseTab):
                     state="normal", text="🗑 Remove"
                 )
             except Exception:
-                pass
+                logger.debug("Remove-button state update failed", exc_info=True)
 
     def _create_passthrough_section(self, parent: ctk.CTkFrame):
         """Create the microphone passthrough section."""
@@ -287,7 +291,7 @@ class AudioOutputTab(BaseTab):
             self._get_passthrough_info_text(),
             parent=parent,
         )
-        passthrough_info.pack(anchor="w", pady=(0, 10))
+        passthrough_info.pack(anchor="w", pady=(0, SPACING_SM))
 
         self.mic_passthrough_enabled_var = ctk.BooleanVar(
             value=self.settings.get("mic_passthrough_enabled", False)
@@ -298,16 +302,16 @@ class AudioOutputTab(BaseTab):
             variable=self.mic_passthrough_enabled_var,
             font=ctk.CTkFont(size=FONT_MD),
         )
-        self.mic_passthrough_enabled_check.pack(anchor="w", pady=(0, 10))
+        self.mic_passthrough_enabled_check.pack(anchor="w", pady=(0, SPACING_SM))
 
         ctk.CTkLabel(
             parent,
             text="Passthrough Mic Device:",
             font=ctk.CTkFont(size=FONT_MD),
-        ).pack(anchor="w", pady=(0, 5))
+        ).pack(anchor="w", pady=(0, SPACING_BASE))
 
         passthrough_mic_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        passthrough_mic_frame.pack(fill="x", pady=(0, 10))
+        passthrough_mic_frame.pack(fill="x", pady=(0, SPACING_SM))
 
         self.passthrough_mic_var = ctk.StringVar()
         self.passthrough_mic_dropdown = ctk.CTkComboBox(
@@ -319,7 +323,7 @@ class AudioOutputTab(BaseTab):
             width=400,
             state="readonly",
         )
-        self.passthrough_mic_dropdown.pack(side="left", padx=(0, 5))
+        self.passthrough_mic_dropdown.pack(side="left", padx=(0, SPACING_BASE))
 
         ctk.CTkButton(
             passthrough_mic_frame,
@@ -334,10 +338,10 @@ class AudioOutputTab(BaseTab):
             parent,
             text="Passthrough Volume:",
             font=ctk.CTkFont(size=FONT_MD),
-        ).pack(anchor="w", pady=(0, 5))
+        ).pack(anchor="w", pady=(0, SPACING_BASE))
 
         passthrough_volume_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        passthrough_volume_frame.pack(fill="x", pady=(0, 4))
+        passthrough_volume_frame.pack(fill="x", pady=(0, SPACING_BASE))
 
         self.passthrough_volume_var = ctk.IntVar(
             value=self.settings.get("mic_passthrough_volume", 100)
@@ -351,7 +355,7 @@ class AudioOutputTab(BaseTab):
             command=self._on_passthrough_volume_change,
             width=400,
         )
-        self.passthrough_volume_slider.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.passthrough_volume_slider.pack(side="left", fill="x", expand=True, padx=(0, SPACING_BASE))
 
         self.passthrough_volume_value_label = ctk.CTkLabel(
             passthrough_volume_frame,
@@ -365,16 +369,16 @@ class AudioOutputTab(BaseTab):
             "Volume multiplier: 100% is normal, 200% doubles volume, 0% mutes.",
             parent=parent,
         )
-        self.passthrough_volume_info_label.pack(anchor="w", pady=(0, 10))
+        self.passthrough_volume_info_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         ctk.CTkLabel(
             parent,
             text="Passthrough Output Device:",
             font=ctk.CTkFont(size=FONT_MD),
-        ).pack(anchor="w", pady=(0, 5))
+        ).pack(anchor="w", pady=(0, SPACING_BASE))
 
         passthrough_output_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        passthrough_output_frame.pack(fill="x", pady=(0, 4))
+        passthrough_output_frame.pack(fill="x", pady=(0, SPACING_BASE))
 
         self.passthrough_output_var = ctk.StringVar()
         self.passthrough_output_dropdown = ctk.CTkComboBox(
@@ -386,7 +390,7 @@ class AudioOutputTab(BaseTab):
             width=400,
             state="readonly",
         )
-        self.passthrough_output_dropdown.pack(side="left", padx=(0, 5))
+        self.passthrough_output_dropdown.pack(side="left", padx=(0, SPACING_BASE))
 
         ctk.CTkButton(
             passthrough_output_frame,

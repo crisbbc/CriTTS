@@ -11,25 +11,11 @@ from .settings_tabs import (
     VoiceTab, AudioOutputTab, AppearanceTab, AbbreviationsTab,
     KeybindsTab, BehaviorTab, SoundboardTab, VRChatOSCTab, AdvancedTab, TTSProviderTab
 )
-from .utils.scroll_utils import prevent_scroll_propagation
 from .theme_constants import (
-    SPACING_XS, SPACING_SM, SPACING_MD, SPACING_LG, SPACING_XL, SPACING_2XL,
-    COLOR_SUCCESS, COLOR_SUCCESS_HOVER, COLOR_SUCCESS_LIGHT,
-    COLOR_DANGER, COLOR_DANGER_HOVER, COLOR_DANGER_LIGHT,
-    COLOR_PRIMARY, COLOR_PRIMARY_HOVER, COLOR_PRIMARY_LIGHT,
-    COLOR_ACCENT, COLOR_ACCENT_HOVER,
-    COLOR_INFO, COLOR_WARNING,
-    COLOR_NEUTRAL_DARKEST, COLOR_NEUTRAL_DARK, COLOR_NEUTRAL_MEDIUM, COLOR_NEUTRAL_LIGHT, COLOR_NEUTRAL_LIGHTER,
-    COLOR_BG_PRIMARY, COLOR_BG_SECONDARY, COLOR_BG_TERTIARY,
-    FONT_XS, FONT_SM, FONT_MD, FONT_LG, FONT_XL, FONT_2XL, FONT_WEIGHT_BOLD,
-    BUTTON_HEIGHT, BUTTON_HEIGHT_SM, BUTTON_HEIGHT_LG, BUTTON_MIN_WIDTH, BUTTON_WIDTH_DEFAULT,
-    FRAME_BUTTONS_HEIGHT, INPUT_HEIGHT, INPUT_HEIGHT_SM,
-    RADIUS_SM, RADIUS_MD, RADIUS_LG, RADIUS_XL,
-    ANIMATION_FAST, ANIMATION_NORMAL, ANIMATION_SLOW,
-    WINDOW_SETTINGS_WIDTH, WINDOW_SETTINGS_HEIGHT,
+    SPACING_SM, SPACING_MD, SPACING_LG, COLOR_SUCCESS, COLOR_SUCCESS_HOVER, COLOR_DANGER, COLOR_DANGER_HOVER, FONT_SM, FONT_MD, FONT_LG, FONT_XL, FONT_WEIGHT_BOLD,
+    BUTTON_HEIGHT, BUTTON_WIDTH_DEFAULT,
+    RADIUS_MD, RADIUS_LG, WINDOW_SETTINGS_WIDTH, WINDOW_SETTINGS_HEIGHT,
     WINDOW_SETTINGS_MIN_WIDTH, WINDOW_SETTINGS_MIN_HEIGHT,
-    SETTINGS_TAB_SELECTED_COLOR, SETTINGS_TAB_SELECTED_HOVER,
-    SETTINGS_TAB_UNSELECTED_HOVER, SETTINGS_TAB_TEXT_COLOR,
     get_settings_surface_theme,
 )
 
@@ -620,14 +606,14 @@ class SettingsWindow:
             confirm_dialog,
             text="Reset All Settings?",
             font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        ).pack(pady=(20, 10))
+        ).pack(pady=(SPACING_LG, SPACING_SM))
         
         ctk.CTkLabel(
             confirm_dialog,
             text="This will reset all settings to their default values. This action cannot be undone.",
             font=ctk.CTkFont(size=FONT_SM),
             wraplength=350
-        ).pack(pady=10)
+        ).pack(pady=SPACING_SM)
         
         def do_reset():
             try:
@@ -658,7 +644,7 @@ class SettingsWindow:
                 )
         
         buttons_frame = ctk.CTkFrame(confirm_dialog, fg_color="transparent")
-        buttons_frame.pack(pady=20)
+        buttons_frame.pack(pady=SPACING_LG)
         
         ctk.CTkButton(
             buttons_frame,
@@ -668,7 +654,7 @@ class SettingsWindow:
             width=100,
             fg_color=COLOR_DANGER,
             hover_color=COLOR_DANGER_HOVER
-        ).pack(side="left", padx=10)
+        ).pack(side="left", padx=SPACING_SM)
         
         ctk.CTkButton(
             buttons_frame,
@@ -676,4 +662,4 @@ class SettingsWindow:
             font=ctk.CTkFont(size=FONT_MD),
             command=confirm_dialog.destroy,
             width=100
-        ).pack(side="left", padx=10)
+        ).pack(side="left", padx=SPACING_SM)

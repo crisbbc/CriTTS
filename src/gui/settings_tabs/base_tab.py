@@ -2,6 +2,7 @@
 Base Tab Class
 Abstract base class for settings tabs.
 """
+import logging
 import customtkinter as ctk
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Optional, List, Dict, Tuple
@@ -12,6 +13,7 @@ from ..theme_constants import (
     RADIUS_MD, RADIUS_LG,
     get_color_for_state,
     get_settings_surface_theme,
+    SPACING_BASE,
 )
 
 SETTINGS_CARD_BOUNDARY_RULES: Tuple[str, ...] = (
@@ -102,6 +104,9 @@ SETTINGS_TAB_STYLE_AUDIT: Tuple[Dict[str, object], ...] = (
         ),
     },
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class BaseTab(ABC):
@@ -267,7 +272,7 @@ class BaseTab(ABC):
                 if label.winfo_exists():
                     label.configure(wraplength=available_width)
             except Exception:
-                pass
+                logger.debug("Label wraplength update failed", exc_info=True)
     
     @abstractmethod
     def get_settings(self) -> Dict[str, Any]:
@@ -320,9 +325,9 @@ class BaseTab(ABC):
                 anchor="w",
                 font=ctk.CTkFont(size=FONT_SM),
                 corner_radius=RADIUS_MD,
-                command=lambda l=label: self._scroll_to_section(l)
+                command=lambda section=label: self._scroll_to_section(section)
             )
-            btn.pack(fill="x", padx=SPACING_XS, pady=2)
+            btn.pack(fill="x", padx=SPACING_XS, pady=SPACING_BASE)
 
         return label
 

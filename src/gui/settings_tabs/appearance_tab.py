@@ -6,7 +6,7 @@ import customtkinter as ctk
 from typing import Any, List, Dict
 
 from .base_tab import BaseTab
-from ..theme_constants import FONT_MD
+from ..theme_constants import FONT_MD, SPACING_BASE, SPACING_MD, SPACING_SM, SPACING_XS
 
 
 class AppearanceTab(BaseTab):
@@ -17,7 +17,7 @@ class AppearanceTab(BaseTab):
         self.setup_layout()
 
         appearance_section, appearance_content = self.create_section_surface("Appearance Mode")
-        appearance_section.pack(fill="x", pady=(0, 15))
+        appearance_section.pack(fill="x", pady=(0, SPACING_MD))
 
         self.appearance_var = ctk.StringVar(value=self.settings.get("appearance_mode", "Dark"))
         self.appearance_dropdown = ctk.CTkComboBox(
@@ -28,7 +28,7 @@ class AppearanceTab(BaseTab):
             state="readonly",
             width=200,
         )
-        self.appearance_dropdown.pack(anchor="w", pady=(0, 8))
+        self.appearance_dropdown.pack(anchor="w", pady=(0, SPACING_XS))
 
         self.preview_label = self.create_helper_text(
             "Preview will apply on save",
@@ -43,7 +43,7 @@ class AppearanceTab(BaseTab):
             "Choose which buttons appear in the main window. Settings is always visible.",
             parent=visible_buttons_content,
         )
-        self.visible_buttons_hint.pack(anchor="w", pady=(0, 10))
+        self.visible_buttons_hint.pack(anchor="w", pady=(0, SPACING_SM))
 
         current_visible = self.settings.get(
             "visible_buttons",
@@ -68,7 +68,7 @@ class AppearanceTab(BaseTab):
                 variable=var,
                 font=ctk.CTkFont(size=FONT_MD),
             )
-            checkbox.pack(anchor="w", pady=2)
+            checkbox.pack(anchor="w", pady=SPACING_BASE)
 
     def get_settings(self) -> Dict[str, Any]:
         """Get current settings from the tab UI."""

@@ -23,6 +23,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
@@ -138,7 +139,7 @@ def _find_system_library(name: str) -> str | None:
 # pkg_map keys are package-manager names (apt, dnf, pacman, zypper, brew).
 # ---------------------------------------------------------------------------
 
-_SYSTEM_DEPS: list[tuple[str, "typing.Callable[[], bool]", str, dict[str, str]]] = []  # noqa: E501
+_SYSTEM_DEPS: list[tuple[str, Callable[[], bool], str, dict[str, str]]] = []  # noqa: E501
 
 
 def _register_system_deps() -> None:

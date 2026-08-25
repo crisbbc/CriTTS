@@ -1,14 +1,17 @@
-customtkinter
+# Version floors are the oldest releases verified to work with this code.
+# A lockfile is intentionally not committed: coqui-tts pulls in torch and
+# other large, platform-specific wheels that differ across OS/Python combos.
+customtkinter>=5.2.0
 edge-tts>=7.2.3
 piper-tts>=1.2.0
 coqui-tts[codec]>=0.27.5
-spacy[ja]
+spacy[ja]>=3.7.0
 langid>=1.1.6
-sounddevice
+sounddevice>=0.4.6
 soundfile>=0.12.0
 numpy>=1.21.0
 scipy>=1.9.0
 pyloudnorm>=0.1.0
 python-osc>=1.8.0
-SpeechRecognition
+SpeechRecognition>=3.10.0
 keyboard>=0.13.5

@@ -28,16 +28,16 @@ def run_benchmark():
 
     # Disable garbage collector for more stable timing
     gc.disable()
+    try:
+        # Warmup
+        for _ in range(100):
+            bench_with_list()
+            bench_without_list()
 
-    # Warmup
-    for _ in range(100):
-        bench_with_list()
-        bench_without_list()
-
-    time_with_list = timeit.timeit(bench_with_list, number=num_iterations)
-    time_without_list = timeit.timeit(bench_without_list, number=num_iterations)
-
-    gc.enable()
+        time_with_list = timeit.timeit(bench_with_list, number=num_iterations)
+        time_without_list = timeit.timeit(bench_without_list, number=num_iterations)
+    finally:
+        gc.enable()
 
     print(f"Micro-benchmark results for iterating {num_children} children ({num_iterations} iterations):")
     print(f"With list():    {time_with_list:.5f} seconds")

@@ -2,23 +2,23 @@
 Audio Router Module
 Handles audio device enumeration and routing audio to specific output devices.
 """
-import os
 import threading
-import time
 import queue
 import re
 import sys
+import inspect
 from dataclasses import dataclass
 import sounddevice as sd
+from sounddevice import PortAudioError
 import numpy as np
 import io
 import asyncio
 import logging
-import shutil
-import subprocess
-from typing import List, Dict, Optional, Tuple
+from typing import Any, List, Dict, Optional, Tuple, cast
 from scipy import signal
-from math import gcd
+from math import ceil, gcd, sqrt
+
+from .linux_sink import LinuxSinkManager
 
 logger = logging.getLogger(__name__)
 try:
@@ -58,6 +58,7 @@ class AudioRouter:
         self._stop_requested = threading.Event()
         self._amplitude_callback = None
         self._current_amplitude = 0.0
+        self._cached_linux_audio_system: Optional[str] = None
 
         # Microphone passthrough state
         self._passthrough_input_stream: Optional[sd.InputStream] = None
@@ -69,15 +70,18 @@ class AudioRouter:
         # while already holding this lock, so it must be re-entrant.
         self._passthrough_lock = threading.RLock()  # Protects passthrough state transitions
 
-        # Lazy-cached Linux audio system detection
-        self._cached_linux_audio_system: Optional[str] = None
+        # Linux PulseAudio sink routing (extracted into LinuxSinkManager;
+        # the attributes below delegate to it for backward compatibility)
+        self._linux_sink = LinuxSinkManager()
 
-        # Linux PulseAudio sink routing (set externally before playback)
-        self._linux_sink_name: str = ""
+    @property
+    def last_linux_sink_result(self) -> Optional[Tuple[bool, str]]:
+        """Last startup auto-setup result, surfaced in the Audio Output tab."""
+        return self._linux_sink.last_result
 
-        # Last startup auto-setup result, surfaced later in the Audio Output
-        # settings tab.  ``(ok, message)`` or ``None`` when it hasn't run yet.
-        self.last_linux_sink_result: Optional[Tuple[bool, str]] = None
+    @last_linux_sink_result.setter
+    def last_linux_sink_result(self, value: Optional[Tuple[bool, str]]) -> None:
+        self._linux_sink.last_result = value
 
     @staticmethod
     def _is_truncation_prefix(shorter: str, longer: str) -> bool:
@@ -400,7 +404,11 @@ class AudioRouter:
         down = orig_sr // g
 
         # Use polyphase resampling with anti-aliasing filter
-        resampled = signal.resample_poly(data, up, down, window=('kaiser', kaiser_beta))
+        # (cast: scipy's stubs union a tuple return that never occurs here)
+        resampled = cast(
+            np.ndarray,
+            signal.resample_poly(data, up, down, window=('kaiser', kaiser_beta)),
+        )
 
         return resampled
 
@@ -440,8 +448,10 @@ class AudioRouter:
 
         def _process(ch: np.ndarray) -> np.ndarray:
             if sos_hp is not None:
-                ch = signal.sosfilt(sos_hp, ch)
-            return signal.sosfilt(sos_peak, ch)
+                # cast: scipy stubs union an initial-conditions tuple return
+                # that does not occur without the zi argument
+                ch = cast(np.ndarray, signal.sosfilt(sos_hp, ch))
+            return cast(np.ndarray, signal.sosfilt(sos_peak, ch))
 
         if data.ndim == 1:
             result = _process(data)
@@ -475,7 +485,7 @@ class AudioRouter:
 
         # Add slight phase shift for width enhancement
         if width > 0 and len(data) > 10:
-            delay_samples = max(1, int(0.001 * sample_rate))  # 1ms delay at the actual rate
+            delay_samples = max(1, sample_rate // 1000)  # 1ms delay at the actual rate
             if delay_samples < len(data):
                 right[delay_samples:] += data[:-delay_samples] * width * 0.3
 
@@ -540,7 +550,7 @@ class AudioRouter:
                     process.kill()
                 except ProcessLookupError:
                     pass
-                raise RuntimeError("ffmpeg decode timeout - MP3 may be corrupted or too large")
+                raise RuntimeError("ffmpeg decode timeout - MP3 may be corrupted or too large") from None
 
             if process.returncode != 0:
                 error_msg = stderr.decode('utf-8', errors='replace') if stderr else 'Unknown ffmpeg error'
@@ -576,13 +586,13 @@ class AudioRouter:
 
             return audio_array, actual_sr
 
-        except FileNotFoundError:
-            raise RuntimeError("ffmpeg not found - please install ffmpeg for MP3 decoding support")
+        except FileNotFoundError as exc:
+            raise RuntimeError("ffmpeg not found - please install ffmpeg for MP3 decoding support") from exc
         except Exception as e:
             if isinstance(e, RuntimeError):
                 raise
             logger.error("MP3 decode error: %s", e)
-            raise RuntimeError(f"Failed to decode MP3: {str(e)}")
+            raise RuntimeError(f"Failed to decode MP3: {str(e)}") from e
 
 
     async def _decode_audio_data(self, audio_data: bytes, target_sample_rate: Optional[int] = 48000) -> Tuple[np.ndarray, int]:
@@ -620,7 +630,7 @@ class AudioRouter:
             except Exception as sf_error:
                 logger.error("soundfile also failed: %s", sf_error)
                 # Re-raise the original ffmpeg error with context
-                raise RuntimeError(f"Audio decode failed - ffmpeg: {e}; soundfile: {sf_error}")
+                raise RuntimeError(f"Audio decode failed - ffmpeg: {e}; soundfile: {sf_error}") from e
 
     async def prepare_audio_for_playback(
         self,
@@ -684,7 +694,7 @@ class AudioRouter:
                     try:
                         self._amplitude_callback(amp)
                     except Exception:
-                        pass
+                        logger.debug("Amplitude callback failed", exc_info=True)
 
                 data_index += chunksize
             else:
@@ -694,7 +704,7 @@ class AudioRouter:
                     try:
                         self._amplitude_callback(0.0)
                     except Exception:
-                        pass
+                        logger.debug("Amplitude callback failed", exc_info=True)
                 raise sd.CallbackStop()
 
         channels = data.shape[1] if len(data.shape) > 1 else 1
@@ -768,7 +778,7 @@ class AudioRouter:
                 skip_sink_routing=skip_sink_routing,
             )
 
-        except sd.PortAudioError:
+        except PortAudioError:
             return False
         except Exception as e:
             logger.error("play_audio_to_device error: %s", e)
@@ -779,7 +789,7 @@ class AudioRouter:
                     try:
                         self._current_stream.close()
                     except Exception:
-                        pass
+                        logger.debug("Stream close failed during cleanup", exc_info=True)
             finally:
                 self._current_stream = None
 
@@ -791,7 +801,7 @@ class AudioRouter:
             try:
                 self._amplitude_callback(0.0)
             except Exception:
-                pass
+                logger.debug("Amplitude callback failed", exc_info=True)
 
     def set_amplitude_callback(self, callback):
         """
@@ -816,12 +826,12 @@ class AudioRouter:
             return 0.0
 
         # Calculate RMS
-        rms = np.sqrt(np.mean(chunk ** 2))
+        rms = sqrt(np.mean(chunk ** 2))
 
         # Normalize to 0.0-1.0 range (typical speech RMS is 0.1-0.3)
         normalized = min(1.0, rms * 3.0)
 
-        return float(normalized)
+        return normalized
 
     def get_current_amplitude(self) -> float:
         """Get the current amplitude value."""
@@ -847,6 +857,27 @@ class AudioRouter:
         except Exception:
             return 0.0
 
+    @staticmethod
+    def _can_retry_with_native_rate(native_sr: Optional[int], chosen_sr: Optional[int]) -> bool:
+        """True when a native-rate retry attempt differs from the failed rate."""
+        return native_sr is not None and native_sr != chosen_sr
+
+    @staticmethod
+    def _can_resample_between_native_rates(input_sr: Optional[int], output_sr: Optional[int]) -> bool:
+        """True when input and output only support different native rates."""
+        return input_sr is not None and output_sr is not None and input_sr != output_sr
+
+
+    @staticmethod
+    def _start_stream(stream) -> None:
+        """Start a sounddevice stream if construction succeeded.
+
+        ``sd.*Stream`` constructors are typed as possibly returning None;
+        starting a stream that failed to open would raise AttributeError.
+        """
+        if stream is not None:
+            stream.start()
+
     def stop_playback(self):
         """Stop current audio playback."""
         self._stop_requested.set()
@@ -856,194 +887,34 @@ class AudioRouter:
             try:
                 stream.stop()
             except Exception:
-                pass
+                logger.debug("Stream stop failed during cleanup", exc_info=True)
 
     def set_linux_sink_name(self, name: str) -> None:
         """Set the PulseAudio sink name to auto-route TTS audio to (Linux only)."""
-        self._linux_sink_name = (name or "").strip()
+        self._linux_sink.set_sink_name(name)
 
     @staticmethod
     def cleanup_linux_sink_modules() -> None:
         """Unload any PulseAudio/PipeWire modules created by CriTTS (idempotent).
 
-        Scans ``pactl list short modules`` for entries containing our marker
-        strings and unloads them by module ID.  Safe to call even if no
-        modules exist — does nothing and never raises.
+        See :meth:`LinuxSinkManager.cleanup_modules` for details.
         """
-        if not sys.platform.startswith("linux"):
-            return
-        try:
-            result = subprocess.run(
-                ["pactl", "list", "short", "modules"],
-                capture_output=True, text=True, timeout=5,
-            )
-        except Exception:
-            return
-
-        for line in result.stdout.splitlines():
-            # Look for modules we created: CriTTS_Null_Sink / CriTTS_Virtual_Mic
-            if "CriTTS_Null_Sink" not in line and "CriTTS_Virtual_Mic" not in line:
-                continue
-            module_id = line.split("\t", 1)[0].strip()
-            if not module_id.isdigit():
-                continue
-            try:
-                subprocess.run(
-                    ["pactl", "unload-module", module_id],
-                    capture_output=True, timeout=3,
-                )
-                logger.debug("Unloaded PulseAudio module %s", module_id)
-            except Exception:
-                pass
+        LinuxSinkManager.cleanup_modules()
 
     @staticmethod
     def ensure_linux_sink_modules(sink_name: str = "crittssink") -> tuple:
         """Idempotently create the CriTTS null sink + virtual mic (Linux only).
 
-        ``pactl load-module`` entries are ephemeral — they vanish when the
-        audio server restarts and are removed on app exit — so startup re-runs
-        this to restore routing for users who have already opted in.  Safe to
-        call when the modules already exist (no-op).  Returns ``(ok, message)``
-        where ``ok`` is False only for fatal failures; ``message`` is
-        human-readable status for logging or the settings UI.
+        See :meth:`LinuxSinkManager.ensure_modules` for details.
         """
-        if not sys.platform.startswith("linux"):
-            return True, ""
-
-        if not shutil.which("pactl"):
-            return False, "⚠ pactl not found. Is PipeWire installed?"
-
-        # 1. Check / create the null sink (fixed description so cleanup finds it)
-        sink_description = "CriTTS_Null_Sink"
-        try:
-            check = subprocess.run(
-                ["pactl", "list", "short", "sinks"],
-                capture_output=True, text=True, timeout=5,
-            )
-        except subprocess.TimeoutExpired:
-            return False, "⚠ pactl timed out. Check your audio system."
-        except FileNotFoundError:
-            return False, "⚠ pactl not found. Is PipeWire installed?"
-        except Exception as e:
-            return False, f"❌ Unexpected error: {e}"
-
-        sink_exists = any(
-            sink_name in (part.strip().lower() for part in line.split("\t"))
-            for line in check.stdout.splitlines()
-        )
-        if not sink_exists:
-            try:
-                created = subprocess.run(
-                    ["pactl", "load-module", "module-null-sink",
-                     f"sink_name={sink_name}",
-                     f"sink_properties=device.description={sink_description}"],
-                    capture_output=True, text=True, timeout=10,
-                )
-            except subprocess.TimeoutExpired:
-                return False, "⚠ pactl timed out. Check your audio system."
-            except Exception as e:
-                return False, f"❌ Unexpected error: {e}"
-            if created.returncode != 0:
-                err = created.stderr.strip() or "Unknown error"
-                return False, f"❌ Failed to create sink: {err}"
-
-        # 2. Check / create the virtual mic from the sink monitor
-        virtual_mic_description = "CriTTS_Virtual_Mic"
-        virtual_mic_name = f"{sink_name}_mic"
-        try:
-            sources_check = subprocess.run(
-                ["pactl", "list", "short", "sources"],
-                capture_output=True, text=True, timeout=5,
-            )
-        except subprocess.TimeoutExpired:
-            return False, "⚠ pactl timed out. Check your audio system."
-        except Exception as e:
-            return False, f"❌ Unexpected error: {e}"
-
-        mic_exists = any(
-            virtual_mic_name in line.split("\t")
-            or virtual_mic_description in line.split("\t")
-            for line in sources_check.stdout.splitlines()
-        )
-        if not mic_exists:
-            try:
-                mic_created = subprocess.run(
-                    ["pactl", "load-module", "module-remap-source",
-                     f"source_name={virtual_mic_name}",
-                     f"source_properties=device.description={virtual_mic_description}",
-                     f"master={sink_name}.monitor"],
-                    capture_output=True, text=True, timeout=10,
-                )
-            except subprocess.TimeoutExpired:
-                return False, "⚠ pactl timed out. Check your audio system."
-            except Exception as e:
-                return False, f"❌ Unexpected error: {e}"
-            if mic_created.returncode != 0:
-                err = mic_created.stderr.strip() or "Unknown error"
-                return True, (
-                    "✅ Null sink ready.\n"
-                    f"⚠ Virtual mic failed ({err}).\n"
-                    f"   Check: pactl list sources short | grep {sink_name}"
-                )
-
-        return True, f"✅ Ready! Set Discord input to:\n   {virtual_mic_description}"
+        return LinuxSinkManager.ensure_modules(sink_name)
 
     def _route_to_linux_sink(self) -> None:
-        """Spawn a daemon thread that polls for the just-created sink input
-        and moves it to the configured PulseAudio/PipeWire sink.
+        """Spawn a daemon thread that moves the new sink input to our sink.
 
-        Uses ``pactl list sink-inputs`` (one call per poll) and matches our
-        stream by either process ID (PulseAudio-native clients) or application
-        name (ALSA clients, which lack a PID field on PipeWire).
-        Polls every 80 ms with a 3 s deadline.
+        See :meth:`LinuxSinkManager.route_to_sink` for details.
         """
-        if not self.is_linux or not self._linux_sink_name:
-            return
-        sink_name = self._linux_sink_name
-
-        # Match tokens: PID for PulseAudio-native, app name for ALSA.
-        pid_token = f'application.process.id = "{os.getpid()}"'
-        try:
-            py_exe = os.path.basename(os.path.realpath(sys.executable))
-        except OSError:
-            py_exe = os.path.basename(sys.executable)
-        alsa_token = f'PipeWire ALSA [{py_exe}]'
-
-        def _route():
-            deadline = time.monotonic() + 3.0
-            while time.monotonic() < deadline:
-                time.sleep(0.08)
-                try:
-                    result = subprocess.run(
-                        ["pactl", "list", "sink-inputs"],
-                        capture_output=True, text=True, timeout=3,
-                    )
-                except Exception:
-                    continue
-
-                blocks = result.stdout.split("Sink Input #")
-                for block in blocks[1:]:
-                    # Skip blocks not belonging to our process
-                    if pid_token not in block and alsa_token not in block:
-                        continue
-                    first_line = block.split("\n", 1)[0]
-                    sink_input_id = first_line.strip().split()[0]
-                    if not sink_input_id.isdigit():
-                        continue
-                    try:
-                        subprocess.run(
-                            ["pactl", "move-sink-input", sink_input_id, sink_name],
-                            capture_output=True, timeout=3,
-                        )
-                        logger.debug(
-                            "Routed sink-input %s to sink '%s'",
-                            sink_input_id, sink_name,
-                        )
-                    except Exception:
-                        pass
-                    return  # routed successfully — stop polling
-
-        threading.Thread(target=_route, daemon=True).start()
+        self._linux_sink.route_to_sink()
 
     def is_playing(self) -> bool:
         """Check if audio is currently playing."""
@@ -1066,51 +937,10 @@ class AudioRouter:
         return sys.platform == "darwin"
 
     def detect_linux_audio_system(self) -> str:
-        """
-        Detect which audio system is running on Linux.
-
-        The result is cached after the first call to avoid repeated
-        subprocess invocations during GUI rendering.
-
-        Returns:
-            One of 'pipewire', 'pulseaudio', or 'unknown'.
-        """
-        if self._cached_linux_audio_system is not None:
-            return self._cached_linux_audio_system
-
-        if not sys.platform.startswith("linux"):
-            self._cached_linux_audio_system = "unknown"
-            return "unknown"
-
-        detected = "unknown"
-        try:
-            pactl = shutil.which("pactl")
-            if pactl:
-                result = subprocess.run(
-                    [pactl, "info"], capture_output=True, text=True, timeout=3
-                )
-                server = result.stdout
-                if "PipeWire" in server:
-                    detected = "pipewire"
-                elif "PulseAudio" in server or "pulseaudio" in server.lower():
-                    detected = "pulseaudio"
-        except Exception:
-            pass
-
-        if detected == "unknown":
-            # Check for PipeWire via pw-cli as fallback
-            try:
-                if shutil.which("pw-cli"):
-                    result = subprocess.run(
-                        ["pw-cli", "info", "0"], capture_output=True, text=True, timeout=3
-                    )
-                    if result.returncode == 0:
-                        detected = "pipewire"
-            except Exception:
-                pass
-
-        self._cached_linux_audio_system = detected
-        return detected
+        """Delegate to LinuxSinkManager to avoid duplicate detection / caches."""
+        result = self._linux_sink.detect_audio_system()
+        self._cached_linux_audio_system = result
+        return result
 
     def is_vbcable_installed(self) -> bool:
         """
@@ -1193,7 +1023,7 @@ class AudioRouter:
                 skip_sink_routing=skip_sink_routing,
             )
 
-        except sd.PortAudioError:
+        except PortAudioError:
             return False
         except Exception as e:
             logger.error("play_audio_with_amplitude error: %s", e)
@@ -1204,7 +1034,7 @@ class AudioRouter:
                     try:
                         self._current_stream.close()
                     except Exception:
-                        pass
+                        logger.debug("Stream close failed during cleanup", exc_info=True)
             finally:
                 self._current_stream = None
                 self._current_amplitude = 0.0
@@ -1312,7 +1142,7 @@ class AudioRouter:
                         try:
                             process.stdin.close()
                         except Exception:
-                            pass
+                            logger.debug("Decoder stdin close failed", exc_info=True)
 
             async def read_stderr():
                 """Parse ffmpeg stderr to detect sample rate when needed."""
@@ -1333,7 +1163,7 @@ class AudioRouter:
                             if len(buffer) > 4096:
                                 buffer = buffer[-2048:]
                 except Exception:
-                    pass
+                    logger.debug("MP3 decode chunk processing failed", exc_info=True)
 
             def enqueue_terminal_marker() -> None:
                 """Signal playback completion without blocking shutdown."""
@@ -1447,7 +1277,7 @@ class AudioRouter:
                                 try:
                                     amplitude_callback(0.0)
                                 except Exception:
-                                    pass
+                                    logger.debug("Amplitude reset callback failed", exc_info=True)
                             raise sd.CallbackStop()
                     except queue.Empty:
                         outdata[:] = 0
@@ -1464,7 +1294,7 @@ class AudioRouter:
                         try:
                             amplitude_callback(amp)
                         except Exception:
-                            pass
+                            logger.debug("Amplitude callback failed", exc_info=True)
                 else:
                     outdata[:len(chunk)] = chunk
                     outdata[len(chunk):] = 0
@@ -1474,7 +1304,7 @@ class AudioRouter:
                         try:
                             amplitude_callback(amp)
                         except Exception:
-                            pass
+                            logger.debug("Amplitude callback failed", exc_info=True)
 
             feed_task = asyncio.create_task(feed_stdin())
             stderr_task = asyncio.create_task(read_stderr())
@@ -1525,7 +1355,7 @@ class AudioRouter:
 
             return not self._stop_requested.is_set()
 
-        except sd.PortAudioError:
+        except PortAudioError:
             return False
         except Exception:
             return False
@@ -1542,25 +1372,27 @@ class AudioRouter:
                 try:
                     if process.stdin:
                         process.stdin.close()
-                        wait_closed = getattr(process.stdin, "wait_closed", None)
+                        wait_closed: Any = getattr(process.stdin, "wait_closed", None)
                         if callable(wait_closed):
-                            await wait_closed()
+                            close_result = wait_closed()
+                            if inspect.isawaitable(close_result):
+                                await close_result
                 except Exception:
-                    pass
+                    logger.debug("Closing decoder stdin/wait handle failed", exc_info=True)
                 try:
                     if process.returncode is None:
                         process.kill()
                 except Exception:
-                    pass
+                    logger.debug("Killing decoder process failed", exc_info=True)
                 try:
                     await process.wait()
                 except Exception:
-                    pass
+                    logger.debug("Waiting for decoder process exit failed", exc_info=True)
             if self._current_stream is not None:
                 try:
                     self._current_stream.close()
                 except Exception:
-                    pass
+                    logger.debug("Stream close failed during cleanup", exc_info=True)
                 self._current_stream = None
 
     def start_mic_passthrough(
@@ -1641,11 +1473,11 @@ class AudioRouter:
                             blocksize=self._PASSTHROUGH_BLOCKSIZE,
                             callback=duplex_callback
                         )
-                        self._passthrough_duplex_stream.start()
+                        self._start_stream(self._passthrough_duplex_stream)
 
-                    except sd.PortAudioError as e:
+                    except PortAudioError:
                         # Attempt 2: Use input device's native sample rate
-                        if input_native_sr is not None and input_native_sr != chosen_sr:
+                        if self._can_retry_with_native_rate(input_native_sr, chosen_sr):
                             logger.info("Retrying passthrough with input device native sample rate: %d", input_native_sr)
                             self._stop_mic_passthrough_unlocked()
                             chosen_sr = input_native_sr
@@ -1659,11 +1491,11 @@ class AudioRouter:
                                     blocksize=self._PASSTHROUGH_BLOCKSIZE,
                                     callback=duplex_callback
                                 )
-                                self._passthrough_duplex_stream.start()
+                                self._start_stream(self._passthrough_duplex_stream)
 
-                            except sd.PortAudioError as e2:
+                            except PortAudioError as e2:
                                 # Attempt 3: Use output device's native sample rate
-                                if output_native_sr is not None and output_native_sr != chosen_sr:
+                                if self._can_retry_with_native_rate(output_native_sr, chosen_sr):
                                     logger.info("Retrying passthrough with output device native sample rate: %d", output_native_sr)
                                     self._stop_mic_passthrough_unlocked()
                                     chosen_sr = output_native_sr
@@ -1676,7 +1508,7 @@ class AudioRouter:
                                         blocksize=self._PASSTHROUGH_BLOCKSIZE,
                                         callback=duplex_callback
                                     )
-                                    self._passthrough_duplex_stream.start()
+                                    self._start_stream(self._passthrough_duplex_stream)
                                 else:
                                     raise e2
                         else:
@@ -1736,14 +1568,14 @@ class AudioRouter:
                             self._passthrough_input_stream.stop()
                             self._passthrough_input_stream.close()
                         except Exception:
-                            pass
+                            logger.debug("Passthrough input stream cleanup failed", exc_info=True)
                         self._passthrough_input_stream = None
                     if self._passthrough_output_stream is not None:
                         try:
                             self._passthrough_output_stream.stop()
                             self._passthrough_output_stream.close()
                         except Exception:
-                            pass
+                            logger.debug("Passthrough output stream cleanup failed", exc_info=True)
                         self._passthrough_output_stream = None
 
                 # Try to open streams with negotiated sample rate
@@ -1771,19 +1603,20 @@ class AudioRouter:
                     )
 
                     # Start input stream first
-                    self._passthrough_input_stream.start()
+                    self._start_stream(self._passthrough_input_stream)
 
                     # Pre-fill queue with 2 silence chunks before starting output
                     self._passthrough_queue.put(silence_chunk)
                     self._passthrough_queue.put(silence_chunk)
 
                     # Now start output stream
-                    self._passthrough_output_stream.start()
+                    self._start_stream(self._passthrough_output_stream)
                     stream_opened = True
 
-                except sd.PortAudioError as e:
+                except PortAudioError:
                     # Attempt 2: Use input device's native sample rate
-                    if input_native_sr is not None and input_native_sr != chosen_sr:
+                    logger.debug("Passthrough open failed at %d Hz; considering input-native retry", chosen_sr)
+                    if self._can_retry_with_native_rate(input_native_sr, chosen_sr):
                         logger.info("Retrying passthrough with input device native sample rate: %d", input_native_sr)
                         cleanup_partial_streams()
                         chosen_sr = input_native_sr
@@ -1807,18 +1640,19 @@ class AudioRouter:
                                 callback=output_callback
                             )
 
-                            self._passthrough_input_stream.start()
+                            self._start_stream(self._passthrough_input_stream)
 
                             # Pre-fill queue with 2 silence chunks
                             self._passthrough_queue.put(silence_chunk)
                             self._passthrough_queue.put(silence_chunk)
 
-                            self._passthrough_output_stream.start()
+                            self._start_stream(self._passthrough_output_stream)
                             stream_opened = True
 
-                        except sd.PortAudioError as e2:
+                        except PortAudioError as e2:
                             # Attempt 3: Use output device's native sample rate
-                            if output_native_sr is not None and output_native_sr != chosen_sr:
+                            logger.debug("Passthrough retry failed at %d Hz; considering output-native retry", chosen_sr)
+                            if self._can_retry_with_native_rate(output_native_sr, chosen_sr):
                                 logger.info("Retrying passthrough with output device native sample rate: %d", output_native_sr)
                                 cleanup_partial_streams()
                                 chosen_sr = output_native_sr
@@ -1842,25 +1676,35 @@ class AudioRouter:
                                         callback=output_callback
                                     )
 
-                                    self._passthrough_input_stream.start()
+                                    self._start_stream(self._passthrough_input_stream)
 
                                     # Pre-fill queue with 2 silence chunks
                                     self._passthrough_queue.put(silence_chunk)
                                     self._passthrough_queue.put(silence_chunk)
 
-                                    self._passthrough_output_stream.start()
+                                    self._start_stream(self._passthrough_output_stream)
                                     stream_opened = True
 
-                                except sd.PortAudioError as e3:
+                                except PortAudioError as e3:
                                     # Attempt 4: Use each device's native rate with resampling
                                     # This handles the case where input and output only support different rates
-                                    if (input_native_sr is not None and output_native_sr is not None and
-                                        input_native_sr != output_native_sr):
+                                    logger.debug("Passthrough retry failed at %d Hz; considering dual-native resampling", chosen_sr)
+                                    if self._can_resample_between_native_rates(input_native_sr, output_native_sr):
                                         logger.info("Retrying passthrough with native rates (input=%d, output=%d) and resampling",
                                                    input_native_sr, output_native_sr)
                                         cleanup_partial_streams()
 
-                                        # Store sample rates for resampling in callbacks
+                                        # Store sample rates for resampling in callbacks.
+                                        # The guard above proved both are non-None;
+                                        # raise so the types reflect that.
+                                        if input_native_sr is None:
+                                            raise RuntimeError(
+                                                "Input native rate unavailable for resampling"
+                                            ) from e3
+                                        if output_native_sr is None:
+                                            raise RuntimeError(
+                                                "Output native rate unavailable for resampling"
+                                            ) from e3
                                         input_sr_for_resample = input_native_sr
                                         output_sr_for_resample = output_native_sr
 
@@ -1906,8 +1750,9 @@ class AudioRouter:
                                                 outdata[:] = 0
 
                                         # Calculate appropriate blocksize for output based on resampling ratio
+                                        # ponytail: ceil prevents truncation underrun (557 not 556 for 512*48000/44100)
                                         ratio = output_sr_for_resample / input_sr_for_resample
-                                        output_blocksize = int(self._PASSTHROUGH_BLOCKSIZE * ratio)
+                                        output_blocksize = ceil(self._PASSTHROUGH_BLOCKSIZE * ratio)
 
                                         self._passthrough_input_stream = sd.InputStream(
                                             device=input_device_index,
@@ -1927,14 +1772,14 @@ class AudioRouter:
                                             callback=resampling_output_callback
                                         )
 
-                                        self._passthrough_input_stream.start()
+                                        self._start_stream(self._passthrough_input_stream)
 
                                         # Pre-fill queue with silence chunks (at output rate)
                                         output_silence_chunk = np.zeros((output_blocksize, 1), dtype='float32')
                                         self._passthrough_queue.put(output_silence_chunk)
                                         self._passthrough_queue.put(output_silence_chunk)
 
-                                        self._passthrough_output_stream.start()
+                                        self._start_stream(self._passthrough_output_stream)
 
                                         # Update chosen_sr for logging
                                         chosen_sr = f"{input_native_sr}->{output_native_sr}"
@@ -1955,7 +1800,7 @@ class AudioRouter:
                 else:
                     return (False, "Failed to open audio streams")
 
-            except sd.PortAudioError as e:
+            except PortAudioError as e:
                 logger.error("PortAudio error starting mic passthrough: %s", e)
                 self.stop_mic_passthrough()
                 return (False, str(e))

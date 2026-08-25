@@ -6,7 +6,7 @@ import customtkinter as ctk
 from typing import Any, List, Dict
 
 from .base_tab import BaseTab
-from ..theme_constants import BUTTON_HEIGHT, FONT_SM, FONT_MD
+from ..theme_constants import BUTTON_HEIGHT, FONT_SM, FONT_MD, SPACING_MD, SPACING_SM
 
 
 class AbbreviationsTab(BaseTab):
@@ -17,19 +17,19 @@ class AbbreviationsTab(BaseTab):
         self.setup_layout()
 
         abbreviations_section, abbreviations_content = self.create_section_surface("Abbreviations")
-        abbreviations_section.pack(fill="both", expand=True, pady=(0, 15))
+        abbreviations_section.pack(fill="both", expand=True, pady=(0, SPACING_MD))
 
         self.info_label = self.create_helper_text(
             "Enter one abbreviation per line in format: key=expansion",
             parent=abbreviations_content,
         )
-        self.info_label.pack(anchor="w", pady=(0, 10))
+        self.info_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         self.example_label = self.create_helper_text(
             "Example: brb=be right back  |  omg=oh my god",
             parent=abbreviations_content,
         )
-        self.example_label.pack(anchor="w", pady=(0, 10))
+        self.example_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         self.abbrev_text = ctk.CTkTextbox(
             abbreviations_content,
@@ -38,7 +38,7 @@ class AbbreviationsTab(BaseTab):
             height=220,
             **self.get_input_surface_style(),
         )
-        self.abbrev_text.pack(fill="both", expand=True, pady=(0, 10))
+        self.abbrev_text.pack(fill="both", expand=True, pady=(0, SPACING_SM))
 
         abbrev_dict = self.settings.get("abbreviations", {})
         formatted_lines = [f"{key}={value}" for key, value in sorted(abbrev_dict.items())]
@@ -51,7 +51,7 @@ class AbbreviationsTab(BaseTab):
             width=140,
             height=BUTTON_HEIGHT,
         )
-        self.abbrev_validate_btn.pack(anchor="w", pady=(0, 10))
+        self.abbrev_validate_btn.pack(anchor="w", pady=(0, SPACING_SM))
 
         self.abbrev_status_label = ctk.CTkLabel(
             abbreviations_content,

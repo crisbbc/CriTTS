@@ -19,7 +19,7 @@ import io
 import sys
 import wave
 import types
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest

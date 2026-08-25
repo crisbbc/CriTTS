@@ -16,6 +16,9 @@ from ..theme_constants import (
     COLOR_DANGER, COLOR_DANGER_HOVER,
     COLOR_SUCCESS, COLOR_SUCCESS_HOVER,
     SPACING_MD,
+    SPACING_BASE,
+    SPACING_LG,
+    SPACING_SM,
 )
 from ..utils.scroll_utils import prevent_scroll_propagation
 
@@ -175,7 +178,7 @@ class VoiceTab(BaseTab):
             width=150,
             state="readonly"
         )
-        self.language_filter.pack(side="left", padx=5)
+        self.language_filter.pack(side="left", padx=SPACING_BASE)
         self.language_filter.configure(command=lambda _: self._apply_voice_filters())
         
         # Gender filter
@@ -189,7 +192,7 @@ class VoiceTab(BaseTab):
             width=150,
             state="readonly"
         )
-        self.gender_filter.pack(side="left", padx=5)
+        self.gender_filter.pack(side="left", padx=SPACING_BASE)
         self.gender_filter.configure(command=lambda _: self._apply_voice_filters())
         
         # Region filter
@@ -203,7 +206,7 @@ class VoiceTab(BaseTab):
             width=150,
             state="readonly"
         )
-        self.region_filter.pack(side="left", padx=5)
+        self.region_filter.pack(side="left", padx=SPACING_BASE)
         self.region_filter.configure(command=lambda _: self._apply_voice_filters())
         
         # Clear filters button
@@ -214,19 +217,19 @@ class VoiceTab(BaseTab):
             width=150,
             command=self._clear_filters,
         )
-        self.clear_filters_button.pack(side="left", padx=10)
+        self.clear_filters_button.pack(side="left", padx=SPACING_SM)
     
     def _create_search_section(self, parent):
         """Create the search section."""
         self.search_label = self.create_setting_label("Search Voices:", parent)
-        self.search_label.pack(anchor="w", pady=(10, 5))
+        self.search_label.pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
         
         self.search_entry = ctk.CTkEntry(
             parent,
             font=ctk.CTkFont(size=FONT_MD),
             placeholder_text="Type to filter voices..."
         )
-        self.search_entry.pack(fill="x", pady=5)
+        self.search_entry.pack(fill="x", pady=SPACING_BASE)
         self.search_entry.bind("<KeyRelease>", self._on_voice_search)
         
         # Voice count label
@@ -237,11 +240,11 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_SM),
             text_color=surface_theme["text_secondary"],
         )
-        self.voice_count_label.pack(anchor="w", pady=(5, 10))
+        self.voice_count_label.pack(anchor="w", pady=(SPACING_BASE, SPACING_SM))
     
     def _create_voice_selection_section(self, parent):
         """Create the voice selection section."""
-        self.create_separator(parent).pack(fill="x", pady=5)
+        self.create_separator(parent).pack(fill="x", pady=SPACING_BASE)
         
         self.voice_selection_frame = self.create_inline_frame(parent)
         
@@ -250,7 +253,7 @@ class VoiceTab(BaseTab):
             text="Selected Voice:",
             font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
         )
-        self.voice_label.pack(side="left", padx=5)
+        self.voice_label.pack(side="left", padx=SPACING_BASE)
         
         self.voice_var = ctk.StringVar()
         self.voice_dropdown = ctk.CTkComboBox(
@@ -261,7 +264,7 @@ class VoiceTab(BaseTab):
             dropdown_font=ctk.CTkFont(size=FONT_SM),
             state="readonly"
         )
-        self.voice_dropdown.pack(side="left", fill="x", expand=True, padx=5)
+        self.voice_dropdown.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
         self.voice_dropdown.configure(command=self._on_voice_selection_change)
         
         # Favorite button
@@ -274,13 +277,13 @@ class VoiceTab(BaseTab):
             height=BUTTON_HEIGHT,
             **self.get_subtle_button_style(),
         )
-        self.favorite_button.pack(side="left", padx=5)
+        self.favorite_button.pack(side="left", padx=SPACING_BASE)
     
     def _create_preview_section(self, parent):
         """Create the preview section."""
-        self.create_separator(parent).pack(fill="x", pady=10)
+        self.create_separator(parent).pack(fill="x", pady=SPACING_SM)
         
-        self.preview_frame = self.create_inline_frame(parent, pady=10)
+        self.preview_frame = self.create_inline_frame(parent, pady=SPACING_SM)
         
         # Preview text entry
         preview_text_value = self.settings.get("voice_preview_text", DEFAULT_PREVIEW_TEXT)
@@ -294,7 +297,7 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             placeholder_text="Enter preview text..."
         )
-        self.preview_text_entry.pack(side="left", fill="x", expand=True, padx=5)
+        self.preview_text_entry.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
         
         # Reset preview text button
         self.reset_preview_button = ctk.CTkButton(
@@ -306,7 +309,7 @@ class VoiceTab(BaseTab):
             height=BUTTON_HEIGHT,
             **self.get_subtle_button_style(),
         )
-        self.reset_preview_button.pack(side="left", padx=2)
+        self.reset_preview_button.pack(side="left", padx=SPACING_BASE)
         
         # Preview button
         self.preview_button = ctk.CTkButton(
@@ -319,7 +322,7 @@ class VoiceTab(BaseTab):
             fg_color=COLOR_SUCCESS,
             hover_color=COLOR_SUCCESS_HOVER,
         )
-        self.preview_button.pack(side="left", padx=5)
+        self.preview_button.pack(side="left", padx=SPACING_BASE)
         
         # Stop preview button
         self.stop_preview_button = ctk.CTkButton(
@@ -338,13 +341,13 @@ class VoiceTab(BaseTab):
             self.preview_frame,
             wraplength=220,
         )
-        self.preview_loading_label.pack(side="left", padx=10)
+        self.preview_loading_label.pack(side="left", padx=SPACING_SM)
     
     def _create_voice_info_section(self, parent):
         """Create the voice info panel."""
         surface_theme = self.get_active_surface_theme()
         self.voice_info_frame = self.create_nested_surface_frame(parent)
-        self.voice_info_frame.pack(fill="x", pady=15)
+        self.voice_info_frame.pack(fill="x", pady=SPACING_MD)
         
         self.voice_info_title = ctk.CTkLabel(
             self.voice_info_frame,
@@ -352,10 +355,10 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
             text_color=surface_theme["text_primary"],
         )
-        self.voice_info_title.pack(anchor="w", padx=10, pady=(10, 5))
+        self.voice_info_title.pack(anchor="w", padx=SPACING_SM, pady=(SPACING_SM, SPACING_BASE))
         
         self.voice_info_grid = ctk.CTkFrame(self.voice_info_frame, fg_color="transparent")
-        self.voice_info_grid.pack(fill="x", padx=10, pady=5)
+        self.voice_info_grid.pack(fill="x", padx=SPACING_SM, pady=SPACING_BASE)
         
         # Name
         ctk.CTkLabel(
@@ -364,7 +367,7 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_SM, weight=FONT_WEIGHT_BOLD),
             width=80,
             anchor="w"
-        ).grid(row=0, column=0, sticky="w", pady=2)
+        ).grid(row=0, column=0, sticky="w", pady=SPACING_BASE)
         
         self.voice_info_name_value = ctk.CTkLabel(
             self.voice_info_grid,
@@ -372,7 +375,7 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_SM),
             anchor="w"
         )
-        self.voice_info_name_value.grid(row=0, column=1, sticky="w", pady=2, padx=5)
+        self.voice_info_name_value.grid(row=0, column=1, sticky="w", pady=SPACING_BASE, padx=SPACING_BASE)
         
         # Gender
         ctk.CTkLabel(
@@ -381,7 +384,7 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_SM, weight=FONT_WEIGHT_BOLD),
             width=80,
             anchor="w"
-        ).grid(row=1, column=0, sticky="w", pady=2)
+        ).grid(row=1, column=0, sticky="w", pady=SPACING_BASE)
         
         self.voice_info_gender_value = ctk.CTkLabel(
             self.voice_info_grid,
@@ -389,7 +392,7 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_SM),
             anchor="w"
         )
-        self.voice_info_gender_value.grid(row=1, column=1, sticky="w", pady=2, padx=5)
+        self.voice_info_gender_value.grid(row=1, column=1, sticky="w", pady=SPACING_BASE, padx=SPACING_BASE)
         
         # Locale
         ctk.CTkLabel(
@@ -398,7 +401,7 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_SM, weight=FONT_WEIGHT_BOLD),
             width=80,
             anchor="w"
-        ).grid(row=2, column=0, sticky="w", pady=2)
+        ).grid(row=2, column=0, sticky="w", pady=SPACING_BASE)
         
         self.voice_info_locale_value = ctk.CTkLabel(
             self.voice_info_grid,
@@ -406,7 +409,7 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_SM),
             anchor="w"
         )
-        self.voice_info_locale_value.grid(row=2, column=1, sticky="w", pady=2, padx=5)
+        self.voice_info_locale_value.grid(row=2, column=1, sticky="w", pady=SPACING_BASE, padx=SPACING_BASE)
         
         # Short Name
         ctk.CTkLabel(
@@ -415,7 +418,7 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_SM, weight=FONT_WEIGHT_BOLD),
             width=80,
             anchor="w"
-        ).grid(row=3, column=0, sticky="w", pady=2)
+        ).grid(row=3, column=0, sticky="w", pady=SPACING_BASE)
         
         self.voice_info_short_value = ctk.CTkLabel(
             self.voice_info_grid,
@@ -423,13 +426,13 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_SM),
             anchor="w"
         )
-        self.voice_info_short_value.grid(row=3, column=1, sticky="w", pady=2, padx=5)
+        self.voice_info_short_value.grid(row=3, column=1, sticky="w", pady=SPACING_BASE, padx=SPACING_BASE)
     
     def _create_favorites_section(self, parent):
         """Create the favorites section."""
         surface_theme = self.get_active_surface_theme()
         self.favorites_frame = self.create_nested_scrollable_surface(parent, height=100)
-        self.favorites_frame.pack(fill="x", pady=5)
+        self.favorites_frame.pack(fill="x", pady=SPACING_BASE)
         prevent_scroll_propagation(self.favorites_frame)
         
         self.favorites_empty_label = ctk.CTkLabel(
@@ -438,13 +441,13 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_SM),
             text_color=surface_theme["text_secondary"],
         )
-        self.favorites_empty_label.pack(pady=20)
+        self.favorites_empty_label.pack(pady=SPACING_LG)
     
     def _create_recent_section(self, parent):
         """Create the recent voices section."""
         surface_theme = self.get_active_surface_theme()
         self.recent_frame = self.create_nested_scrollable_surface(parent, height=80)
-        self.recent_frame.pack(fill="x", pady=5)
+        self.recent_frame.pack(fill="x", pady=SPACING_BASE)
         prevent_scroll_propagation(self.recent_frame)
         
         self.recent_empty_label = ctk.CTkLabel(
@@ -453,7 +456,7 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_SM),
             text_color=surface_theme["text_secondary"],
         )
-        self.recent_empty_label.pack(pady=20)
+        self.recent_empty_label.pack(pady=SPACING_LG)
     
     def _create_parameter_sliders(self, parent):
         """Initialise parameter variables; the actual sliders live in Quick Controls."""
@@ -472,7 +475,7 @@ class VoiceTab(BaseTab):
             parent=parent,
             font_size=FONT_MD,
             justify="left",
-        ).pack(anchor="w", pady=(10, 5), padx=5)
+        ).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE), padx=SPACING_BASE)
 
     def _apply_provider_slider_visibility(self, provider_key: str):
         """No-op: provider-specific sliders live in the Quick Controls panel."""
@@ -696,7 +699,7 @@ class VoiceTab(BaseTab):
                 text="No favorite voices yet. Click the star button to add favorites!",
                 font=ctk.CTkFont(size=FONT_SM),
                 text_color=self.get_active_surface_theme()["text_secondary"],
-            ).pack(pady=20)
+            ).pack(pady=SPACING_LG)
             return
         
         for short in favs:
@@ -713,7 +716,7 @@ class VoiceTab(BaseTab):
                 height=BUTTON_HEIGHT,
                 anchor="w",
                 **self.get_subtle_button_style(),
-            ).pack(anchor="w", pady=2, padx=2)
+            ).pack(anchor="w", pady=SPACING_BASE, padx=SPACING_BASE)
     
     def _refresh_recent_ui(self):
         """Refresh recent voices UI."""
@@ -727,7 +730,7 @@ class VoiceTab(BaseTab):
                 text="No recent voices yet.",
                 font=ctk.CTkFont(size=FONT_SM),
                 text_color=self.get_active_surface_theme()["text_secondary"],
-            ).pack(pady=20)
+            ).pack(pady=SPACING_LG)
             return
         
         for short in recents:
@@ -744,7 +747,7 @@ class VoiceTab(BaseTab):
                 height=BUTTON_HEIGHT,
                 anchor="w",
                 **self.get_subtle_button_style(),
-            ).pack(anchor="w", pady=2, padx=2)
+            ).pack(anchor="w", pady=SPACING_BASE, padx=SPACING_BASE)
     
     def _select_voice_by_short_name(self, short_name: str):
         """Select a voice by its short_name."""
@@ -889,7 +892,7 @@ class VoiceTab(BaseTab):
             
             except Exception as e:
                 logger.error("Preview exception: %s", e)
-                self._schedule_on_ui_thread(lambda: self._preview_done(str(e)))
+                self._schedule_on_ui_thread(lambda err=str(e): self._preview_done(err))
             finally:
                 if loop:
                     loop.close()
@@ -900,11 +903,11 @@ class VoiceTab(BaseTab):
         """Set preview UI loading state."""
         if loading:
             self.preview_button.pack_forget()
-            self.stop_preview_button.pack(side="left", padx=5)
+            self.stop_preview_button.pack(side="left", padx=SPACING_BASE)
             self.preview_text_entry.configure(state="disabled")
         else:
             self.stop_preview_button.pack_forget()
-            self.preview_button.pack(side="left", padx=5)
+            self.preview_button.pack(side="left", padx=SPACING_BASE)
             self.preview_text_entry.configure(state="normal")
     
     def _preview_loading_playing(self):

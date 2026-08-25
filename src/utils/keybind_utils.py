@@ -20,7 +20,7 @@ VALID_KEYS = {
     'minus', 'equal', 'grave', 'plus', 'asterisk', 'question', 'exclam',
     'at', 'numbersign', 'dollar', 'percent', 'asciicircum', 'ampersand',
     'parenleft', 'parenright', 'underscore', 'braceleft', 'braceright',
-    'bar', 'colon', 'less', 'greater', 'question', 'tilde'
+    'bar', 'colon', 'less', 'greater', 'tilde'
 }
 
 # Critical system shortcuts that should not be allowed

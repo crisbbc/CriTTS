@@ -136,7 +136,10 @@ class VRChatOSCClient:
             # The second argument controls notification sound (integer 0 or 1 for compatibility)
             # The third argument controls keyboard visibility (boolean)
             play_sound_int = 1 if play_notification_sound else 0
-            self._client.send_message(
+            client = self._client
+            if client is None:
+                return False
+            client.send_message(
                 self.CHATBOX_ENDPOINT,
                 [message, play_sound_int, show_keyboard]
             )
@@ -193,7 +196,10 @@ class VRChatOSCClient:
         
         try:
             # VRChat expects the typing indicator as a boolean argument to /chatbox/typing
-            self._client.send_message("/chatbox/typing", [is_typing])
+            client = self._client
+            if client is None:
+                return False
+            client.send_message("/chatbox/typing", [is_typing])
             
             logger.info("Sent typing indicator: %s", is_typing)
             
@@ -231,7 +237,10 @@ class VRChatOSCClient:
             viseme_value = max(0, min(14, int(viseme_value)))
             
             # Send to VRChat's viseme parameter
-            self._client.send_message("/avatar/parameters/Viseme", [viseme_value])
+            client = self._client
+            if client is None:
+                return False
+            client.send_message("/avatar/parameters/Viseme", [viseme_value])
             
             return True
             
@@ -257,7 +266,10 @@ class VRChatOSCClient:
             amplitude = max(0.0, min(1.0, float(amplitude)))
             
             # Send to VRChat's Voice parameter
-            self._client.send_message("/avatar/parameters/Voice", [amplitude])
+            client = self._client
+            if client is None:
+                return False
+            client.send_message("/avatar/parameters/Voice", [amplitude])
             
             return True
             
@@ -284,7 +296,10 @@ class VRChatOSCClient:
             if not parameter_name.startswith("/avatar/parameters/"):
                 parameter_name = f"/avatar/parameters/{parameter_name}"
             
-            self._client.send_message(parameter_name, [value])
+            client = self._client
+            if client is None:
+                return False
+            client.send_message(parameter_name, [value])
             
             return True
             

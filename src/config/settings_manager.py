@@ -4,6 +4,7 @@ Handles JSON-based configuration persistence for user settings.
 """
 import copy
 import json
+from typing import Any, Dict, cast
 import os
 import re
 import sys
@@ -35,7 +36,7 @@ _TEXT_PARAM_PATTERNS = (
 # Declarative refinements layered on top of the defaults-derived schema.  Every
 # key omitted here is still covered: its type is inferred from DEFAULT_SETTINGS,
 # and keys whose default is None are treated as nullable unless overridden.
-_SCHEMA_OVERRIDES = {
+_SCHEMA_OVERRIDES: Dict[str, dict] = {
     # Nullable keys (default None) with a concrete non-None shape.
     "device_index": {"kind": "int"},
     "stt_mic_device_index": {"kind": "int"},
@@ -51,7 +52,7 @@ _SCHEMA_OVERRIDES = {
     "volume": {"range": (0, 100)},
     "pitch": {"range": (-100, 100)},
     "audio_cache_max_size_mb": {"range": (1, None)},
-    "stt_silence_threshold": {"range": (0, None)},
+    "stt_silence_threshold": {"range": (1, None)},
     "mic_passthrough_volume": {"range": (0, 200)},
     "vrchat_osc_port": {"range": (1, 65535)},
     "coqui_gpu_device": {"range": (-2, None)},
@@ -405,7 +406,9 @@ class SettingsManager:
             try:
                 if isinstance(value, bool):
                     raise ValueError
-                numeric = float(value)
+                # cast: value may be Any/None per the dynamic schema, but the
+                # TypeError path below already guards non-convertible values.
+                numeric = float(cast(float, value))
                 if not math.isfinite(numeric) or not _in_range(numeric, entry.get("range")):
                     raise ValueError
                 return (int(numeric) if kind == "int" else numeric), None
@@ -481,7 +484,7 @@ class SettingsManager:
                     pass
                 return False
     
-    def get(self, key, default=None):
+    def get(self, key: str, default: Any = None) -> Any:
         """Get a setting value by key."""
         with self._lock:
             return self._settings.get(key, default)
@@ -489,11 +492,13 @@ class SettingsManager:
     @staticmethod
     def _default_voice_for_provider(provider: str) -> str:
         """Return the safe initial voice for a provider."""
-        return {
+        fallback = cast(str, SettingsManager.DEFAULT_SETTINGS["voice"])
+        voices_by_provider: Dict[str, str] = {
             "edge": "en-US-AriaNeural",
             "piper": "en_US-lessac-medium",
             "coqui": "Claribel Dervla",
-        }.get(provider, SettingsManager.DEFAULT_SETTINGS["voice"])
+        }
+        return voices_by_provider.get(provider, fallback)
 
     def _voice_matches_provider(self, voice: object, provider: str) -> bool:
         """Recognize provider voice identifier shapes without importing runtimes."""
@@ -512,7 +517,7 @@ class SettingsManager:
             return voice.endswith("Neural") and " " not in voice
         return False
 
-    def set(self, key, value):
+    def set(self, key: str, value: Any) -> None:
         """Set a setting value by key, coercing it through the shared schema."""
         with self._lock:
             # A provider switch invalidates the previous provider's voice.  Do
@@ -617,7 +622,11 @@ class SettingsManager:
                 issues.append(f"Invalid soundboard slot key: {slot}")
                 continue
 
-            slot_num = int(slot)
+            try:
+                slot_num = int(slot)
+            except ValueError:  # pragma: no cover - isdigit() guard above
+                issues.append(f"Invalid soundboard slot key: {slot}")
+                continue
             if not (1 <= slot_num <= 99):
                 issues.append(f"Soundboard slot out of range (1-99): {slot}")
 

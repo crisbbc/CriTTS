@@ -14,8 +14,7 @@ Covers:
 import io
 import wave
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from src.tts.providers.piper_tts_provider import (
     PiperTTSProvider,
@@ -293,7 +292,6 @@ class TestStatusCallback:
             mock_resp.read = MagicMock(return_value=b"")
             mock_open.return_value = mock_resp
 
-            import shutil as _shutil
             with patch("src.tts.providers.piper_tts_provider.shutil.copyfileobj"):
                 # Actually write something so rename succeeds
                 tmp_file = dest.with_suffix(dest.suffix + ".tmp")
@@ -425,7 +423,6 @@ class TestNoiseScaleHelpers:
     def test_synthesize_blocking_passes_noise_params(self, tmp_path):
         """_synthesize_blocking should forward noise_scale and noise_w_scale to SynthesisConfig."""
         import wave as _wave
-        from unittest.mock import call as _call
 
         sm = MagicMock()
         sm.get.side_effect = lambda key, default=None: {

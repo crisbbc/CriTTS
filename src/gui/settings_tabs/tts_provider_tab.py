@@ -7,8 +7,11 @@ from typing import Any, Callable, List, Dict, Optional
 
 from .base_tab import BaseTab
 from ..theme_constants import (
-    FONT_SM, FONT_MD, FONT_LG, FONT_XL, FONT_WEIGHT_BOLD,
+    FONT_MD, FONT_LG, FONT_XL, FONT_WEIGHT_BOLD,
     SPACING_MD,
+    SPACING_BASE,
+    SPACING_SM,
+    SPACING_XS,
 )
 
 # Internal key for the Coqui provider (used for visibility checks)
@@ -85,7 +88,7 @@ class TTSProviderTab(BaseTab):
             self.scroll,
             text="TTS Provider",
             font=ctk.CTkFont(size=FONT_XL, weight=FONT_WEIGHT_BOLD),
-        ).pack(anchor="w", pady=(10, 5))
+        ).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
 
         intro_label = self.create_helper_text(
             text=(
@@ -115,7 +118,7 @@ class TTSProviderTab(BaseTab):
             width=320,
             command=self._on_provider_changed,
         )
-        self._provider_dropdown.pack(anchor="w", pady=(0, 4))
+        self._provider_dropdown.pack(anchor="w", pady=(0, SPACING_BASE))
 
         details_section, details_content = self.create_section_surface(
             "Provider Details",
@@ -128,11 +131,11 @@ class TTSProviderTab(BaseTab):
             parent=details_content,
             text_color=surface_theme["text_primary"],
         )
-        self._desc_label.pack(anchor="w", pady=(5, 10))
+        self._desc_label.pack(anchor="w", pady=(SPACING_BASE, SPACING_SM))
 
         # Store a reference so we can insert the Coqui frame right after this separator.
         self._desc_sep = self.create_separator(details_content)
-        self._desc_sep.pack(fill="x", pady=(5, 10))
+        self._desc_sep.pack(fill="x", pady=(SPACING_BASE, SPACING_SM))
 
         # --- Coqui-specific settings (hidden when Edge is selected) ---
         # Plain header label — NOT create_section_header() — so no sidebar button
@@ -144,16 +147,16 @@ class TTSProviderTab(BaseTab):
             text="Coqui TTS Settings",
             font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD),
             text_color=surface_theme["text_primary"],
-        ).pack(anchor="w", pady=(SPACING_MD, 5), padx=SPACING_MD)
+        ).pack(anchor="w", pady=(SPACING_MD, SPACING_BASE), padx=SPACING_MD)
 
         coqui_gpu_desc = self.create_helper_text(
             text="Select which CUDA GPU Coqui TTS should use. 'Auto' picks the best available GPU automatically.",
             parent=self._coqui_settings_frame,
         )
-        coqui_gpu_desc.pack(anchor="w", pady=(0, 6), padx=SPACING_MD)
+        coqui_gpu_desc.pack(anchor="w", pady=(0, SPACING_XS), padx=SPACING_MD)
 
         gpu_options, gpu_labels = self._build_gpu_options()
-        self._gpu_options_map: Dict[str, int] = dict(zip(gpu_labels, gpu_options))
+        self._gpu_options_map: Dict[str, int] = dict(zip(gpu_labels, gpu_options, strict=False))
 
         saved_gpu = self.settings.get("coqui_gpu_device", -2)
         # Find the label that matches the saved device index, fall back to first label
@@ -171,9 +174,9 @@ class TTSProviderTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             state="readonly",
             width=380,
-        ).pack(anchor="w", pady=(0, 10), padx=SPACING_MD)
+        ).pack(anchor="w", pady=(0, SPACING_SM), padx=SPACING_MD)
 
-        self.create_separator(self._coqui_settings_frame).pack(fill="x", pady=(5, 10), padx=SPACING_MD)
+        self.create_separator(self._coqui_settings_frame).pack(fill="x", pady=(SPACING_BASE, SPACING_SM), padx=SPACING_MD)
 
         # --- Language selection ---
         ctk.CTkLabel(
@@ -181,7 +184,7 @@ class TTSProviderTab(BaseTab):
             text="Speech Language",
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
             text_color=surface_theme["text_primary"],
-        ).pack(anchor="w", pady=(0, 4), padx=SPACING_MD)
+        ).pack(anchor="w", pady=(0, SPACING_BASE), padx=SPACING_MD)
 
         language_desc = self.create_helper_text(
             text=(
@@ -190,7 +193,7 @@ class TTSProviderTab(BaseTab):
             ),
             parent=self._coqui_settings_frame,
         )
-        language_desc.pack(anchor="w", pady=(0, 6), padx=SPACING_MD)
+        language_desc.pack(anchor="w", pady=(0, SPACING_XS), padx=SPACING_MD)
 
         _LANGUAGE_OPTIONS = [
             ("English (en)", "en"),
@@ -228,7 +231,7 @@ class TTSProviderTab(BaseTab):
             width=380,
         ).pack(anchor="w", pady=(0, SPACING_MD), padx=SPACING_MD)
 
-        self.create_separator(self._coqui_settings_frame).pack(fill="x", pady=(5, 10), padx=SPACING_MD)
+        self.create_separator(self._coqui_settings_frame).pack(fill="x", pady=(SPACING_BASE, SPACING_SM), padx=SPACING_MD)
 
         # --- Sampling stability (temperature / repetition penalty) ---
         ctk.CTkLabel(
@@ -236,7 +239,7 @@ class TTSProviderTab(BaseTab):
             text="Sampling Stability",
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
             text_color=surface_theme["text_primary"],
-        ).pack(anchor="w", pady=(0, 4), padx=SPACING_MD)
+        ).pack(anchor="w", pady=(0, SPACING_BASE), padx=SPACING_MD)
 
         stability_desc = self.create_helper_text(
             text=(
@@ -245,10 +248,10 @@ class TTSProviderTab(BaseTab):
             ),
             parent=self._coqui_settings_frame,
         )
-        stability_desc.pack(anchor="w", pady=(0, 6), padx=SPACING_MD)
+        stability_desc.pack(anchor="w", pady=(0, SPACING_XS), padx=SPACING_MD)
 
         self.create_setting_label("Temperature:", parent=self._coqui_settings_frame).pack(
-            anchor="w", pady=(6, 4), padx=SPACING_MD
+            anchor="w", pady=(SPACING_XS, SPACING_BASE), padx=SPACING_MD
         )
         temp_frame = self.create_inline_frame(self._coqui_settings_frame)
         saved_temp = float(self.settings.get("coqui_temperature", 0.75))
@@ -261,17 +264,17 @@ class TTSProviderTab(BaseTab):
             variable=self._temperature_var,
             command=self._on_temperature_change,
         )
-        self._temperature_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self._temperature_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
         self._temperature_value_label = ctk.CTkLabel(
             temp_frame,
             text=f"{saved_temp:.2f}",
             font=ctk.CTkFont(size=FONT_MD),
             width=50,
         )
-        self._temperature_value_label.pack(side="right", padx=5)
+        self._temperature_value_label.pack(side="right", padx=SPACING_BASE)
 
         self.create_setting_label("Repetition Penalty:", parent=self._coqui_settings_frame).pack(
-            anchor="w", pady=(6, 4), padx=SPACING_MD
+            anchor="w", pady=(SPACING_XS, SPACING_BASE), padx=SPACING_MD
         )
         rep_frame = self.create_inline_frame(self._coqui_settings_frame)
         saved_rep = float(self.settings.get("coqui_repetition_penalty", 10.0))
@@ -284,14 +287,14 @@ class TTSProviderTab(BaseTab):
             variable=self._repetition_penalty_var,
             command=self._on_repetition_penalty_change,
         )
-        self._repetition_penalty_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self._repetition_penalty_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
         self._repetition_penalty_value_label = ctk.CTkLabel(
             rep_frame,
             text=f"{saved_rep:.1f}",
             font=ctk.CTkFont(size=FONT_MD),
             width=50,
         )
-        self._repetition_penalty_value_label.pack(side="right", padx=5)
+        self._repetition_penalty_value_label.pack(side="right", padx=SPACING_BASE)
 
         # --- Text splitting + memory cleanup ---
         self._text_splitting_var = ctk.BooleanVar(
@@ -302,7 +305,7 @@ class TTSProviderTab(BaseTab):
             text="Language-aware sentence splitting",
             variable=self._text_splitting_var,
             font=ctk.CTkFont(size=FONT_MD),
-        ).pack(anchor="w", pady=(10, 4), padx=SPACING_MD)
+        ).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE), padx=SPACING_MD)
         splitting_note = self.create_helper_text(
             text=(
                 "Splits on real sentence boundaries (needs spaCy, bundled in "
@@ -311,10 +314,10 @@ class TTSProviderTab(BaseTab):
             ),
             parent=self._coqui_settings_frame,
         )
-        splitting_note.pack(anchor="w", pady=(0, 6), padx=SPACING_MD)
+        splitting_note.pack(anchor="w", pady=(0, SPACING_XS), padx=SPACING_MD)
 
         self.create_setting_label("GPU Memory Cleanup:", parent=self._coqui_settings_frame).pack(
-            anchor="w", pady=(6, 4), padx=SPACING_MD
+            anchor="w", pady=(SPACING_XS, SPACING_BASE), padx=SPACING_MD
         )
         cleanup_frame = self.create_inline_frame(self._coqui_settings_frame)
         saved_cleanup = int(self.settings.get("coqui_gpu_cleanup_interval", 5))
@@ -327,16 +330,16 @@ class TTSProviderTab(BaseTab):
             variable=self._gpu_cleanup_var,
             command=self._on_gpu_cleanup_change,
         )
-        self._gpu_cleanup_slider.pack(side="left", fill="x", expand=True, padx=5)
+        self._gpu_cleanup_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
         self._gpu_cleanup_value_label = ctk.CTkLabel(
             cleanup_frame,
             text=self._format_cleanup_label(saved_cleanup),
             font=ctk.CTkFont(size=FONT_MD),
             width=60,
         )
-        self._gpu_cleanup_value_label.pack(side="right", padx=5)
+        self._gpu_cleanup_value_label.pack(side="right", padx=SPACING_BASE)
 
-        self.create_separator(self._coqui_settings_frame).pack(fill="x", pady=(5, SPACING_MD), padx=SPACING_MD)
+        self.create_separator(self._coqui_settings_frame).pack(fill="x", pady=(SPACING_BASE, SPACING_MD), padx=SPACING_MD)
 
         if current == _COQUI_PROVIDER_KEY:
             self._coqui_settings_frame.pack(fill="x", after=self._desc_sep)
@@ -349,7 +352,7 @@ class TTSProviderTab(BaseTab):
             ),
             parent=details_content,
         )
-        note_label.pack(anchor="w", pady=(0, 10))
+        note_label.pack(anchor="w", pady=(0, SPACING_SM))
 
         sliders_note = self.create_helper_text(
             text=(
@@ -358,7 +361,7 @@ class TTSProviderTab(BaseTab):
             ),
             parent=details_content,
         )
-        sliders_note.pack(anchor="w", pady=(0, 10))
+        sliders_note.pack(anchor="w", pady=(0, SPACING_SM))
 
     # ------------------------------------------------------------------
 

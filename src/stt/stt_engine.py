@@ -124,7 +124,7 @@ class STTEngine:
                     try:
                         self._stream.close()
                     except Exception:
-                        pass
+                        logger.debug("STT stream close failed during cleanup", exc_info=True)
                     self._stream = None
                 return False
     
