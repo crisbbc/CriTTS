@@ -213,7 +213,7 @@ echo "[OK] Python $PY_VER found."
 #     No hard pip gate: install_deps.py tries pip -> pip.exe -> uv -> ensurepip
 # ---------------------------------------------------------------------------
 if [ -f "$SCRIPT_DIR/scripts/fingerprint.py" ]; then
-    if "$PYTHON" "$SCRIPT_DIR/scripts/fingerprint.py" --check >/dev/null 2>&1; then
+    if "$PYTHON" "$SCRIPT_DIR/scripts/fingerprint.py" --check >/dev/null 2>&1 && "$PYTHON" -c "import customtkinter" >/dev/null 2>&1; then
         echo "[OK] Dependencies up to date."
     else
         echo "[INFO] Dependencies need updating..."
