@@ -2,6 +2,7 @@
 VRChat OSC Tab
 Settings for VRChat OSC chatbox and viseme features.
 """
+
 import logging
 import customtkinter as ctk
 from typing import Any, Callable, Optional, List, Dict
@@ -26,7 +27,7 @@ except Exception:
 
 class VRChatOSCTab(BaseTab):
     """Tab for VRChat OSC settings."""
-    
+
     def __init__(
         self,
         tab_widget: ctk.CTkFrame,
@@ -34,11 +35,11 @@ class VRChatOSCTab(BaseTab):
         tts_engine: Any = None,
         audio_router: Any = None,
         on_change: Optional[Callable] = None,
-        parent_window: ctk.CTk = None
+        parent_window: ctk.CTk = None,
     ):
         self.parent_window = parent_window
         super().__init__(tab_widget, settings_manager, tts_engine, audio_router, on_change)
-    
+
     def _create_content(self):
         """Create the VRChat OSC tab content."""
         self.setup_layout()
@@ -64,6 +65,13 @@ class VRChatOSCTab(BaseTab):
         typing_section.pack(fill="x", pady=(0, SPACING_MD))
         self._create_typing_indicator_section(typing_content)
 
+        quick_section, quick_content = self.create_section_surface(
+            "Quick Responses (VRChat)",
+            parent=self.scroll,
+        )
+        quick_section.pack(fill="x", pady=(0, SPACING_MD))
+        self._create_quick_responses_section(quick_content)
+
         # Initialize OSC enabled state
         self._on_osc_enabled_toggle()
 
@@ -72,60 +80,56 @@ class VRChatOSCTab(BaseTab):
         self.osc_enabled_var = ctk.BooleanVar(value=self.settings.get("vrchat_osc_enabled", False))
         self.osc_enabled_check = ctk.CTkCheckBox(
             parent,
-            text="Enable OSC (send to VRChat chatbox)", 
-            variable=self.osc_enabled_var, 
+            text="Enable OSC (send to VRChat chatbox)",
+            variable=self.osc_enabled_var,
             font=ctk.CTkFont(size=FONT_MD),
-            command=self._on_osc_enabled_toggle
+            command=self._on_osc_enabled_toggle,
         )
         self.osc_enabled_check.pack(anchor="w", pady=SPACING_BASE)
-        
+
         self.create_setting_label("IP:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
-        
+
         self.osc_ip_var = ctk.StringVar(value=self.settings.get("vrchat_osc_ip", "127.0.0.1"))
         self.osc_ip_entry = ctk.CTkEntry(parent, textvariable=self.osc_ip_var, width=200)
         self.osc_ip_entry.pack(anchor="w", pady=SPACING_BASE)
-        
+
         self.create_setting_label("Port (default 9000):", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
-        
+
         self.osc_port_var = ctk.StringVar(value=str(self.settings.get("vrchat_osc_port", 9000)))
         self.osc_port_entry = ctk.CTkEntry(parent, textvariable=self.osc_port_var, width=120)
         self.osc_port_entry.pack(anchor="w", pady=SPACING_BASE)
-        
+
         self.osc_play_sound_var = ctk.BooleanVar(value=self.settings.get("vrchat_osc_play_sound", True))
         self.osc_play_sound_check = ctk.CTkCheckBox(
             parent,
-            text="Play notification sound when sending", 
-            variable=self.osc_play_sound_var, 
-            font=ctk.CTkFont(size=FONT_MD)
+            text="Play notification sound when sending",
+            variable=self.osc_play_sound_var,
+            font=ctk.CTkFont(size=FONT_MD),
         )
         self.osc_play_sound_check.pack(anchor="w", pady=SPACING_BASE)
-        
+
         osc_sound_info_label = self.create_helper_text(
             text="Notification sound uses VRChat's built-in chatbox sound. Requires OSC to be enabled and may not work in all VRChat versions.",
             parent=parent,
         )
         osc_sound_info_label.pack(anchor="w", pady=(0, SPACING_BASE))
-        
+
         self.osc_send_on_speak_var = ctk.BooleanVar(value=self.settings.get("vrchat_osc_send_on_speak", False))
         self.osc_send_on_speak_check = ctk.CTkCheckBox(
             parent,
-            text="Send to chatbox when speaking (main window)", 
-            variable=self.osc_send_on_speak_var, 
-            font=ctk.CTkFont(size=FONT_MD)
+            text="Send to chatbox when speaking (main window)",
+            variable=self.osc_send_on_speak_var,
+            font=ctk.CTkFont(size=FONT_MD),
         )
         self.osc_send_on_speak_check.pack(anchor="w", pady=SPACING_BASE)
-        
+
         ctk.CTkButton(
-            parent,
-            text="Test connection", 
-            command=self._test_osc_connection, 
-            width=140, 
-            height=BUTTON_HEIGHT
+            parent, text="Test connection", command=self._test_osc_connection, width=140, height=BUTTON_HEIGHT
         ).pack(anchor="w", pady=SPACING_MD)
-        
+
         self.osc_status_label = self.create_surface_status_label(parent)
         self.osc_status_label.pack(anchor="w", pady=SPACING_BASE)
-    
+
     def _create_viseme_section(self, parent):
         """Create the viseme lip-sync section."""
         osc_viseme_info_label = self.create_helper_text(
@@ -133,21 +137,21 @@ class VRChatOSCTab(BaseTab):
             parent=parent,
         )
         osc_viseme_info_label.pack(anchor="w", pady=(0, SPACING_SM))
-        
+
         self.viseme_enabled_var = ctk.BooleanVar(value=self.settings.get("vrchat_viseme_enabled", False))
         self.viseme_enabled_check = ctk.CTkCheckBox(
-            parent,
-            text="Enable Viseme Lip-Sync",
-            variable=self.viseme_enabled_var,
-            font=ctk.CTkFont(size=FONT_MD)
+            parent, text="Enable Viseme Lip-Sync", variable=self.viseme_enabled_var, font=ctk.CTkFont(size=FONT_MD)
         )
         self.viseme_enabled_check.pack(anchor="w", pady=SPACING_BASE)
-        
+
         self.create_setting_label("Viseme Smoothing:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
-        
+
         viseme_smoothing_frame = self.create_inline_frame(parent)
-        
-        current_smoothing = int(self.settings.get("vrchat_viseme_smoothing", 0.1) * 100)
+
+        try:
+            current_smoothing = int(float(self.settings.get("vrchat_viseme_smoothing", 0.1)) * 100)
+        except Exception:
+            current_smoothing = 10
         self.viseme_smoothing_var = ctk.IntVar(value=current_smoothing)
         self.viseme_smoothing_slider = ctk.CTkSlider(
             viseme_smoothing_frame,
@@ -156,34 +160,30 @@ class VRChatOSCTab(BaseTab):
             number_of_steps=100,
             variable=self.viseme_smoothing_var,
             command=self._on_viseme_smoothing_change,
-            width=400
+            width=400,
         )
         self.viseme_smoothing_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
-        
+
         self.viseme_smoothing_value_label = ctk.CTkLabel(
-            viseme_smoothing_frame,
-            text=f"{current_smoothing}%",
-            font=ctk.CTkFont(size=FONT_MD),
-            width=50
+            viseme_smoothing_frame, text=f"{current_smoothing}%", font=ctk.CTkFont(size=FONT_MD), width=50
         )
         self.viseme_smoothing_value_label.pack(side="right", padx=SPACING_BASE)
-        
+
         self.viseme_amplitude_var = ctk.BooleanVar(value=self.settings.get("vrchat_voice_amplitude_enabled", False))
         self.viseme_amplitude_check = ctk.CTkCheckBox(
             parent,
             text="Use Voice Amplitude for Mouth Movement",
             variable=self.viseme_amplitude_var,
-            font=ctk.CTkFont(size=FONT_MD)
+            font=ctk.CTkFont(size=FONT_MD),
         )
         self.viseme_amplitude_check.pack(anchor="w", pady=SPACING_BASE)
-        
+
         # Store viseme widgets for enabling/disabling
         self._viseme_widgets = [
             self.viseme_enabled_check,
             self.viseme_smoothing_slider,
             self.viseme_amplitude_check,
         ]
-        
 
     def _create_typing_indicator_section(self, parent):
         """Create the typing indicator section."""
@@ -192,20 +192,20 @@ class VRChatOSCTab(BaseTab):
             parent=parent,
         )
         typing_indicator_info_label.pack(anchor="w", pady=(0, SPACING_SM))
-        
+
         self.typing_animation_var = ctk.BooleanVar(value=self.settings.get("vrchat_osc_typing_animation", False))
         self.typing_animation_check = ctk.CTkCheckBox(
             parent,
             text="Enable Typing Indicator Animation",
             variable=self.typing_animation_var,
-            font=ctk.CTkFont(size=FONT_MD)
+            font=ctk.CTkFont(size=FONT_MD),
         )
         self.typing_animation_check.pack(anchor="w", pady=SPACING_BASE)
-        
+
         self.create_setting_label("Typing Indicator Timeout:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
-        
+
         typing_timeout_frame = self.create_inline_frame(parent)
-        
+
         current_timeout = self.settings.get("vrchat_osc_typing_timeout", 2.0)
         self.typing_timeout_var = ctk.DoubleVar(value=current_timeout)
         self.typing_timeout_slider = ctk.CTkSlider(
@@ -215,22 +215,19 @@ class VRChatOSCTab(BaseTab):
             number_of_steps=95,
             variable=self.typing_timeout_var,
             command=self._on_typing_timeout_change,
-            width=400
+            width=400,
         )
         self.typing_timeout_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
-        
+
         self.typing_timeout_value_label = ctk.CTkLabel(
-            typing_timeout_frame,
-            text=f"{current_timeout:.1f}s",
-            font=ctk.CTkFont(size=FONT_MD),
-            width=50
+            typing_timeout_frame, text=f"{current_timeout:.1f}s", font=ctk.CTkFont(size=FONT_MD), width=50
         )
         self.typing_timeout_value_label.pack(side="right", padx=SPACING_BASE)
-        
+
         self.create_setting_label("Message Cooldown:", parent).pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
-        
+
         message_cooldown_frame = self.create_inline_frame(parent)
-        
+
         current_cooldown = self.settings.get("vrchat_osc_message_cooldown", 3.0)
         self.message_cooldown_var = ctk.DoubleVar(value=current_cooldown)
         self.message_cooldown_slider = ctk.CTkSlider(
@@ -240,92 +237,155 @@ class VRChatOSCTab(BaseTab):
             number_of_steps=100,
             variable=self.message_cooldown_var,
             command=self._on_message_cooldown_change,
-            width=400
+            width=400,
         )
         self.message_cooldown_slider.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
-        
+
         self.message_cooldown_value_label = ctk.CTkLabel(
-            message_cooldown_frame,
-            text=f"{current_cooldown:.1f}s",
-            font=ctk.CTkFont(size=FONT_MD),
-            width=50
+            message_cooldown_frame, text=f"{current_cooldown:.1f}s", font=ctk.CTkFont(size=FONT_MD), width=50
         )
         self.message_cooldown_value_label.pack(side="right", padx=SPACING_BASE)
-        
+
         message_cooldown_info_label = self.create_helper_text(
             text="Time to wait after sending a message before typing animation can restart. Gives others time to read your message.",
             parent=parent,
         )
         message_cooldown_info_label.pack(anchor="w", pady=(0, SPACING_BASE))
-        
+
         self._typing_indicator_widgets = [
             self.typing_animation_check,
             self.typing_timeout_slider,
             self.message_cooldown_slider,
         ]
-    
+
+    def _create_quick_responses_section(self, parent):
+        """Eight text slots for one-click VRChat quick responses."""
+        info = self.create_helper_text(
+            text='Quick phrases sent to VRChat chatbox (and spoken via TTS when "Send to chatbox when speaking" is enabled).',
+            parent=parent,
+        )
+        info.pack(anchor="w", pady=(0, SPACING_SM))
+
+        stored = self.settings.get("vrchat_quick_responses", {})
+        if not isinstance(stored, dict):
+            stored = {}
+        self._qr_vars: dict[str, ctk.StringVar] = {}
+        for slot in ("1", "2", "3", "4", "5", "6", "7", "8"):
+            row = ctk.CTkFrame(parent, fg_color="transparent")
+            row.pack(fill="x", pady=SPACING_BASE)
+            ctk.CTkLabel(row, text=f"[{slot}]", width=36, anchor="w", font=ctk.CTkFont(size=FONT_MD)).pack(side="left")
+            var = ctk.StringVar(value=str(stored.get(slot, "") or ""))
+            self._qr_vars[slot] = var
+            ent = ctk.CTkEntry(
+                row, textvariable=var, font=ctk.CTkFont(size=FONT_MD), placeholder_text="Quick phrase..."
+            )
+            ent.pack(side="left", fill="x", expand=True, padx=(SPACING_SM, SPACING_SM))
+            ctk.CTkButton(
+                row, text="Send", width=70, height=BUTTON_HEIGHT, command=lambda s=slot: self._send_quick_response(s)
+            ).pack(side="left")
+
+    def _send_quick_response(self, slot: str):
+        var = self._qr_vars.get(slot) if hasattr(self, "_qr_vars") else None
+        text = var.get().strip() if var is not None else ""
+        if not text:
+            self.configure_surface_status_label(self.osc_status_label, f"Slot [{slot}] is empty.", "warning")
+            return
+        # Try to delegate to main window's quick-speak (TTS + OSC)
+        mw = None
+        try:
+            # parent_window is CriTTSApp; main_window lives there
+            mw = getattr(self.parent_window, "main_window", None)
+            if mw is None and hasattr(self.parent_window, "root"):
+                mw = self.parent_window
+        except Exception:
+            mw = None
+        # ponytail: reuse existing speak pipeline instead of duplicating TTS+OSC logic
+        quick = getattr(mw, "speak_quick_response", None) if mw else None
+        if callable(quick):
+            quick(text)
+            self.configure_surface_status_label(self.osc_status_label, f"Sent quick response [{slot}].", "success")
+            return
+        # Fallback: direct OSC send (no TTS) if main window not reachable
+        if VRChatOSCClient is None:
+            self.configure_surface_status_label(self.osc_status_label, "OSC client not available.", "warning")
+            return
+        try:
+            ip = self.osc_ip_var.get().strip() or "127.0.0.1"
+            port = int(self.osc_port_var.get().strip() or 9000)
+            client = VRChatOSCClient(ip=ip, port=port)
+            play_sound = self.osc_play_sound_var.get()
+            client.send_to_chatbox(text, play_notification_sound=play_sound, show_keyboard=True)
+            self.configure_surface_status_label(
+                self.osc_status_label, f"Sent quick response [{slot}] to VRChat.", "success"
+            )
+        except Exception as e:
+            self.configure_surface_status_label(self.osc_status_label, f"Send failed: {e}", "warning")
+
     def _on_osc_enabled_toggle(self):
         """Toggle viseme and typing indicator options based on OSC enabled state."""
         osc_enabled = self.osc_enabled_var.get()
-        
+
         for widget in self._viseme_widgets:
             try:
                 widget.configure(state="normal" if osc_enabled else "disabled")
             except Exception:
                 logger.debug("Widget state update failed", exc_info=True)
-        
+
         for widget in self._typing_indicator_widgets:
             try:
                 widget.configure(state="normal" if osc_enabled else "disabled")
             except Exception:
                 logger.debug("Widget state update failed", exc_info=True)
-        
+
         if not osc_enabled:
             self.viseme_enabled_var.set(False)
             self.typing_animation_var.set(False)
-        
+
         if self.parent_window and hasattr(self.parent_window, "main_window"):
             try:
                 self.parent_window.main_window.refresh_vrchat_osc()
             except Exception:
                 logger.debug("VRChat OSC tab refresh failed", exc_info=True)
-    
+
     def _on_viseme_smoothing_change(self, value):
         """Update viseme smoothing label when slider changes."""
-        self.viseme_smoothing_value_label.configure(text=f"{int(value)}%")
-        
+        try:
+            self.viseme_smoothing_value_label.configure(text=f"{int(float(value))}%")
+        except Exception:
+            logger.debug("Viseme smoothing label update failed", exc_info=True)
+
         if self.parent_window and hasattr(self.parent_window, "main_window"):
             try:
                 self.parent_window.main_window.refresh_vrchat_osc()
             except Exception:
                 logger.debug("VRChat OSC tab refresh failed", exc_info=True)
-    
+
     def _on_typing_timeout_change(self, value):
         """Update typing timeout label when slider changes."""
         self.typing_timeout_value_label.configure(text=f"{value:.1f}s")
-        
+
         if self.parent_window and hasattr(self.parent_window, "main_window"):
             try:
                 self.parent_window.main_window.refresh_vrchat_osc()
             except Exception:
                 logger.debug("VRChat OSC tab refresh failed", exc_info=True)
-    
+
     def _on_message_cooldown_change(self, value):
         """Update message cooldown label when slider changes."""
         self.message_cooldown_value_label.configure(text=f"{value:.1f}s")
-        
+
         if self.parent_window and hasattr(self.parent_window, "main_window"):
             try:
                 self.parent_window.main_window.refresh_vrchat_osc()
             except Exception:
                 logger.debug("VRChat OSC tab refresh failed", exc_info=True)
-    
+
     def _test_osc_connection(self):
         """Test OSC configuration."""
         self.configure_surface_status_label(self.osc_status_label, "Testing...", "idle")
         if self.parent_window:
             self.parent_window.update()
-        
+
         try:
             port_val = self.osc_port_var.get().strip()
             port = int(port_val) if port_val else 9000
@@ -336,9 +396,9 @@ class VRChatOSCTab(BaseTab):
                 "warning",
             )
             return
-        
+
         ip = self.osc_ip_var.get().strip() or "127.0.0.1"
-        
+
         if not VRChatOSCClient:
             self.configure_surface_status_label(
                 self.osc_status_label,
@@ -346,10 +406,10 @@ class VRChatOSCTab(BaseTab):
                 "warning",
             )
             return
-        
+
         client = VRChatOSCClient(ip=ip, port=port)
         success, message = client.test_connection()
-        
+
         if success:
             self.configure_surface_status_label(
                 self.osc_status_label,
@@ -358,14 +418,18 @@ class VRChatOSCTab(BaseTab):
             )
         else:
             self.configure_surface_status_label(self.osc_status_label, message, "warning")
-    
+
     def get_settings(self) -> Dict[str, Any]:
         """Get current settings from the tab UI."""
         try:
             port = int(self.osc_port_var.get().strip()) if self.osc_port_var.get().strip() else 9000
         except ValueError:
             port = 9000
-        
+
+        qr = {k: v.get().strip() for k, v in getattr(self, "_qr_vars", {}).items()}
+        # Ensure 4 slots always present
+        for k in ("1", "2", "3", "4", "5", "6", "7", "8"):
+            qr.setdefault(k, "")
         return {
             "vrchat_osc_enabled": self.osc_enabled_var.get(),
             "vrchat_osc_ip": self.osc_ip_var.get().strip() or "127.0.0.1",
@@ -378,12 +442,13 @@ class VRChatOSCTab(BaseTab):
             "vrchat_osc_typing_animation": self.typing_animation_var.get(),
             "vrchat_osc_typing_timeout": self.typing_timeout_var.get(),
             "vrchat_osc_message_cooldown": self.message_cooldown_var.get(),
+            "vrchat_quick_responses": qr,
         }
-    
+
     def validate(self) -> List[str]:
         """Validate the tab's settings."""
         errors = []
-        
+
         # Validate OSC port
         try:
             port = int(self.osc_port_var.get().strip()) if self.osc_port_var.get().strip() else 9000
@@ -391,5 +456,11 @@ class VRChatOSCTab(BaseTab):
                 errors.append(f"OSC port out of range: {port}")
         except ValueError:
             errors.append(f"Invalid OSC port: {self.osc_port_var.get()}")
-        
+
+        # Quick responses: guard against injection-ish content
+        for slot, var in getattr(self, "_qr_vars", {}).items():
+            txt = var.get().strip()
+            if len(txt) > 500:
+                errors.append(f"Quick response [{slot}] too long (max 500 chars)")
+
         return errors

@@ -2,6 +2,7 @@
 Settings Manager Module
 Handles JSON-based configuration persistence for user settings.
 """
+
 import copy
 import json
 from typing import Any, Dict, cast
@@ -46,7 +47,6 @@ _SCHEMA_OVERRIDES: Dict[str, dict] = {
     "voice_cache_path": {"kind": "str"},
     "piper_noise_scale": {"kind": "number", "range": (0.0, 2.0)},
     "piper_noise_w_scale": {"kind": "number", "range": (0.0, 2.0)},
-
     # Range-constrained numbers.
     "rate": {"range": (-100, 100)},
     "volume": {"range": (0, 100)},
@@ -62,12 +62,10 @@ _SCHEMA_OVERRIDES: Dict[str, dict] = {
     "stt_confidence_threshold": {"range": (0.0, 1.0)},
     "language_detection_confidence_threshold": {"range": (0.0, 1.0)},
     "piper_sentence_silence": {"range": (0.0, 2.0)},
-
     # Enumerated string choices.
     "appearance_mode": {"choices": _APPEARANCE_MODES},
     "normalization_type": {"choices": _NORMALIZATION_TYPES},
     "tts_provider": {"choices": _VALID_TTS_PROVIDERS},
-
     # Free-text content guard (parameter-pattern + printability checks).
     "voice_preview_text": {"text": True},
 }
@@ -99,11 +97,7 @@ def _value_matches_kind(value, kind, nullable):
     if kind == "int":
         return isinstance(value, int) and not isinstance(value, bool)
     if kind == "number":
-        return (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and math.isfinite(value)
-        )
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
     if kind == "str":
         return isinstance(value, str)
     if kind == "list":
@@ -139,7 +133,7 @@ class SettingsManager:
     """Manages application settings with JSON persistence."""
 
     VALID_TTS_PROVIDERS = _VALID_TTS_PROVIDERS
-    
+
     DEFAULT_SETTINGS = {
         "voice": "en-US-AriaNeural",
         "device_index": None,
@@ -149,27 +143,10 @@ class SettingsManager:
         "appearance_mode": "Dark",
         "enable_normalization": True,
         "normalization_type": "Peak",
-
         "abbreviations": {},
         "soundboard_enabled": True,
-        "soundboard_slots": {
-            "1": "",
-            "2": "",
-            "3": "",
-            "4": "",
-            "5": "",
-            "6": "",
-            "7": "",
-            "8": "",
-            "9": "",
-            "10": ""
-        },
-        "keybinds": {
-            "stop": "Escape",
-            "clear": "Ctrl+T",
-            "open_settings": "Ctrl+Comma",
-            "voice_input": "Ctrl+Shift+V"
-        },
+        "soundboard_slots": {"1": "", "2": "", "3": "", "4": "", "5": "", "6": "", "7": "", "8": "", "9": "", "10": ""},
+        "keybinds": {"stop": "Escape", "clear": "Ctrl+T", "open_settings": "Ctrl+Comma", "voice_input": "Ctrl+Shift+V"},
         "global_hotkeys_enabled": False,  # Enable system-wide hotkeys (requires keyboard library)
         "favorite_voices": [],
         "recent_voices": [],
@@ -179,7 +156,6 @@ class SettingsManager:
         "voice_view_mode": "list",
         "voice_preview_text": "Hello, this is a voice preview.",
         "force_plain_text_mode": False,
-        
         # VRChat OSC Chatbox Settings
         "vrchat_osc_enabled": False,
         "vrchat_osc_ip": "127.0.0.1",
@@ -189,71 +165,63 @@ class SettingsManager:
         "vrchat_osc_typing_animation": False,
         "vrchat_osc_typing_timeout": 2.0,
         "vrchat_osc_message_cooldown": 3.0,
-
+        "vrchat_quick_responses": {"1": "", "2": "", "3": "", "4": "", "5": "", "6": "", "7": "", "8": ""},
         "speak_mode": "all_text",
         "auto_language_detection": False,
         "language_voice_mappings": {},
         "language_detection_confidence_threshold": 0.3,  # Minimum confidence for language detection (0.0-1.0)
         "language_detection_min_length": 5,  # Minimum text length for language detection
-        
         # Audio Cache Settings
         "audio_cache_enabled": True,
         "audio_cache_max_size_mb": 500,
         "audio_cache_path": None,  # None means default ~/.critts/audio_cache/
-        
         # Voice Cache Settings
         "voice_cache_path": None,  # None means default ~/.critts/voices_cache.json
         "voice_cache_max_age_days": 7,
-        
         # Pre-generation Settings
         "pregenerate_phrases_enabled": True,
         "pregenerate_min_uses": 3,
         "pregenerate_max_phrases": 20,
-        
         # Text Processing Settings
         "text_cache_size": 1000,  # Increased from default 100
         "processing_profile": "balanced",  # fast, balanced, quality
-        
         # Streaming Playback (Experimental)
         "enable_streaming_playback": False,
-        
         # VRChat Viseme Settings
         "vrchat_viseme_enabled": False,
         "vrchat_viseme_smoothing": 0.1,
         "vrchat_voice_amplitude_enabled": False,
-        
         # STT (Speech-to-Text) Settings
         "stt_language": "en-US",
         "stt_mic_device_index": None,
         "stt_auto_speak": False,  # Automatically speak transcribed text
-        
         # STT Audio Pre-processing Settings
         "stt_min_duration_ms": 300,  # Minimum recording length before transcribing
         "stt_silence_threshold": 200,  # int16 RMS threshold for silence trimming
         "stt_highpass_filter": True,  # Apply 80 Hz high-pass filter
-        
         # STT Text Post-processing Settings
         "stt_capitalize": True,  # Capitalize first letter of result
         "stt_add_punctuation": False,  # Append period if no trailing punctuation
         "stt_apply_abbreviations": False,  # Expand abbreviations in STT output
         "stt_corrections": {},  # Word-level correction map for misrecognitions
         "stt_confidence_threshold": 0.0,  # Minimum confidence to accept a result (0.0 = disabled)
-        
         # Microphone Passthrough Settings
         "mic_passthrough_enabled": False,  # Master toggle for mic passthrough
         "mic_passthrough_device_index": None,  # Mic to capture (None = system default)
         "mic_passthrough_output_device_index": None,  # Output device for passthrough (None = same as TTS output)
         "mic_passthrough_volume": 100,  # Volume multiplier 0–200 (%)
-        
         # Button Visibility Settings
-        "visible_buttons": ["speak", "stop", "clear", "voice", "overlay"],  # Toggleable buttons to show (settings is always visible)
-        
+        "visible_buttons": [
+            "speak",
+            "stop",
+            "clear",
+            "voice",
+            "overlay",
+        ],  # Toggleable buttons to show (settings is always visible)
         # Overlay Settings
         "overlay_visible": True,  # Whether the recording overlay is visible
-
         # TTS Provider Selection
         "tts_provider": "edge",  # "edge" (online), "piper" (offline fast), or "coqui" (offline high quality)
-
         # Coqui TTS Settings
         # gpu_device selects the CUDA device (-2 = Auto, -1 = CPU only, 0+ = GPU index)
         # language sets the XTTS v2 synthesis language (ISO code, default: "en")
@@ -268,28 +236,17 @@ class SettingsManager:
         "coqui_repetition_penalty": 10.0,
         "coqui_enable_text_splitting": True,
         "coqui_gpu_cleanup_interval": 5,
-
         # Piper TTS Settings
         # Keep None to preserve per-voice .onnx.json inference recommendations.
         "piper_noise_scale": None,
         "piper_noise_w_scale": None,
         "piper_sentence_silence": 0.2,
-
         # Audio clarity EQ: high-pass + presence boost for speech intelligibility
         "enable_clarity_eq": True,
-
         # Linux PulseAudio/PipeWire sink routing
         "linux_sink_name": "",  # Name of the null sink to route TTS to (empty = no auto-routing)
     }
 
-
-
-
-
-
-
-
-    
     # Single declarative source of truth driving load normalization, set()
     # coercion, and validate_settings().  Entries are derived from defaults
     # and refined by the module-level `_SCHEMA_OVERRIDES` table.
@@ -307,7 +264,7 @@ class SettingsManager:
             self.config_path = config_dir / "config.json"
         else:
             self.config_path = Path(config_path)
-        
+
         self._settings = {}
         self._persisted_settings = {}
         self._voices_mapping: dict = {}  # friendly_name -> short_name
@@ -317,24 +274,24 @@ class SettingsManager:
     def _update_persisted_settings_snapshot(self):
         """Track the last settings state known to be synchronized with disk."""
         self._persisted_settings = copy.deepcopy(self._settings)
-    
+
     def set_voices_mapping(self, voices_mapping: dict):
         """
         Set the mapping from friendly voice names to short_names.
         Used by GUI/engine to provide voice mapping for migration.
-        
+
         Args:
             voices_mapping: Dictionary mapping friendly_name -> short_name
         """
         self._voices_mapping = voices_mapping or {}
         # Re-run migration with the new mapping
         self._migrate_voice_setting()
-    
+
     def load_settings(self):
         """Load settings from JSON file or use defaults if file doesn't exist."""
         try:
             if self.config_path.exists():
-                with open(self.config_path, 'r', encoding='utf-8') as f:
+                with open(self.config_path, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
                 if not isinstance(loaded, dict):
                     logger.warning("Settings file is not a valid dictionary; resetting to defaults.")
@@ -347,7 +304,7 @@ class SettingsManager:
                 self._settings = {**copy.deepcopy(self.DEFAULT_SETTINGS), **loaded}
                 self._normalize_loaded_settings()
                 self._migrate_voice_setting()
-                
+
                 # Validate all settings and log any issues
                 issues = self.validate_settings()
                 if issues:
@@ -362,9 +319,9 @@ class SettingsManager:
             try:
                 self.config_path.rename(backup_path)
                 logger.warning(
-                    "Settings file is corrupted (%s). A backup has been saved to '%s'. "
-                    "Using defaults.",
-                    e, backup_path,
+                    "Settings file is corrupted (%s). A backup has been saved to '%s'. Using defaults.",
+                    e,
+                    backup_path,
                 )
             except OSError:
                 logger.warning("Error loading settings: %s. Using defaults.", e)
@@ -374,7 +331,7 @@ class SettingsManager:
             logger.warning("Error loading settings: %s. Using defaults.", e)
             self._settings = copy.deepcopy(self.DEFAULT_SETTINGS)
             self._update_persisted_settings_snapshot()
-    
+
     def _text_issue(self, key, value):
         """Return a human-readable issue for a suspicious text setting, else None."""
         for pattern in _TEXT_PARAM_PATTERNS:
@@ -465,13 +422,13 @@ class SettingsManager:
         logger.warning("Could not map voice '%s' for provider '%s'; resetting to '%s'", voice, provider, replacement)
         self._settings["voice"] = replacement
         self.save_settings()
-    
+
     def save_settings(self):
         """Save current settings to JSON file (atomic write to prevent corruption)."""
         with self._lock:
             tmp_path = self.config_path.with_suffix(".tmp")
             try:
-                with open(tmp_path, 'w', encoding='utf-8') as f:
+                with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump(self._settings, f, indent=4)
                 os.replace(tmp_path, self.config_path)
                 self._update_persisted_settings_snapshot()
@@ -483,12 +440,12 @@ class SettingsManager:
                 except OSError:
                     pass
                 return False
-    
+
     def get(self, key: str, default: Any = None) -> Any:
         """Get a setting value by key."""
         with self._lock:
             return self._settings.get(key, default)
-    
+
     @staticmethod
     def _default_voice_for_provider(provider: str) -> str:
         """Return the safe initial voice for a provider."""
@@ -525,7 +482,9 @@ class SettingsManager:
             # in the same settings transaction can still replace the fallback.
             if key == "tts_provider" and value in self.VALID_TTS_PROVIDERS:
                 current_voice = self._settings.get("voice")
-                if value != self._settings.get("tts_provider") and not self._voice_matches_provider(current_voice, value):
+                if value != self._settings.get("tts_provider") and not self._voice_matches_provider(
+                    current_voice, value
+                ):
                     self._settings["voice"] = self._default_voice_for_provider(value)
 
             # Keybind dictionaries are filtered (keeping valid entries) rather
@@ -543,7 +502,7 @@ class SettingsManager:
             if issue:
                 logger.warning("%s; resetting to default.", issue)
             self._settings[key] = normalized
-    
+
     def get_all(self):
         """Get all settings as a dictionary."""
         with self._lock:
@@ -558,7 +517,7 @@ class SettingsManager:
         """Restore the in-memory settings to the last snapshot known to match disk."""
         with self._lock:
             self._settings = copy.deepcopy(self._persisted_settings)
-    
+
     def update(self, settings_dict):
         """Update multiple settings at once."""
         with self._lock:
@@ -582,24 +541,22 @@ class SettingsManager:
     def update_and_save(self, settings_dict):
         """Update multiple settings and persist them atomically."""
         return self._mutate_and_save(lambda: self.update(settings_dict))
-    
+
     def reset_to_defaults(self):
         """Reset all settings to default values."""
-        return self._mutate_and_save(
-            lambda: setattr(self, "_settings", copy.deepcopy(self.DEFAULT_SETTINGS))
-        )
-    
+        return self._mutate_and_save(lambda: setattr(self, "_settings", copy.deepcopy(self.DEFAULT_SETTINGS)))
+
     def _validate_keybind_format(self, keybind_string: str) -> bool:
         """
         Validate keybind format using shared validation utility.
-        
+
         This ensures consistent validation between settings and the keybind manager
         without creating circular imports.
         """
         from ..utils.keybind_utils import validate_keybind_format
-        
+
         return validate_keybind_format(keybind_string)
-    
+
     def _validate_keybinds(self, keybinds) -> list:
         """Validate keybind entries, preserving the per-action message format."""
         issues = []

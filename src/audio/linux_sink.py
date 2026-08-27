@@ -5,8 +5,10 @@ stream routing, and audio-server detection live in one focused class.
 ``AudioRouter`` keeps thin delegating shims with the original names, so all
 existing callers (main.py, settings tabs, tests) keep working unchanged.
 """
+
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -53,7 +55,9 @@ class LinuxSinkManager:
         try:
             result = subprocess.run(
                 ["pactl", "list", "short", "modules"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
         except Exception:
             return
@@ -68,7 +72,8 @@ class LinuxSinkManager:
             try:
                 subprocess.run(
                     ["pactl", "unload-module", module_id],
-                    capture_output=True, timeout=3,
+                    capture_output=True,
+                    timeout=3,
                 )
                 logger.debug("Unloaded PulseAudio module %s", module_id)
             except Exception:
@@ -96,7 +101,9 @@ class LinuxSinkManager:
         try:
             check = subprocess.run(
                 ["pactl", "list", "short", "sinks"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
         except subprocess.TimeoutExpired:
             return False, "⚠ pactl timed out. Check your audio system."
@@ -106,17 +113,21 @@ class LinuxSinkManager:
             return False, f"❌ Unexpected error: {e}"
 
         sink_exists = any(
-            sink_name.lower() == part.strip().lower()
-            for line in check.stdout.splitlines()
-            for part in line.split("\t")
+            sink_name.lower() == part.strip().lower() for line in check.stdout.splitlines() for part in line.split("\t")
         )
         if not sink_exists:
             try:
                 created = subprocess.run(
-                    ["pactl", "load-module", "module-null-sink",
-                     f"sink_name={sink_name}",
-                     f"sink_properties=device.description={sink_description}"],
-                    capture_output=True, text=True, timeout=10,
+                    [
+                        "pactl",
+                        "load-module",
+                        "module-null-sink",
+                        f"sink_name={sink_name}",
+                        f"sink_properties=device.description={sink_description}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
             except subprocess.TimeoutExpired:
                 return False, "⚠ pactl timed out. Check your audio system."
@@ -132,7 +143,9 @@ class LinuxSinkManager:
         try:
             sources_check = subprocess.run(
                 ["pactl", "list", "short", "sources"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
         except subprocess.TimeoutExpired:
             return False, "⚠ pactl timed out. Check your audio system."
@@ -140,18 +153,23 @@ class LinuxSinkManager:
             return False, f"❌ Unexpected error: {e}"
 
         mic_exists = any(
-            virtual_mic_name in line.split("\t")
-            or virtual_mic_description in line.split("\t")
+            virtual_mic_name in line.split("\t") or virtual_mic_description in line.split("\t")
             for line in sources_check.stdout.splitlines()
         )
         if not mic_exists:
             try:
                 mic_created = subprocess.run(
-                    ["pactl", "load-module", "module-remap-source",
-                     f"source_name={virtual_mic_name}",
-                     f"source_properties=device.description={virtual_mic_description}",
-                     f"master={sink_name}.monitor"],
-                    capture_output=True, text=True, timeout=10,
+                    [
+                        "pactl",
+                        "load-module",
+                        "module-remap-source",
+                        f"source_name={virtual_mic_name}",
+                        f"source_properties=device.description={virtual_mic_description}",
+                        f"master={sink_name}.monitor",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
             except subprocess.TimeoutExpired:
                 return False, "⚠ pactl timed out. Check your audio system."
@@ -174,53 +192,88 @@ class LinuxSinkManager:
         Uses ``pactl list sink-inputs`` (one call per poll) and matches our
         stream by either process ID (PulseAudio-native clients) or application
         name (ALSA clients, which lack a PID field on PipeWire).
-        Polls every 80 ms with a 3 s deadline.
+        Polls every 80 ms with a 4 s deadline; retries on transient
+        move failures instead of giving up immediately.
         """
         if not self.is_linux or not self._sink_name:
             return
         sink_name = self._sink_name
 
-        # Match tokens: PID for PulseAudio-native, app name for ALSA.
-        pid_token = f'application.process.id = "{os.getpid()}"'
+        # Match tokens: PID with and without quotes (PipeWire vs Pulse differ)
+        # plus ALSA app name fallback.
+        pid = os.getpid()
+        pid_tokens = (
+            f'application.process.id = "{pid}"',
+            f"application.process.id = {pid}",
+            f'application.process.id="{pid}"',
+        )
         try:
             py_exe = os.path.basename(os.path.realpath(sys.executable))
         except OSError:
             py_exe = os.path.basename(sys.executable)
-        alsa_token = f'PipeWire ALSA [{py_exe}]'
+        alsa_token = f"PipeWire ALSA [{py_exe}]"
+        # Fallback: match any CriTTS stream (covers edge_tts naming quirks)
+        # ponytail: naive substring check; proper fix would parse pactl JSON if it existed
+        fallback_token = "CriTTS"
+
+        def _is_our_block(block: str) -> bool:
+            if any(t in block for t in pid_tokens):
+                return True
+            if alsa_token in block or fallback_token in block and "PipeWire ALSA" in block:
+                return True
+            return False
 
         def _route():
-            deadline = time.monotonic() + 3.0
+            deadline = time.monotonic() + 4.0
             while time.monotonic() < deadline:
                 time.sleep(0.08)
                 try:
                     result = subprocess.run(
                         ["pactl", "list", "sink-inputs"],
-                        capture_output=True, text=True, timeout=3,
+                        capture_output=True,
+                        text=True,
+                        timeout=3,
                     )
                 except Exception:
+                    continue
+                if result.returncode != 0:
                     continue
 
                 blocks = result.stdout.split("Sink Input #")
                 for block in blocks[1:]:
-                    # Skip blocks not belonging to our process
-                    if pid_token not in block and alsa_token not in block:
+                    if not _is_our_block(block):
                         continue
                     first_line = block.split("\n", 1)[0]
-                    sink_input_id = first_line.strip().split()[0]
-                    if not sink_input_id.isdigit():
+                    # ponytail: regex is sturdier than split()[0] on indented/empty lines
+                    m = re.match(r"\s*(\d+)", first_line)
+                    if not m:
                         continue
+                    sink_input_id = m.group(1)
                     try:
-                        subprocess.run(
+                        mv = subprocess.run(
                             ["pactl", "move-sink-input", sink_input_id, sink_name],
-                            capture_output=True, timeout=3,
+                            capture_output=True,
+                            text=True,
+                            timeout=3,
                         )
-                        logger.debug(
-                            "Routed sink-input %s to sink '%s'",
-                            sink_input_id, sink_name,
+                        if mv.returncode == 0:
+                            logger.debug(
+                                "Routed sink-input %s to sink '%s'",
+                                sink_input_id,
+                                sink_name,
+                            )
+                            return
+                        # Move failed (sink not ready, bad id) — retry next poll
+                        logger.warning(
+                            "move-sink-input %s -> %s failed: %s",
+                            sink_input_id,
+                            sink_name,
+                            mv.stderr.strip()[:200],
                         )
                     except Exception:
                         logger.debug("Sink-input routing failed", exc_info=True)
-                    return  # routed successfully — stop polling
+                    # Don't return on failure — keep polling until deadline
+                # No matching block found this poll — retry
 
         threading.Thread(target=_route, daemon=True).start()
 
@@ -245,9 +298,7 @@ class LinuxSinkManager:
         try:
             pactl = shutil.which("pactl")
             if pactl:
-                result = subprocess.run(
-                    [pactl, "info"], capture_output=True, text=True, timeout=3
-                )
+                result = subprocess.run([pactl, "info"], capture_output=True, text=True, timeout=3)
                 server = result.stdout
                 if "PipeWire" in server:
                     detected = "pipewire"
@@ -260,9 +311,7 @@ class LinuxSinkManager:
             # Check for PipeWire via pw-cli as fallback
             try:
                 if shutil.which("pw-cli"):
-                    result = subprocess.run(
-                        ["pw-cli", "info", "0"], capture_output=True, text=True, timeout=3
-                    )
+                    result = subprocess.run(["pw-cli", "info", "0"], capture_output=True, text=True, timeout=3)
                     if result.returncode == 0:
                         detected = "pipewire"
             except Exception:

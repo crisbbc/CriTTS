@@ -163,6 +163,23 @@ class IntegrationsMixin:
         if self.osc_client is not None:
             self.osc_client.send_voice_amplitude(amplitude)
 
+    def speak_quick_response(self, text: str) -> None:
+        """One-click VR quick response: fill the editor and speak (reuses TTS+OSC pipeline)."""
+        txt = (text or "").strip()
+        if not txt:
+            return
+        try:
+            self.text_input.delete("1.0", "end")
+            self.text_input.insert("1.0", txt)
+            self._refresh_after_text_mutation()
+        except Exception:
+            pass
+        # ponytail: reuse existing speak path, no duplicated TTS logic
+        try:
+            self._on_speak()
+        except Exception:
+            pass
+
     def shutdown(self):
         """Gracefully shutdown the main window and wait for worker threads."""
         if not self._async_callbacks_active:
