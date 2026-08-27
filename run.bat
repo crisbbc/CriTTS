@@ -14,6 +14,17 @@ echo   CriTTS Launcher
 echo ========================================
 echo.
 
+REM Bootstrap uv if missing (one-shot, silent) — uses official install.ps1
+where uv >nul 2>&1
+if errorlevel 1 (
+  where powershell >nul 2>&1
+  if not errorlevel 1 (
+    echo [INFO] uv not found - installing...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex" >nul 2>&1
+    if exist "%USERPROFILE%\.local\bin\uv.exe" set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+  )
+)
+
 where uv >nul 2>&1
 if not errorlevel 1 (
   if exist "%SCRIPT_DIR%scripts\update_check.py" start /b "" uv run python "%SCRIPT_DIR%scripts\update_check.py" >nul 2>&1

@@ -3,16 +3,28 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Bootstrap uv if missing (one-shot, non-interactive) — adds .local/bin to PATH for this run
+if ! command -v uv >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+  echo "[INFO] uv not found — installing..."
+  if curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; then
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+  fi
+fi
+
 # Prefer uv — it creates .venv, syncs deps from uv.lock, and runs.
 if command -v uv >/dev/null 2>&1; then
-  [ -f scripts/update_check.py ] && uv run python scripts/update_check.py &>/dev/null & disown 2>/dev/null || true
+  [ -f scripts/update_check.py ] && uv run python scripts/update_check.py &>/dev/null &
+  disown 2>/dev/null || true
   exec uv run python main.py
 fi
 
 # Fallback: system python + manual venv (for hosts without uv)
 PYTHON=""
 for c in python3 python; do
-  if command -v "$c" >/dev/null 2>&1; then PYTHON="$c"; break; fi
+  if command -v "$c" >/dev/null 2>&1; then
+    PYTHON="$c"
+    break
+  fi
 done
 if [ -z "$PYTHON" ]; then
   echo "[ERROR] Python 3.10+ not found. Install it or install uv:" >&2
@@ -39,5 +51,6 @@ else
   echo "[OK] Dependencies up to date."
 fi
 
-[ -f scripts/update_check.py ] && python scripts/update_check.py &>/dev/null & disown 2>/dev/null || true
+[ -f scripts/update_check.py ] && python scripts/update_check.py &>/dev/null &
+disown 2>/dev/null || true
 exec python main.py
