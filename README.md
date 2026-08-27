@@ -83,16 +83,13 @@ run.bat
 ./run.sh
 ```
 
-The launcher scripts handle everything automatically — zero manual setup:
+The launcher scripts handle everything automatically:
 
-1. **Auto-detect / auto-install Python** — if `python` (and `py -3` on Windows) isn't on PATH, the launcher prompts you once and offers to install Python for you:
-   - On Windows: downloads the python.org installer silently (per-user, with pip and PATH), or bootstraps via uv.
-   - On Linux/macOS: uses the system package manager (`apt`, `dnf`, `pacman`, or Homebrew), or falls back to uv.
-2. **Auto-create virtual environment** — creates an isolated `.venv/` in the project folder (prefers `uv venv`, falls back to `python -m venv`).  This keeps dependencies out of your system Python and works around PEP 668 restrictions on Arch, Fedora, Debian 12+, and MS Store Python.
-3. **Install Python dependencies** against `requirements.txt` via `scripts/install_deps.py`, which cascades through `pip` → `pip.exe` → `uv` → `ensurepip` to handle every environment.
-4. **Launch** `main.py`.
+1. **Use `uv` if available** — `uv run` auto-creates `.venv` and syncs deps from `uv.lock` (fast path, no fingerprint needed).
+2. **Fallback without uv** — creates `.venv` via `python -m venv`, installs `requirements.txt` only when the fingerprint mismatches or `customtkinter` import fails via `scripts/install_deps.py`.
+3. **Launch** `main.py` and fire-and-forget `scripts/update_check.py`.
 
-The launcher caches a fingerprint of `requirements.txt` so subsequent runs only re-install when dependencies change.
+Requires Python 3.10+ and optionally `uv` (<https://docs.astral.sh/uv/>).
 
 **Manual installation (if not using launchers):**
 
