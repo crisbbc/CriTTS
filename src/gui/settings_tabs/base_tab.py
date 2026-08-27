@@ -2,15 +2,23 @@
 Base Tab Class
 Abstract base class for settings tabs.
 """
+
 import logging
 import customtkinter as ctk
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Optional, List, Dict, Tuple
 
 from ..theme_constants import (
-    SPACING_XS, SPACING_SM, SPACING_MD, SPACING_LG,
-    FONT_SM, FONT_MD, FONT_LG, FONT_WEIGHT_BOLD,
-    RADIUS_MD, RADIUS_LG,
+    SPACING_XS,
+    SPACING_SM,
+    SPACING_MD,
+    SPACING_LG,
+    FONT_SM,
+    FONT_MD,
+    FONT_LG,
+    FONT_WEIGHT_BOLD,
+    RADIUS_MD,
+    RADIUS_LG,
     get_color_for_state,
     get_settings_surface_theme,
     SPACING_BASE,
@@ -80,9 +88,7 @@ SETTINGS_TAB_STYLE_AUDIT: Tuple[Dict[str, object], ...] = (
         "tab": "VRChat OSC",
         "pattern": "stacked-mixed-controls",
         "surface_mode": "shared helpers plus manual adapters",
-        "manual_adapters": (
-            "Complex subsection spacing across chatbox, viseme, and typing indicator controls",
-        ),
+        "manual_adapters": ("Complex subsection spacing across chatbox, viseme, and typing indicator controls",),
     },
     {
         "tab": "Advanced",
@@ -112,7 +118,7 @@ logger = logging.getLogger(__name__)
 class BaseTab(ABC):
     """
     Abstract base class for settings tabs.
-    
+
     Provides common functionality for all settings tabs including:
     - Reference to settings manager
     - Reference to TTS engine (optional)
@@ -120,18 +126,18 @@ class BaseTab(ABC):
     - Callback for settings changes
     - Common UI helpers
     """
-    
+
     def __init__(
         self,
         tab_widget: ctk.CTkFrame,
         settings_manager: Any,
         tts_engine: Any = None,
         audio_router: Any = None,
-        on_change: Optional[Callable] = None
+        on_change: Optional[Callable] = None,
     ):
         """
         Initialize the base tab.
-        
+
         Args:
             tab_widget: The CTkFrame widget for this tab
             settings_manager: Settings manager instance
@@ -144,7 +150,7 @@ class BaseTab(ABC):
         self.tts_engine = tts_engine
         self.audio_router = audio_router
         self.on_change = on_change
-        
+
         # Track labels that need dynamic wraplength.
         #
         # The three coalescing-related states cooperate to damp the
@@ -255,16 +261,16 @@ class BaseTab(ABC):
             "border_width": 1,
             "border_color": surface_theme["border_color"],
         }
-    
+
     @abstractmethod
     def _create_content(self):
         """Create the tab content. Must be implemented by subclasses."""
         pass
-    
+
     def add_wraplength_label(self, label: ctk.CTkLabel):
         """Add a label to the wraplength tracking list."""
         self._wraplength_labels.append(label)
-    
+
     def update_wraplength(self, available_width: int):
         """Update wraplength for all tracked labels."""
         for label in self._wraplength_labels:
@@ -273,31 +279,31 @@ class BaseTab(ABC):
                     label.configure(wraplength=available_width)
             except Exception:
                 logger.debug("Label wraplength update failed", exc_info=True)
-    
+
     @abstractmethod
     def get_settings(self) -> Dict[str, Any]:
         """
         Get current settings from the tab UI.
-        
+
         Returns:
             Dictionary of setting key -> value pairs
         """
         pass
-    
+
     @abstractmethod
     def validate(self) -> List[str]:
         """
         Validate the tab's settings.
-        
+
         Returns:
             List of error messages (empty if valid)
         """
         pass
-    
+
     def create_section_header(
         self,
         text: str,
-        parent: ctk.CTkFrame = None,
+        parent: Any = None,
         register_sidebar: bool = True,
     ) -> ctk.CTkLabel:
         """Create a section header label and add a sidebar button for it."""
@@ -325,7 +331,7 @@ class BaseTab(ABC):
                 anchor="w",
                 font=ctk.CTkFont(size=FONT_SM),
                 corner_radius=RADIUS_MD,
-                command=lambda section=label: self._scroll_to_section(section)
+                command=lambda section=label: self._scroll_to_section(section),
             )
             btn.pack(fill="x", padx=SPACING_XS, pady=SPACING_BASE)
 
@@ -334,7 +340,7 @@ class BaseTab(ABC):
     def create_section_surface(
         self,
         title: str,
-        parent: ctk.CTkFrame = None,
+        parent: Any = None,
         description: Optional[str] = None,
         register_sidebar: bool = True,
     ) -> Tuple[ctk.CTkFrame, ctk.CTkFrame]:
@@ -424,7 +430,7 @@ class BaseTab(ABC):
         # Main layout container
         self.layout_frame = ctk.CTkFrame(self.tab, fg_color="transparent")
         self.layout_frame.pack(fill="both", expand=True, padx=0, pady=0)
-        
+
         self.sidebar_shell = ctk.CTkFrame(
             self.layout_frame,
             width=170,
@@ -553,7 +559,7 @@ class BaseTab(ABC):
                 except Exception:
                     self._pending_wraplength_job = None
 
-    def create_description(self, text: str, parent: ctk.CTkFrame = None) -> ctk.CTkLabel:
+    def create_description(self, text: str, parent: Any = None) -> ctk.CTkLabel:
         """Create a top-level section description label using shared text tokens."""
         surface_theme = self.get_active_surface_theme()
         label = ctk.CTkLabel(
@@ -561,14 +567,14 @@ class BaseTab(ABC):
             text=text,
             font=ctk.CTkFont(size=FONT_SM),
             text_color=surface_theme["text_primary"],
-            wraplength=540
+            wraplength=540,
         )
         self._wraplength_labels.append(label)
         return label
 
     def create_inline_frame(
         self,
-        parent: ctk.CTkFrame = None,
+        parent: Any = None,
         *,
         fill: str = "x",
         pady: Any = 5,
@@ -582,7 +588,7 @@ class BaseTab(ABC):
     def create_setting_label(
         self,
         text: str,
-        parent: ctk.CTkFrame = None,
+        parent: Any = None,
         *,
         font_size: int = FONT_MD,
         font_weight: Optional[str] = None,
@@ -604,7 +610,7 @@ class BaseTab(ABC):
 
     def create_nested_surface_frame(
         self,
-        parent: ctk.CTkFrame = None,
+        parent: Any = None,
         **kwargs: Any,
     ) -> ctk.CTkFrame:
         """Create a nested frame using the shared settings surface treatment."""
@@ -612,7 +618,7 @@ class BaseTab(ABC):
 
     def create_nested_scrollable_surface(
         self,
-        parent: ctk.CTkFrame = None,
+        parent: Any = None,
         **kwargs: Any,
     ) -> ctk.CTkScrollableFrame:
         """Create a nested scrollable surface using the shared settings surface treatment."""
@@ -621,7 +627,7 @@ class BaseTab(ABC):
     def create_helper_text(
         self,
         text: str,
-        parent: ctk.CTkFrame = None,
+        parent: Any = None,
         *,
         font_size: int = FONT_SM,
         justify: str = "left",
@@ -642,7 +648,7 @@ class BaseTab(ABC):
 
     def create_surface_status_label(
         self,
-        parent: ctk.CTkFrame = None,
+        parent: Any = None,
         *,
         text: str = "",
         wraplength: int = 500,
@@ -659,8 +665,8 @@ class BaseTab(ABC):
         )
         self._wraplength_labels.append(label)
         return label
-    
-    def create_separator(self, parent: ctk.CTkFrame = None):
+
+    def create_separator(self, parent: Any = None):
         """Create a horizontal separator line."""
         surface_theme = self.get_active_surface_theme()
         return ctk.CTkFrame(

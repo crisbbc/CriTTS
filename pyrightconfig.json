@@ -3,5 +3,7 @@
     "venv": ".venv",
     "include": ["src", "scripts", "main.py"],
     "reportMissingImports": "warning",
-    "reportMissingTypeStubs": "none"
+    "reportMissingTypeStubs": "none",
+    "reportArgumentType": "warning",
+    "reportAttributeAccessIssue": "warning"
 }

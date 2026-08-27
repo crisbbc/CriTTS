@@ -2,20 +2,45 @@
 Settings Window GUI Module
 Modal settings dialog for voice, audio device, and appearance configuration.
 """
+
 import copy
 import logging
 import customtkinter as ctk
 from typing import Optional, Callable, List, Dict, Any
 
 from .settings_tabs import (
-    VoiceTab, AudioOutputTab, AppearanceTab, AbbreviationsTab,
-    KeybindsTab, BehaviorTab, SoundboardTab, VRChatOSCTab, AdvancedTab, TTSProviderTab
+    VoiceTab,
+    AudioOutputTab,
+    AppearanceTab,
+    AbbreviationsTab,
+    KeybindsTab,
+    BehaviorTab,
+    SoundboardTab,
+    VRChatOSCTab,
+    AdvancedTab,
+    TTSProviderTab,
 )
 from .theme_constants import (
-    SPACING_SM, SPACING_MD, SPACING_LG, COLOR_SUCCESS, COLOR_SUCCESS_HOVER, COLOR_DANGER, COLOR_DANGER_HOVER, FONT_SM, FONT_MD, FONT_LG, FONT_XL, FONT_WEIGHT_BOLD,
-    BUTTON_HEIGHT, BUTTON_WIDTH_DEFAULT,
-    RADIUS_MD, RADIUS_LG, WINDOW_SETTINGS_WIDTH, WINDOW_SETTINGS_HEIGHT,
-    WINDOW_SETTINGS_MIN_WIDTH, WINDOW_SETTINGS_MIN_HEIGHT,
+    SPACING_SM,
+    SPACING_MD,
+    SPACING_LG,
+    COLOR_SUCCESS,
+    COLOR_SUCCESS_HOVER,
+    COLOR_DANGER,
+    COLOR_DANGER_HOVER,
+    FONT_SM,
+    FONT_MD,
+    FONT_LG,
+    FONT_XL,
+    FONT_WEIGHT_BOLD,
+    BUTTON_HEIGHT,
+    BUTTON_WIDTH_DEFAULT,
+    RADIUS_MD,
+    RADIUS_LG,
+    WINDOW_SETTINGS_WIDTH,
+    WINDOW_SETTINGS_HEIGHT,
+    WINDOW_SETTINGS_MIN_WIDTH,
+    WINDOW_SETTINGS_MIN_HEIGHT,
     get_settings_surface_theme,
 )
 
@@ -53,14 +78,10 @@ EAGER_SETTINGS_TABS = frozenset(("Voice", "Advanced", "TTS Provider"))
 def get_settings_tabview_style(
     mode: Optional[str] = None,
     *,
-    surface_theme: Optional[Dict[str, object]] = None,
-) -> Dict[str, object]:
+    surface_theme: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Return the shared style used by the settings tab chrome."""
-    resolved_surface_theme = (
-        surface_theme
-        if surface_theme is not None
-        else get_settings_surface_theme(mode)
-    )
+    resolved_surface_theme = surface_theme if surface_theme is not None else get_settings_surface_theme(mode)
     return {
         "fg_color": resolved_surface_theme["pane_fg"],
         "corner_radius": resolved_surface_theme["shell_corner_radius"],
@@ -77,26 +98,17 @@ def get_settings_tabview_style(
 
 class SettingsWindow:
     """Settings dialog window for CriTTS Recoded."""
-    
-    def __init__(
-        self,
-        parent: ctk.CTk,
-        settings_manager,
-        tts_engine,
-        audio_router,
-        on_save: Optional[Callable] = None
-    ):
+
+    def __init__(self, parent: ctk.CTk, settings_manager, tts_engine, audio_router, on_save: Optional[Callable] = None):
         self.parent = parent
         self.settings = settings_manager
         self.tts_engine = tts_engine
         self.audio_router = audio_router
         self.on_save = on_save
-        
+
         self._create_window()
         self._on_refresh()
 
-
-    
     def _create_window(self):
         """Create the settings window with a minimum safe layout size."""
         self.window = ctk.CTkToplevel(self.parent)
@@ -105,7 +117,7 @@ class SettingsWindow:
         self.window.minsize(WINDOW_SETTINGS_MIN_WIDTH, WINDOW_SETTINGS_MIN_HEIGHT)
         self.window.transient(self.parent)
         self.window.grab_set()
-        
+
         # Center window
         self.window.update_idletasks()
         x = (self.window.winfo_screenwidth() // 2) - (WINDOW_SETTINGS_WIDTH // 2)
@@ -127,13 +139,13 @@ class SettingsWindow:
         self.window.grid_columnconfigure(0, weight=1)
         self.window.grid_rowconfigure(0, weight=1)  # Content expands
         self.window.grid_rowconfigure(1, weight=0)  # Buttons fixed
-        
+
         # Main container with standardized padding
         self.main_frame = ctk.CTkFrame(self.window, fg_color=surface_theme["window_fg"])
         self.main_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(1, weight=1)  # Tabview expands
-        
+
         # Title with theme font
         self.title_label = ctk.CTkLabel(
             self.main_frame,
@@ -142,7 +154,7 @@ class SettingsWindow:
             text_color=surface_theme["text_primary"],
         )
         self.title_label.grid(row=0, column=0, padx=SPACING_MD, pady=(SPACING_MD, SPACING_LG), sticky="w")
-         
+
         # Create tabbed interface with consistent padding
         self.tabview = ctk.CTkTabview(
             self.main_frame,
@@ -153,7 +165,7 @@ class SettingsWindow:
             ),
         )
         self.tabview.grid(row=1, column=0, padx=SPACING_LG, pady=SPACING_LG, sticky="nsew")
-        
+
         self._initialize_tab_hydration_state()
         self._register_tab_factory(
             "Voice",
@@ -178,7 +190,7 @@ class SettingsWindow:
         )
         self._register_tab_factory("TTS Provider", TTSProviderTab)
         self._hydrate_initial_tabs(selected_tab)
-        
+
         # Buttons frame - fixed at bottom with standardized padding
         self.buttons_frame = ctk.CTkFrame(
             self.window,
@@ -188,7 +200,7 @@ class SettingsWindow:
             border_color=surface_theme["border_color"],
         )
         self.buttons_frame.grid(row=1, column=0, padx=SPACING_LG, pady=(0, SPACING_MD), sticky="ew")
-        
+
         # Save button with theme colors
         self.save_button = ctk.CTkButton(
             self.buttons_frame,
@@ -230,7 +242,7 @@ class SettingsWindow:
             corner_radius=RADIUS_MD,
         )
         self.cancel_button.pack(side="right", padx=SPACING_SM, pady=SPACING_SM)
-        
+
         # Reset to Defaults button
         self.reset_button = ctk.CTkButton(
             self.buttons_frame,
@@ -244,7 +256,7 @@ class SettingsWindow:
             corner_radius=RADIUS_MD,
         )
         self.reset_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
-        
+
         # Refresh button
         self.refresh_button = ctk.CTkButton(
             self.buttons_frame,
@@ -258,7 +270,7 @@ class SettingsWindow:
             corner_radius=RADIUS_MD,
         )
         self.refresh_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM)
-        
+
         # Bind X-button to cancel handler so it doesn't leak dirty in-memory state
         self.window.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
@@ -306,7 +318,7 @@ class SettingsWindow:
         tab_name: str,
         tab_class: Any,
         *,
-        parent_window: Optional[ctk.CTk] = None,
+        parent_window: Optional[Any] = None,
     ) -> None:
         """Create a tab container immediately but defer tab-object construction until needed."""
         tab_frame = self.tabview.add(tab_name)
@@ -330,11 +342,7 @@ class SettingsWindow:
 
     def _sync_tabs_in_display_order(self) -> None:
         """Keep the hydrated-tab list aligned with SETTINGS_TAB_ORDER."""
-        self.tabs = [
-            self._tab_objects[tab_name]
-            for tab_name in SETTINGS_TAB_ORDER
-            if tab_name in self._tab_objects
-        ]
+        self.tabs = [self._tab_objects[tab_name] for tab_name in SETTINGS_TAB_ORDER if tab_name in self._tab_objects]
 
     def _wire_provider_voice_callback(self) -> None:
         """Reconnect provider -> voice live updates once both tabs exist."""
@@ -399,7 +407,7 @@ class SettingsWindow:
     def _on_refresh(self):
         """Reload data for all tabs."""
         for tab in self.tabs:
-            if hasattr(tab, '_load_data') and callable(tab._load_data):
+            if hasattr(tab, "_load_data") and callable(tab._load_data):
                 tab._load_data()
 
     def _on_change_placeholder(self, *args, **kwargs):
@@ -455,17 +463,17 @@ class SettingsWindow:
             self._refresh_theme_scheduled = False
             logger.debug("Unable to schedule deferred settings refresh", exc_info=True)
 
-    def _restore_last_persisted_settings(self, fallback_settings: Optional[Dict[str, object]] = None) -> None:
+    def _restore_last_persisted_settings(self, fallback_settings: Optional[Dict[str, Any]] = None) -> None:
         """Restore runtime settings to the last snapshot known to match the persisted file."""
         restore_last_persisted = getattr(self.settings, "restore_last_persisted_settings", None)
         if callable(restore_last_persisted):
             restore_last_persisted()
             return
 
-        persisted_settings = None
+        persisted_settings: Optional[Any] = None
         get_persisted_settings = getattr(self.settings, "get_persisted_settings", None)
         if callable(get_persisted_settings):
-            persisted_settings = copy.deepcopy(get_persisted_settings())
+            persisted_settings = copy.deepcopy(get_persisted_settings())  # type: ignore[assignment]
         elif fallback_settings is not None:
             persisted_settings = copy.deepcopy(fallback_settings)
 
@@ -529,9 +537,12 @@ class SettingsWindow:
             error_dialog.transient(self.window)
             error_dialog.grab_set()
 
-            ctk.CTkLabel(error_dialog, text="⚠ Invalid Settings",
-                         font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD),
-                         text_color="orange").pack(pady=(SPACING_LG, SPACING_SM))
+            ctk.CTkLabel(
+                error_dialog,
+                text="⚠ Invalid Settings",
+                font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD),
+                text_color="orange",
+            ).pack(pady=(SPACING_LG, SPACING_SM))
 
             error_text = ctk.CTkTextbox(error_dialog, wrap="word", state="normal")
             error_text.pack(fill="both", expand=True, padx=SPACING_LG, pady=SPACING_SM)
@@ -541,12 +552,12 @@ class SettingsWindow:
             ctk.CTkButton(error_dialog, text="OK", command=error_dialog.destroy).pack(pady=SPACING_LG)
             return
 
-        previous_settings = None
+        previous_settings: Optional[Any] = None
         get_persisted_settings = getattr(self.settings, "get_persisted_settings", None)
         if callable(get_persisted_settings):
-            previous_settings = copy.deepcopy(get_persisted_settings())
+            previous_settings = copy.deepcopy(get_persisted_settings())  # type: ignore[assignment]
         elif hasattr(self.settings, "get_all"):
-            previous_settings = copy.deepcopy(self.settings.get_all())
+            previous_settings = copy.deepcopy(self.settings.get_all())  # type: ignore[assignment]
 
         # Validation passed — now mutate in-memory state and persist
         for tab_settings in all_tab_settings:
@@ -586,7 +597,7 @@ class SettingsWindow:
             self._restore_last_persisted_settings()
         self._teardown_tabs()
         self.window.destroy()
-    
+
     def _on_reset_to_defaults(self):
         """Reset all settings to their default values."""
         # Create confirmation dialog
@@ -595,31 +606,29 @@ class SettingsWindow:
         confirm_dialog.geometry("400x180")
         confirm_dialog.transient(self.window)
         confirm_dialog.grab_set()
-        
+
         # Center dialog
         confirm_dialog.update_idletasks()
         x = (confirm_dialog.winfo_screenwidth() // 2) - (400 // 2)
         y = (confirm_dialog.winfo_screenheight() // 2) - (180 // 2)
         confirm_dialog.geometry(f"+{x}+{y}")
-        
+
         ctk.CTkLabel(
-            confirm_dialog,
-            text="Reset All Settings?",
-            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
+            confirm_dialog, text="Reset All Settings?", font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
         ).pack(pady=(SPACING_LG, SPACING_SM))
-        
+
         ctk.CTkLabel(
             confirm_dialog,
             text="This will reset all settings to their default values. This action cannot be undone.",
             font=ctk.CTkFont(size=FONT_SM),
-            wraplength=350
+            wraplength=350,
         ).pack(pady=SPACING_SM)
-        
+
         def do_reset():
             try:
                 # Reset settings to defaults
                 reset_succeeded = self.settings.reset_to_defaults()
-                if reset_succeeded is False:
+                if not reset_succeeded:
                     logger.warning("Settings persistence failed during reset to defaults")
                     self._show_settings_error_dialog(
                         "Reset Error",
@@ -642,10 +651,10 @@ class SettingsWindow:
                     "❌ Settings Not Reset",
                     "CriTTS hit an unexpected error while resetting settings to defaults.",
                 )
-        
+
         buttons_frame = ctk.CTkFrame(confirm_dialog, fg_color="transparent")
         buttons_frame.pack(pady=SPACING_LG)
-        
+
         ctk.CTkButton(
             buttons_frame,
             text="Reset",
@@ -653,13 +662,9 @@ class SettingsWindow:
             command=do_reset,
             width=100,
             fg_color=COLOR_DANGER,
-            hover_color=COLOR_DANGER_HOVER
+            hover_color=COLOR_DANGER_HOVER,
         ).pack(side="left", padx=SPACING_SM)
-        
+
         ctk.CTkButton(
-            buttons_frame,
-            text="Cancel",
-            font=ctk.CTkFont(size=FONT_MD),
-            command=confirm_dialog.destroy,
-            width=100
+            buttons_frame, text="Cancel", font=ctk.CTkFont(size=FONT_MD), command=confirm_dialog.destroy, width=100
         ).pack(side="left", padx=SPACING_SM)

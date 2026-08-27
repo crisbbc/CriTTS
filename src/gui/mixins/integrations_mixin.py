@@ -1,6 +1,6 @@
 """IntegrationsMixin - extracted from main_window.py (behavior unchanged)."""
+
 from typing import Any
-import logging
 from ..theme_constants import (
     COLOR_NEUTRAL,
     COLOR_NEUTRAL_MEDIUM,
@@ -35,7 +35,6 @@ class IntegrationsMixin:
     stt_engine: Any
     tts_engine: Any
 
-
     def _on_toggle_overlay(self):
         """Handle overlay toggle button click."""
         previous_visible = self._overlay_visible
@@ -52,20 +51,14 @@ class IntegrationsMixin:
         if self._overlay_visible:
             self._recording_overlay.show_overlay()
             # Sync current recording state (using state machine)
-            is_recording = (self._stt_state == STTState.RECORDING)
+            is_recording = self._stt_state == STTState.RECORDING
             self._recording_overlay.set_recording(is_recording)
             # Update button appearance to active
-            self.overlay_button.configure(
-                fg_color=COLOR_PRIMARY,
-                hover_color=COLOR_PRIMARY_HOVER
-            )
+            self.overlay_button.configure(fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER)
         else:
             self._recording_overlay.hide_overlay()
             # Update button appearance to inactive
-            self.overlay_button.configure(
-                fg_color=COLOR_NEUTRAL_MEDIUM,
-                hover_color=COLOR_NEUTRAL
-            )
+            self.overlay_button.configure(fg_color=COLOR_NEUTRAL_MEDIUM, hover_color=COLOR_NEUTRAL)
 
     def _setup_osc_client(self):
         """Setup OSC client for VRChat chatbox integration."""
@@ -76,17 +69,17 @@ class IntegrationsMixin:
             except Exception:
                 pass
             self.osc_client = None
-        
+
         # Check if OSC is enabled
         if not self.settings.get("vrchat_osc_enabled", False):
             # Also clear viseme mapper when OSC is disabled
             self._setup_viseme_mapper()
             return
-        
+
         # Get OSC settings
         ip = self.settings.get("vrchat_osc_ip", "127.0.0.1")
         port = self.settings.get("vrchat_osc_port", 9000)
-        
+
         # Create and connect client
         try:
             self.osc_client = VRChatOSCClient(ip=ip, port=port)
@@ -98,7 +91,7 @@ class IntegrationsMixin:
         except Exception:
             self._set_status("OSC setup failed", "⚠️")
             self.osc_client = None
-        
+
         # Setup viseme mapper after OSC client is configured
         self._setup_viseme_mapper()
 
@@ -112,24 +105,24 @@ class IntegrationsMixin:
         if self._viseme_mapper is not None:
             self._viseme_mapper.stop_viseme_animation()
             self._viseme_mapper = None
-        
+
         self._amplitude_analyzer = None
-        
+
         # Check if viseme is enabled and OSC client is connected
         viseme_enabled = self.settings.get("vrchat_viseme_enabled", False)
         if not viseme_enabled:
             return
-        
+
         if self.osc_client is None:
             return
-        
+
         # Get viseme settings
         smoothing = self.settings.get("vrchat_viseme_smoothing", 0.5)
         amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
-        
+
         # Instantiate viseme mapper
         self._viseme_mapper = VisemeMapper(smoothing=smoothing)
-        
+
         # Instantiate amplitude analyzer if amplitude mode is enabled
         if amplitude_enabled:
             self._amplitude_analyzer = AmplitudeAnalyzer()
@@ -138,7 +131,7 @@ class IntegrationsMixin:
         """Setup the recording overlay window."""
         # Create the overlay
         self._recording_overlay = RecordingOverlay(self.root)
-        
+
         # Show or hide based on saved preference
         if self._overlay_visible:
             self._recording_overlay.show_overlay()
@@ -162,9 +155,7 @@ class IntegrationsMixin:
     def _get_amplitude_forwarder(self) -> "OscAmplitudeForwarder":
         """Return the shared OSC amplitude forwarder, creating it on demand."""
         if self._amplitude_forwarder is None:
-            self._amplitude_forwarder = OscAmplitudeForwarder(
-                self._forward_voice_amplitude
-            )
+            self._amplitude_forwarder = OscAmplitudeForwarder(self._forward_voice_amplitude)
         return self._amplitude_forwarder
 
     def _forward_voice_amplitude(self, amplitude: float) -> None:
@@ -183,17 +174,17 @@ class IntegrationsMixin:
         # Stop typing animation if active
         if self._chatbox.is_typing_active:
             self._stop_typing_animation()
-        
+
         # Signal stop to any running TTS operation
         self._stop_event.set()
-        
+
         # Stop audio playback
         self.audio_router.stop_playback()
-        
+
         # Stop viseme animation if active
         if self._viseme_mapper is not None:
             self._viseme_mapper.stop_viseme_animation()
-        
+
         # Disconnect OSC client
         if self.osc_client:
             try:
@@ -201,7 +192,7 @@ class IntegrationsMixin:
             except Exception:
                 pass
             self.osc_client = None
-        
+
         # Stop the OSC amplitude forwarder thread
         if self._amplitude_forwarder is not None:
             self._amplitude_forwarder.stop()
@@ -210,7 +201,7 @@ class IntegrationsMixin:
         # Shutdown STT engine if available
         if self.stt_engine:
             self.stt_engine.shutdown()
-        
+
         # Destroy recording overlay if it exists
         if self._recording_overlay:
             try:
@@ -218,10 +209,10 @@ class IntegrationsMixin:
             except Exception:
                 pass
             self._recording_overlay = None
-        
+
         # Wait for worker threads to complete (with timeout)
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=2.0)
-        
+
         # Unregister all keybinds
         self.keybind_manager.unregister_all(self.root)

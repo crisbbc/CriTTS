@@ -1,6 +1,6 @@
 """AnimationMixin - extracted from main_window.py (behavior unchanged)."""
+
 import datetime
-import logging
 from typing import Optional, Any
 from ..theme_constants import (
     SPACING_SM,
@@ -10,10 +10,8 @@ from ..theme_constants import (
     COLOR_NEUTRAL_MEDIUM,
     COLOR_SUCCESS,
     COLOR_WARNING,
-    COLOR_ACCENT,
-    COLOR_ACCENT_HOVER,
 )
-from ..gui_utils import LatestWinsTextAnalysisScheduler, DeferredTextAnalysisRequest
+from ..gui_utils import DeferredTextAnalysisRequest
 
 
 class AnimationMixin:
@@ -35,25 +33,19 @@ class AnimationMixin:
     tts_engine: Any
     voice_indicator_value: Any
 
-
     def _update_status(self):
         """Update status label with current voice and device."""
         voice = self.settings.get("voice", "Default")
         device_idx = self.settings.get("device_index")
-        
+
         if device_idx is not None:
             devices = self.audio_router.get_audio_devices()
-            device_name = next(
-                (d['name'] for d in devices if d['index'] == device_idx),
-                "Unknown Device"
-            )
+            device_name = next((d["name"] for d in devices if d["index"] == device_idx), "Unknown Device")
         else:
             device_name = "Default Device"
-        
-        self.status_label.configure(
-            text=f"Voice: {voice} | Output: {device_name}"
-        )
-        
+
+        self.status_label.configure(text=f"Voice: {voice} | Output: {device_name}")
+
         # Update voice indicator
         self._update_voice_indicator()
 
@@ -73,7 +65,7 @@ class AnimationMixin:
         """Update the voice indicator label for a specific text snapshot."""
         voice = self.settings.get("voice", "Default")
         auto_language = self.settings.get("auto_language_detection", False)
-        
+
         if auto_language:
             text = text.strip()
             if text:
@@ -86,7 +78,7 @@ class AnimationMixin:
                 if detected_lang and voice_short_name:
                     language_mappings = self.settings.get("language_voice_mappings", {})
                     custom_voice = language_mappings.get(detected_lang)
-                    
+
                     if custom_voice:
                         voice_name = custom_voice
                     else:
@@ -95,10 +87,10 @@ class AnimationMixin:
                             voice_name = f"{voice_info['name']} ({voice_info['locale']})"
                         else:
                             voice_name = voice_short_name
-                    
+
                     lang_names = {
                         "zh": "Chinese",
-                        "ja": "Japanese", 
+                        "ja": "Japanese",
                         "ko": "Korean",
                         "ru": "Russian",
                         "ar": "Arabic",
@@ -108,9 +100,9 @@ class AnimationMixin:
                         "fr": "French",
                         "de": "German",
                         "it": "Italian",
-                        "en": "English"
+                        "en": "English",
                     }
-                    
+
                     detected_lang_name = lang_names.get(detected_lang, detected_lang.title())
                     new_text = f"{voice_name} (Auto: {detected_lang_name})"
                     new_color = "green"
@@ -120,20 +112,11 @@ class AnimationMixin:
 
                     self._animate_voice_indicator(new_text, new_color)
                 else:
-                    self.voice_indicator_value.configure(
-                        text=f"{voice} (Auto: Unknown)",
-                        text_color="orange"
-                    )
+                    self.voice_indicator_value.configure(text=f"{voice} (Auto: Unknown)", text_color="orange")
             else:
-                self.voice_indicator_value.configure(
-                    text=f"{voice} (Auto: No text)",
-                    text_color="gray"
-                )
+                self.voice_indicator_value.configure(text=f"{voice} (Auto: No text)", text_color="gray")
         else:
-            self.voice_indicator_value.configure(
-                text=voice,
-                text_color="gray"
-            )
+            self.voice_indicator_value.configure(text=voice, text_color="gray")
 
     def _schedule_voice_indicator_update(self):
         """Debounce expensive voice-indicator analysis with latest-wins semantics."""
@@ -168,9 +151,9 @@ class AnimationMixin:
         # Guard: Skip if already animating to prevent orphaned animation chains
         if self._voice_indicator_animating:
             return
-        
+
         current_text = self.voice_indicator_value.cget("text")
-        
+
         # Only animate if the text actually changed
         if current_text != new_text:
             self._voice_indicator_animating = True
@@ -199,7 +182,7 @@ class AnimationMixin:
 
     def _pulse_label(self, label, duration: float):
         """Create a subtle pulse animation for a label.
-        
+
         Note: CustomTkinter doesn't support alpha/opacity animation directly.
         This method is kept as a placeholder for potential future enhancements.
         """
@@ -210,7 +193,7 @@ class AnimationMixin:
     def _update_ui_speaking(self, speaking: bool):
         """
         Update UI state based on speaking status with smooth animations.
-        
+
         This method handles the visual feedback for TTS operations, including
         button state transitions and loading animations.
         """
@@ -218,9 +201,11 @@ class AnimationMixin:
             # Start speaking animation
             self._tts_speaking = True
             self._start_speaking_animation()
-            
+
             # Animate speak button to disabled/speaking state
-            self._animate_button(self.speak_button, "disabled", "▶  Speaking...", COLOR_NEUTRAL_MEDIUM, ANIMATION_NORMAL)
+            self._animate_button(
+                self.speak_button, "disabled", "▶  Speaking...", COLOR_NEUTRAL_MEDIUM, ANIMATION_NORMAL
+            )
             # Animate stop button to active state
             self._animate_button(self.stop_button, "normal", "⏹  Stop", COLOR_WARNING, ANIMATION_NORMAL)
             # Animate clear button to disabled state
@@ -229,7 +214,7 @@ class AnimationMixin:
             # Stop speaking animation
             self._tts_speaking = False
             self._stop_speaking_animation()
-            
+
             # Animate speak button back to normal
             self._animate_button(self.speak_button, "normal", "▶  Speak", COLOR_SUCCESS, ANIMATION_NORMAL)
             # Animate stop button back to disabled
@@ -248,17 +233,17 @@ class AnimationMixin:
         """Animate the speaking button with cycling dots."""
         if not self._speaking_animation_running:
             return
-        
+
         if self._tts_speaking:
             try:
                 frame = self._speaking_animation_frames[self._speaking_animation_index]
                 self.speak_button.configure(text=frame)
             except Exception:
                 pass  # Button may have been destroyed
-            
+
             # Cycle through frames
             self._speaking_animation_index = (self._speaking_animation_index + 1) % len(self._speaking_animation_frames)
-            
+
             # Schedule next frame (500ms for smooth animation)
             self._safe_after(500, self._animate_speaking_button)
 
@@ -269,7 +254,7 @@ class AnimationMixin:
     def _animate_button(self, button, state: str, text: str, color: str, duration: float):
         """
         Animate a button with smooth color and text transitions.
-        
+
         Args:
             button: The CTkButton to animate
             state: Target state ("normal" or "disabled")
@@ -279,17 +264,17 @@ class AnimationMixin:
         """
         # Store original color for hover effect
         button._original_color = color
-        
+
         # Animate color change with pulse effect
         self._animate_button_color(button, color, duration)
-        
+
         # Update text and state
         button.configure(text=text, state=state)
 
     def _animate_button_color(self, button, target_color: str, duration: float):
         """
         Animate button color transition.
-        
+
         Uses a multi-step color transition for smoother animation.
         """
         # Get current color
@@ -297,11 +282,11 @@ class AnimationMixin:
             current_color = button.cget("fg_color")
         except Exception:
             current_color = target_color
-        
+
         # If colors are the same, no animation needed
         if current_color == target_color:
             return
-        
+
         # CustomTkinter doesn't support direct color interpolation,
         # so we use a stepped transition effect
         self._transition_button_color(button, current_color, target_color, 3, duration)
@@ -309,24 +294,24 @@ class AnimationMixin:
     def _transition_button_color(self, button, from_color: str, to_color: str, steps: int, total_duration: float):
         """
         Transition button color through intermediate steps.
-        
+
         Creates a smoother visual transition by briefly flashing through
         an intermediate state.
         """
         if steps <= 0:
             button.configure(fg_color=to_color)
             return
-        
+
         # For the first step, set to target color immediately with pulse effect
         button.configure(fg_color=to_color)
-        
+
         # Add a subtle scale pulse effect
         self._pulse_button(button, to_color, total_duration)
 
     def _pulse_button(self, button, target_color: str, duration: float):
         """
         Create a pulse effect for button animation.
-        
+
         This adds visual feedback by briefly expanding the button width
         then returning to normal size.
         """
@@ -334,13 +319,13 @@ class AnimationMixin:
             # Add a subtle scale effect by changing size slightly
             # Use the constant to prevent width accumulation on rapid repeated calls
             button.configure(width=BUTTON_WIDTH_DEFAULT + 4)
-            
+
             def reset_size():
                 try:
                     button.configure(width=BUTTON_WIDTH_DEFAULT)
                 except Exception:
                     pass  # Button may have been destroyed or reconfigured
-            
+
             self._safe_after(int(duration * 300), reset_size)
         except Exception:
             pass  # Button may not support width configuration
@@ -350,17 +335,17 @@ class AnimationMixin:
         # Format message with timestamp for better logging
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         formatted_message = f"[{timestamp}] {message}"
-        
+
         # Animate status text change
         self._animate_status_change(f"{icon} {formatted_message}" if icon else formatted_message, message_type)
-        
+
         # Update activity indicator based on message type
         self._animate_activity_indicator(message_type)
 
     def _animate_status_change(self, new_text: str, message_type: str):
         """Animate the status text change with smooth transitions."""
         current_text = self.status_label.cget("text")
-        
+
         # Only animate if text changed
         if current_text != new_text:
             # Fade out current text
@@ -384,14 +369,14 @@ class AnimationMixin:
         # Get target color based on message type
         color_map = {
             "speaking": "#2ecc71",  # Green for active
-            "error": "#e74c3c",     # Red for error
-            "warning": "#f39c12",   # Orange for warning
-            "success": "#27ae60",   # Dark green for success
-            "info": "gray60"        # Gray for normal
+            "error": "#e74c3c",  # Red for error
+            "warning": "#f39c12",  # Orange for warning
+            "success": "#27ae60",  # Dark green for success
+            "info": "gray60",  # Gray for normal
         }
-        
+
         target_color = color_map.get(message_type, "gray60")
-        
+
         # Animate color change
         self._animate_indicator_color(self.activity_indicator, target_color, 0.2)
 
@@ -404,7 +389,7 @@ class AnimationMixin:
     def _set_progress(self, message: str, animated: bool = False):
         """
         Update progress indicator with optional animation.
-        
+
         Args:
             message: Progress message to display
             animated: If True, show animated loading indicator
@@ -419,7 +404,7 @@ class AnimationMixin:
             # Stop any running animation
             self._progress_animation_running = False
             self.progress_label.configure(text=message)
-        
+
         if message:
             self.progress_label.pack(side="right", padx=SPACING_SM)
         else:
@@ -429,17 +414,17 @@ class AnimationMixin:
         """Animate the progress indicator with cycling dots."""
         if not self._progress_animation_running:
             return
-        
+
         frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         frame = frames[self._progress_animation_index]
-        
+
         try:
             self.progress_label.configure(text=f"{frame} {self._progress_base_message}")
         except Exception:
             pass
-        
+
         self._progress_animation_index = (self._progress_animation_index + 1) % len(frames)
-        
+
         # Schedule next frame (80ms for smooth spinner)
         self._safe_after(80, self._animate_progress)
 

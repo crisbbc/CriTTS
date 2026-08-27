@@ -3,6 +3,22 @@ name = "critts"
 version = "2.0.0"
 description = "A modern, free Text-to-Speech application with a sleek GUI (Edge/Piper/Coqui)"
 requires-python = ">=3.10"
+dependencies = [
+    "customtkinter>=5.2.0",
+    "edge-tts>=7.2.3",
+    "piper-tts>=1.2.0",
+    "coqui-tts[codec]>=0.27.5",
+    "spacy[ja]>=3.7.0",
+    "langid>=1.1.6",
+    "sounddevice>=0.4.6",
+    "soundfile>=0.12.0",
+    "numpy>=1.21.0",
+    "scipy>=1.9.0",
+    "pyloudnorm>=0.1.0",
+    "python-osc>=1.8.0",
+    "SpeechRecognition>=3.10.0",
+    "keyboard>=0.13.5",
+]
 
 # ---------------------------------------------------------------------------
 # Ruff — fast Python linting.  Pragmatic rule set: real errors and bug risks
@@ -50,3 +66,10 @@ no_implicit_optional = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 ignore_errors = true
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=1.4",
+    "ruff>=0.9",
+]
