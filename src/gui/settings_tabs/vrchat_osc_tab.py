@@ -68,6 +68,7 @@ class VRChatOSCTab(BaseTab):
         quick_section, quick_content = self.create_section_surface(
             "Quick Responses (VRChat)",
             parent=self.scroll,
+            register_sidebar=False,
         )
         quick_section.pack(fill="x", pady=(0, SPACING_MD))
         self._create_quick_responses_section(quick_content)
