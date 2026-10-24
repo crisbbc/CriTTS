@@ -11,6 +11,14 @@ from src.audio.audio_router import AudioRouter
 from src.tts.tts_engine import TTSEngine
 
 
+class _NoopTicket:
+    def opened(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 class _Reader:
     def __init__(self, data: bytes):
         self.data = data
@@ -103,7 +111,7 @@ async def test_streaming_drains_every_decoded_frame(monkeypatch):
 
     router = AudioRouter()
     monkeypatch.setattr(router, "_process_playback_audio", lambda data, sample_rate, *_args: (data, sample_rate))
-    monkeypatch.setattr(router, "_route_to_linux_sink", lambda: None)
+    monkeypatch.setattr(router, "_begin_stream_open", AsyncMock(return_value=_NoopTicket()))
     _OutputStream.played_frames = 0
 
     assert await router.play_audio_streaming(_one_chunk_then())
@@ -118,7 +126,7 @@ async def test_streaming_reports_errors_after_playback_starts(monkeypatch):
 
     router = AudioRouter()
     monkeypatch.setattr(router, "_process_playback_audio", lambda data, sample_rate, *_args: (data, sample_rate))
-    monkeypatch.setattr(router, "_route_to_linux_sink", lambda: None)
+    monkeypatch.setattr(router, "_begin_stream_open", AsyncMock(return_value=_NoopTicket()))
 
     assert not await router.play_audio_streaming(_one_chunk_then(RuntimeError("network failed")))
 

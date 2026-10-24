@@ -170,24 +170,30 @@ def test_stream_speech_falls_back_to_provider_default_voice(tmp_path):
         engine.shutdown()
 
 
-def test_linux_routing_moves_new_stream_not_existing_passthrough(monkeypatch):
+def _fake_pactl(monkeypatch, listings):
+    """Patch linux_sink so `pactl list` returns *listings* in turn (None = failure).
+
+    Threads run inline, so a ticket's routing finishes inside opened().
+    Returns the list of recorded move-sink-input commands.
+    """
     import os
     import subprocess
 
     from src.audio import linux_sink
-    from src.audio.linux_sink import LinuxSinkManager
 
     pid = os.getpid()
-
-    def block(sink_input_id: int) -> str:
-        return f"Sink Input #{sink_input_id}\n\tProperties:\n\t\tapplication.process.id = \"{pid}\"\n"
-
-    listings = iter([block(10), block(10) + block(42)])
+    listings = iter(listings)
     moves = []
 
     def fake_run(cmd, **_kwargs):
         if cmd[:3] == ["pactl", "list", "sink-inputs"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout=next(listings), stderr="")
+            ids = next(listings, None)
+            if ids is None:
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="busy")
+            stdout = "".join(
+                f"Sink Input #{i}\n\tProperties:\n\t\tapplication.process.id = \"{pid}\"\n" for i in ids
+            )
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
         moves.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -201,10 +207,91 @@ def test_linux_routing_moves_new_stream_not_existing_passthrough(monkeypatch):
     monkeypatch.setattr(linux_sink.sys, "platform", "linux")
     monkeypatch.setattr(linux_sink.subprocess, "run", fake_run)
     monkeypatch.setattr(linux_sink.threading, "Thread", InlineThread)
-    monkeypatch.setattr(linux_sink.time, "sleep", lambda _s: None)
+    return moves
+
+
+def _routed_manager():
+    from src.audio.linux_sink import LinuxSinkManager
 
     manager = LinuxSinkManager()
     manager.set_sink_name("crittssink")
-    manager.route_to_sink()
+    return manager
+
+
+def test_linux_routing_moves_new_stream_not_existing_passthrough(monkeypatch):
+    moves = _fake_pactl(monkeypatch, [[10], [10, 42]])
+    manager = _routed_manager()
+
+    ticket = manager.begin_stream_open(route=True)
+    ticket.opened()
 
     assert moves == [["pactl", "move-sink-input", "42", "crittssink"]]
+    assert not manager._open_lock.locked()
+
+
+def test_linux_routing_skips_when_baseline_listing_fails(monkeypatch):
+    # Without a baseline, the existing passthrough (10) looks new; never guess.
+    moves = _fake_pactl(monkeypatch, [None, [10, 42]])
+    manager = _routed_manager()
+
+    ticket = manager.begin_stream_open(route=True)
+    ticket.opened()
+    ticket.close()
+
+    assert moves == []
+    assert not manager._open_lock.locked()
+
+
+def test_linux_routing_does_nothing_when_stream_never_starts(monkeypatch):
+    # Stop pressed (or the device failed to open) between the ticket and the stream.
+    moves = _fake_pactl(monkeypatch, [[10], [10, 42]])
+    manager = _routed_manager()
+
+    ticket = manager.begin_stream_open(route=True)
+    ticket.close()
+    ticket.opened()  # a late opened() after close must not start routing
+
+    assert moves == []
+    assert not manager._open_lock.locked()
+
+
+def test_linux_unrouted_stream_holds_open_lock_until_its_sink_input_appears(monkeypatch):
+    moves = _fake_pactl(monkeypatch, [[10], [10, 50]])
+    manager = _routed_manager()
+
+    ticket = manager.begin_stream_open(route=False)
+    assert manager._open_lock.locked()
+    ticket.opened()
+
+    assert moves == []
+    assert not manager._open_lock.locked()
+
+
+def test_linux_routing_ignores_ambiguous_streams_after_lock_released(monkeypatch):
+    # Our stream did not show up within the identify window; once the lock is
+    # released a preview (51) can appear too, and two new ids must not be guessed.
+    from src.audio import linux_sink
+
+    clock = iter([0.0, 0.0, 2.0, 2.0, 5.0, 5.0])
+    monkeypatch.setattr(linux_sink.time, "monotonic", lambda: next(clock, 10.0))
+    moves = _fake_pactl(monkeypatch, [[10], [10], [10, 42, 51]])
+    manager = _routed_manager()
+
+    ticket = manager.begin_stream_open(route=True)
+    ticket._closed.wait = lambda _timeout: None
+    ticket.opened()
+
+    assert moves == []
+    assert not manager._open_lock.locked()
+
+
+def test_linux_preview_stream_is_kept_on_default_sink(monkeypatch):
+    # Stream-restore would reopen a preview on our sink after TTS was routed there.
+    moves = _fake_pactl(monkeypatch, [[10], [10, 50]])
+    manager = _routed_manager()
+
+    ticket = manager.begin_stream_open(route=False, keep_on_default=True)
+    ticket.opened()
+
+    assert moves == [["pactl", "move-sink-input", "50", "@DEFAULT_SINK@"]]
+    assert not manager._open_lock.locked()

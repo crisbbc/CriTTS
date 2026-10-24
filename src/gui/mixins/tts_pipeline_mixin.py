@@ -142,8 +142,8 @@ class TTSPipelineMixin:
 
             # Linux: configure PulseAudio/PipeWire sink auto-routing.
             # PortAudio on most Linux systems only ships the ALSA backend,
-            # so PULSE_SINK has no effect.  AudioRouter._route_to_linux_sink()
-            # polls for the just-opened stream and moves it with pactl.
+            # so PULSE_SINK has no effect.  AudioRouter finds the just-opened
+            # stream (LinuxSinkManager.begin_stream_open) and moves it with pactl.
             if self.audio_router.is_linux:
                 linux_sink = self.settings.get("linux_sink_name", "")
                 self.audio_router.set_linux_sink_name(linux_sink)

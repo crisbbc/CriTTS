@@ -22,7 +22,14 @@ logger = logging.getLogger(__name__)
 class LinuxSinkManager:
     """Manages the CriTTS null sink + virtual mic on PulseAudio/PipeWire."""
 
+    # Upper bounds for the stream-open handshake (see begin_stream_open).
+    _OPEN_LOCK_TIMEOUT = 2.0  # wait for another stream's handshake
+    _IDENTIFY_TIMEOUT = 1.0  # wait for our sink input to appear while holding the lock
+    _ROUTE_TIMEOUT = 4.0  # keep retrying the move this long after start
+
     def __init__(self):
+        # Serialises stream opens of this process; see begin_stream_open.
+        self._open_lock = threading.Lock()
         # Sink name to auto-route TTS audio to (set externally before playback)
         self._sink_name: str = ""
 
@@ -245,53 +252,40 @@ class LinuxSinkManager:
                 ids.append(int(m.group(1)))
         return sorted(ids)
 
-    def route_to_sink(self) -> None:
-        """Move the output stream that is about to be opened to the configured sink.
+    def begin_stream_open(self, route: bool, *, keep_on_default: bool = False) -> "StreamOpenTicket":
+        """Reserve the right to open one output stream; call right before opening it.
 
-        Must be called *before* the stream is opened: it snapshots this
-        process's existing sink inputs (mic passthrough, a concurrent voice
-        preview, ...) so that only a stream appearing afterwards is moved.
-        A daemon thread then polls every 80 ms with a 4 s deadline and moves
-        the newest new sink input, retrying on transient move failures.
+        Blocking (lock wait + one ``pactl`` call), so async callers run it via
+        ``asyncio.to_thread``.  The returned ticket holds a process-wide lock
+        until the new stream's sink input has been seen, so no other stream of
+        this process (a voice preview, mic passthrough) can appear in between:
+        the one new sink input is unambiguously ours.  Unrouted streams take a
+        ticket too, so they never land inside a routed stream's window.
+
+        *keep_on_default* moves an unrouted stream to the default sink.  PipeWire's
+        stream-restore remembers the sink per application name, so once a TTS
+        stream has been moved to our sink every later stream of this process
+        (e.g. a voice preview) would otherwise open there too.
+
+        Call :meth:`StreamOpenTicket.opened` once the stream has started and
+        :meth:`StreamOpenTicket.close` when playback ends (or never started).
         """
-        if not self.is_linux or not self._sink_name:
-            return
-        sink_name = self._sink_name
-        baseline = set(self._list_our_sink_inputs(timeout=1) or [])
-
-        def _route():
-            deadline = time.monotonic() + 4.0
-            while time.monotonic() < deadline:
-                time.sleep(0.08)
-                ids = self._list_our_sink_inputs(timeout=3)
-                if not ids:
-                    continue
-                new_ids = [sink_input_id for sink_input_id in ids if sink_input_id not in baseline]
-                if not new_ids:
-                    continue
-                # Sink-input indices only grow, so the newest one is ours.
-                sink_input_id = str(new_ids[-1])
-                try:
-                    mv = subprocess.run(
-                        ["pactl", "move-sink-input", sink_input_id, sink_name],
-                        capture_output=True,
-                        text=True,
-                        timeout=3,
-                    )
-                    if mv.returncode == 0:
-                        logger.debug("Routed sink-input %s to sink '%s'", sink_input_id, sink_name)
-                        return
-                    # Move failed (sink not ready, bad id) — retry next poll
-                    logger.warning(
-                        "move-sink-input %s -> %s failed: %s",
-                        sink_input_id,
-                        sink_name,
-                        mv.stderr.strip()[:200],
-                    )
-                except Exception:
-                    logger.debug("Sink-input routing failed", exc_info=True)
-
-        threading.Thread(target=_route, daemon=True).start()
+        if not self.is_linux:
+            return StreamOpenTicket(self, acquired=False, baseline=None, sink_name="")
+        acquired = self._open_lock.acquire(timeout=self._OPEN_LOCK_TIMEOUT)
+        if not acquired:
+            logger.warning("Timed out waiting for the stream-open lock; opening without it")
+        baseline = self._list_our_sink_inputs(timeout=1)
+        if route:
+            sink_name = self._sink_name
+        else:
+            sink_name = "@DEFAULT_SINK@" if keep_on_default and self._sink_name else ""
+        if sink_name and baseline is None:
+            # Without a baseline the new stream cannot be told apart from
+            # existing ones; skip routing rather than move the wrong stream.
+            logger.warning("Could not list sink inputs; not routing this stream to '%s'", sink_name)
+            sink_name = ""
+        return StreamOpenTicket(self, acquired=acquired, baseline=set(baseline or []), sink_name=sink_name)
 
     def detect_audio_system(self) -> str:
         """
@@ -335,3 +329,87 @@ class LinuxSinkManager:
 
         self._cached_audio_system = detected
         return detected
+
+
+class StreamOpenTicket:
+    """One output-stream open, from just before opening until its sink input is known.
+
+    Created by :meth:`LinuxSinkManager.begin_stream_open`.  A ticket with an
+    empty *sink_name* only holds the lock until its stream shows up.
+    """
+
+    _POLL_INTERVAL = 0.05
+
+    def __init__(self, manager: LinuxSinkManager, *, acquired: bool, baseline: Optional[set], sink_name: str):
+        self._manager = manager
+        self._acquired = acquired
+        self._baseline = baseline
+        self._sink_name = sink_name
+        self._closed = threading.Event()
+        self._release_guard = threading.Lock()
+
+    def _release(self) -> None:
+        with self._release_guard:
+            if self._acquired:
+                self._acquired = False
+                self._manager._open_lock.release()
+
+    def opened(self) -> None:
+        """The stream has started: find its sink input (and move it) on a daemon thread."""
+        if self._closed.is_set() or self._baseline is None or (not self._acquired and not self._sink_name):
+            self._release()
+            return
+        threading.Thread(target=self._identify_and_route, daemon=True).start()
+
+    def close(self) -> None:
+        """Playback ended or never started: stop routing and free the lock. Idempotent."""
+        self._closed.set()
+        self._release()
+
+    def _identify_and_route(self) -> None:
+        manager = self._manager
+        start = time.monotonic()
+        sink_input_id: Optional[int] = None
+        try:
+            while not self._closed.is_set():
+                elapsed = time.monotonic() - start
+                if elapsed >= manager._ROUTE_TIMEOUT:
+                    return
+                if self._acquired and elapsed >= manager._IDENTIFY_TIMEOUT:
+                    # Do not block other streams any longer; later polls may be
+                    # ambiguous, so they only accept a single new sink input.
+                    self._release()
+                    if not self._sink_name:
+                        return
+                if sink_input_id is None:
+                    ids = manager._list_our_sink_inputs(timeout=1) or []
+                    new_ids = [i for i in ids if i not in self._baseline]
+                    if len(new_ids) == 1 or (new_ids and self._acquired):
+                        # Under the lock only our stream can be new.
+                        sink_input_id = new_ids[-1]
+                        self._release()
+                        if not self._sink_name:
+                            return
+                if sink_input_id is not None and self._move(sink_input_id):
+                    return
+                self._closed.wait(self._POLL_INTERVAL)
+        finally:
+            self._release()
+
+    def _move(self, sink_input_id: int) -> bool:
+        try:
+            mv = subprocess.run(
+                ["pactl", "move-sink-input", str(sink_input_id), self._sink_name],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+        except Exception:
+            logger.debug("Sink-input routing failed", exc_info=True)
+            return False
+        if mv.returncode == 0:
+            logger.debug("Routed sink-input %s to sink '%s'", sink_input_id, self._sink_name)
+            return True
+        # Sink not ready yet or the stream already ended; retry next poll.
+        logger.warning("move-sink-input %s -> %s failed: %s", sink_input_id, self._sink_name, mv.stderr.strip()[:200])
+        return False

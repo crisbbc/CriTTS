@@ -18,7 +18,7 @@ from typing import Any, List, Dict, Optional, Tuple, cast
 from scipy import signal
 from math import ceil, gcd, sqrt
 
-from .linux_sink import LinuxSinkManager
+from .linux_sink import LinuxSinkManager, StreamOpenTicket
 
 logger = logging.getLogger(__name__)
 try:
@@ -789,34 +789,37 @@ class AudioRouter:
 
         channels = data.shape[1] if len(data.shape) > 1 else 1
 
-        # Linux: route the stream we are about to open to the configured sink
-        # (must run before opening; see LinuxSinkManager.route_to_sink).
-        # Skip for previews so the user can hear the voice test through speakers.
-        if not skip_sink_routing:
-            self._route_to_linux_sink()
-
-        stream = sd.OutputStream(
-            device=device_index,
-            samplerate=effective_sr,
-            channels=channels,
-            callback=callback,
-            finished_callback=lambda: report_amplitude(0.0),
-        )
+        # Linux: previews are not routed so the user hears the voice test
+        # through their speakers; see LinuxSinkManager.begin_stream_open.
+        ticket = await self._begin_stream_open(route=not skip_sink_routing, keep_on_default=skip_sink_routing)
+        stream = None
         try:
+            if stopped():
+                return False
+            stream = sd.OutputStream(
+                device=device_index,
+                samplerate=effective_sr,
+                channels=channels,
+                callback=callback,
+                finished_callback=lambda: report_amplitude(0.0),
+            )
             if not self._register_stream(channel, token, stream):
                 return False
 
             with stream:
+                ticket.opened()
                 while stream.active and not stopped():
                     await asyncio.sleep(wait_interval)
 
             return not stopped()
         finally:
-            self._unregister_stream(channel, stream)
-            try:
-                stream.close()
-            except Exception:
-                logger.debug("Stream close failed during cleanup", exc_info=True)
+            ticket.close()
+            if stream is not None:
+                self._unregister_stream(channel, stream)
+                try:
+                    stream.close()
+                except Exception:
+                    logger.debug("Stream close failed during cleanup", exc_info=True)
 
     async def _play_audio_bytes(
         self,
@@ -1028,12 +1031,9 @@ class AudioRouter:
         """
         return LinuxSinkManager.ensure_modules(sink_name)
 
-    def _route_to_linux_sink(self) -> None:
-        """Route the output stream about to be opened to our sink (call before opening).
-
-        See :meth:`LinuxSinkManager.route_to_sink` for details.
-        """
-        self._linux_sink.route_to_sink()
+    async def _begin_stream_open(self, route: bool, keep_on_default: bool = False) -> StreamOpenTicket:
+        """Run LinuxSinkManager.begin_stream_open off the event loop (it blocks on a lock and pactl)."""
+        return await asyncio.to_thread(self._linux_sink.begin_stream_open, route, keep_on_default=keep_on_default)
 
     def is_playing(self) -> bool:
         """Check if audio is currently playing on any channel."""
@@ -1189,6 +1189,7 @@ class AudioRouter:
 
         process = None
         stream_tasks = []
+        ticket = None
         stream = None
         token = self._playback_token(channel)
 
@@ -1423,8 +1424,10 @@ class AudioRouter:
                 )
                 output_sr = sample_rate
 
-            # Linux: route the stream we are about to open to the configured sink.
-            self._route_to_linux_sink()
+            # Linux: route the stream to the configured sink once it has started.
+            ticket = await self._begin_stream_open(route=True)
+            if stopped():
+                return False
 
             stream = sd.OutputStream(
                 device=device_index,
@@ -1437,6 +1440,7 @@ class AudioRouter:
                 return False
 
             with stream:
+                ticket.opened()
                 while stream.active and not stopped():
                     await asyncio.sleep(0.05)
 
@@ -1484,6 +1488,8 @@ class AudioRouter:
                     await process.wait()
                 except Exception:
                     logger.debug("Waiting for decoder process exit failed", exc_info=True)
+            if ticket is not None:
+                ticket.close()
             if stream is not None:
                 self._unregister_stream(channel, stream)
                 try:
@@ -1492,6 +1498,24 @@ class AudioRouter:
                     logger.debug("Stream close failed during cleanup", exc_info=True)
 
     def start_mic_passthrough(
+        self,
+        input_device_index: Optional[int],
+        output_device_index: Optional[int],
+        volume: float = 1.0,
+        sample_rate: int = 48000,
+    ) -> Tuple[bool, Optional[str]]:
+        """Start continuous microphone passthrough to an output device."""
+        # Passthrough is never routed, but its stream must not appear inside a
+        # routed TTS stream's open window (LinuxSinkManager.begin_stream_open).
+        ticket = self._linux_sink.begin_stream_open(route=False)
+        ok, error = self._start_mic_passthrough(input_device_index, output_device_index, volume, sample_rate)
+        if ok:
+            ticket.opened()
+        else:
+            ticket.close()
+        return ok, error
+
+    def _start_mic_passthrough(
         self,
         input_device_index: Optional[int],
         output_device_index: Optional[int],
