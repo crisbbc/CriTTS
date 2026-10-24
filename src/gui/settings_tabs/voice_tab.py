@@ -70,7 +70,7 @@ class VoiceTab(BaseTab):
             audio_router = getattr(self, "audio_router", None)
             if audio_router is not None:
                 try:
-                    audio_router.stop_playback()
+                    audio_router.stop_playback(channel=audio_router.PREVIEW_CHANNEL)
                 except Exception:
                     logger.debug("Ignoring preview stop failure during VoiceTab invalidation", exc_info=True)
 
@@ -874,6 +874,8 @@ class VoiceTab(BaseTab):
                         enable_norm,
                         norm_type,
                         skip_sink_routing=True,
+                        stop_event=self._preview_stop_event,
+                        channel=self.audio_router.PREVIEW_CHANNEL,
                     )
                 )
 
@@ -933,7 +935,7 @@ class VoiceTab(BaseTab):
         """Stop voice preview."""
         self._preview_stop_event.set()
         if self.audio_router:
-            self.audio_router.stop_playback()
+            self.audio_router.stop_playback(channel=self.audio_router.PREVIEW_CHANNEL)
 
     def _on_rate_change(self, value):
         """No-op: sliders moved to Quick Controls panel."""

@@ -94,7 +94,7 @@ class LinuxSinkManager:
             return True, ""
 
         if not shutil.which("pactl"):
-            return False, "⚠ pactl not found. Is PipeWire installed?"
+            return False, "⚠ pactl is missing. Install the PulseAudio utilities package, then retry."
 
         # 1. Check / create the null sink (fixed description so cleanup finds it)
         sink_description = "CriTTS_Null_Sink"
@@ -106,11 +106,17 @@ class LinuxSinkManager:
                 timeout=5,
             )
         except subprocess.TimeoutExpired:
-            return False, "⚠ pactl timed out. Check your audio system."
+            return False, "⚠ Audio server did not respond. Restart PipeWire/PulseAudio, then retry."
         except FileNotFoundError:
-            return False, "⚠ pactl not found. Is PipeWire installed?"
+            return False, "⚠ pactl is missing. Install the PulseAudio utilities package, then retry."
         except Exception as e:
-            return False, f"❌ Unexpected error: {e}"
+            return False, f"❌ Could not check audio sinks: {e}"
+        if check.returncode != 0:
+            err = check.stderr.strip() or "pactl could not connect"
+            return False, (
+                f"⚠ Cannot contact the audio server: {err}. "
+                "Start PipeWire/PulseAudio, then retry."
+            )
 
         sink_exists = any(
             sink_name.lower() == part.strip().lower() for line in check.stdout.splitlines() for part in line.split("\t")
@@ -148,9 +154,15 @@ class LinuxSinkManager:
                 timeout=5,
             )
         except subprocess.TimeoutExpired:
-            return False, "⚠ pactl timed out. Check your audio system."
+            return False, "⚠ Audio server did not respond. Restart PipeWire/PulseAudio, then retry."
         except Exception as e:
-            return False, f"❌ Unexpected error: {e}"
+            return False, f"❌ Could not check audio sources: {e}"
+        if sources_check.returncode != 0:
+            err = sources_check.stderr.strip() or "pactl could not connect"
+            return False, (
+                f"⚠ Cannot contact the audio server: {err}. "
+                "Start PipeWire/PulseAudio, then retry."
+            )
 
         mic_exists = any(
             virtual_mic_name in line.split("\t") or virtual_mic_description in line.split("\t")
@@ -185,95 +197,99 @@ class LinuxSinkManager:
 
         return True, f"✅ Ready! Set Discord input to:\n   {virtual_mic_description}"
 
-    def route_to_sink(self) -> None:
-        """Spawn a daemon thread that polls for the just-created sink input
-        and moves it to the configured PulseAudio/PipeWire sink.
+    @staticmethod
+    def _is_our_block(block: str) -> bool:
+        """True when a ``pactl list sink-inputs`` block belongs to this process.
 
-        Uses ``pactl list sink-inputs`` (one call per poll) and matches our
-        stream by either process ID (PulseAudio-native clients) or application
-        name (ALSA clients, which lack a PID field on PipeWire).
-        Polls every 80 ms with a 4 s deadline; retries on transient
-        move failures instead of giving up immediately.
+        Matches by process ID (PulseAudio-native clients, quoted or not) or by
+        the ALSA application name (ALSA clients lack a PID field on PipeWire).
         """
-        if not self.is_linux or not self._sink_name:
-            return
-        sink_name = self._sink_name
-
-        # Match tokens: PID with and without quotes (PipeWire vs Pulse differ)
-        # plus ALSA app name fallback.
         pid = os.getpid()
         pid_tokens = (
             f'application.process.id = "{pid}"',
             f"application.process.id = {pid}",
             f'application.process.id="{pid}"',
         )
+        if any(t in block for t in pid_tokens):
+            return True
         try:
             py_exe = os.path.basename(os.path.realpath(sys.executable))
         except OSError:
             py_exe = os.path.basename(sys.executable)
-        alsa_token = f"PipeWire ALSA [{py_exe}]"
         # Fallback: match any CriTTS stream (covers edge_tts naming quirks)
         # ponytail: naive substring check; proper fix would parse pactl JSON if it existed
-        fallback_token = "CriTTS"
+        return f"PipeWire ALSA [{py_exe}]" in block or ("CriTTS" in block and "PipeWire ALSA" in block)
 
-        def _is_our_block(block: str) -> bool:
-            if any(t in block for t in pid_tokens):
-                return True
-            if alsa_token in block or fallback_token in block and "PipeWire ALSA" in block:
-                return True
-            return False
+    @classmethod
+    def _list_our_sink_inputs(cls, timeout: float) -> Optional[list]:
+        """Return this process's sink-input IDs (ascending), or None on failure."""
+        try:
+            result = subprocess.run(
+                ["pactl", "list", "sink-inputs"],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except Exception:
+            return None
+        if result.returncode != 0:
+            return None
+
+        ids = []
+        for block in result.stdout.split("Sink Input #")[1:]:
+            if not cls._is_our_block(block):
+                continue
+            # ponytail: regex is sturdier than split()[0] on indented/empty lines
+            m = re.match(r"\s*(\d+)", block.split("\n", 1)[0])
+            if m:
+                ids.append(int(m.group(1)))
+        return sorted(ids)
+
+    def route_to_sink(self) -> None:
+        """Move the output stream that is about to be opened to the configured sink.
+
+        Must be called *before* the stream is opened: it snapshots this
+        process's existing sink inputs (mic passthrough, a concurrent voice
+        preview, ...) so that only a stream appearing afterwards is moved.
+        A daemon thread then polls every 80 ms with a 4 s deadline and moves
+        the newest new sink input, retrying on transient move failures.
+        """
+        if not self.is_linux or not self._sink_name:
+            return
+        sink_name = self._sink_name
+        baseline = set(self._list_our_sink_inputs(timeout=1) or [])
 
         def _route():
             deadline = time.monotonic() + 4.0
             while time.monotonic() < deadline:
                 time.sleep(0.08)
+                ids = self._list_our_sink_inputs(timeout=3)
+                if not ids:
+                    continue
+                new_ids = [sink_input_id for sink_input_id in ids if sink_input_id not in baseline]
+                if not new_ids:
+                    continue
+                # Sink-input indices only grow, so the newest one is ours.
+                sink_input_id = str(new_ids[-1])
                 try:
-                    result = subprocess.run(
-                        ["pactl", "list", "sink-inputs"],
+                    mv = subprocess.run(
+                        ["pactl", "move-sink-input", sink_input_id, sink_name],
                         capture_output=True,
                         text=True,
                         timeout=3,
                     )
+                    if mv.returncode == 0:
+                        logger.debug("Routed sink-input %s to sink '%s'", sink_input_id, sink_name)
+                        return
+                    # Move failed (sink not ready, bad id) — retry next poll
+                    logger.warning(
+                        "move-sink-input %s -> %s failed: %s",
+                        sink_input_id,
+                        sink_name,
+                        mv.stderr.strip()[:200],
+                    )
                 except Exception:
-                    continue
-                if result.returncode != 0:
-                    continue
-
-                blocks = result.stdout.split("Sink Input #")
-                for block in blocks[1:]:
-                    if not _is_our_block(block):
-                        continue
-                    first_line = block.split("\n", 1)[0]
-                    # ponytail: regex is sturdier than split()[0] on indented/empty lines
-                    m = re.match(r"\s*(\d+)", first_line)
-                    if not m:
-                        continue
-                    sink_input_id = m.group(1)
-                    try:
-                        mv = subprocess.run(
-                            ["pactl", "move-sink-input", sink_input_id, sink_name],
-                            capture_output=True,
-                            text=True,
-                            timeout=3,
-                        )
-                        if mv.returncode == 0:
-                            logger.debug(
-                                "Routed sink-input %s to sink '%s'",
-                                sink_input_id,
-                                sink_name,
-                            )
-                            return
-                        # Move failed (sink not ready, bad id) — retry next poll
-                        logger.warning(
-                            "move-sink-input %s -> %s failed: %s",
-                            sink_input_id,
-                            sink_name,
-                            mv.stderr.strip()[:200],
-                        )
-                    except Exception:
-                        logger.debug("Sink-input routing failed", exc_info=True)
-                    # Don't return on failure — keep polling until deadline
-                # No matching block found this poll — retry
+                    logger.debug("Sink-input routing failed", exc_info=True)
 
         threading.Thread(target=_route, daemon=True).start()
 

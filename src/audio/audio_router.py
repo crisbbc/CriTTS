@@ -42,9 +42,82 @@ class PreparedAudioPayload:
         return len(self.data) / self.sample_rate
 
 
+# Playback channels.  Each channel is cancelled independently, so stopping a
+# settings-window voice preview never cuts off the main speech (and vice versa).
+MAIN_CHANNEL = "main"
+PREVIEW_CHANNEL = "preview"
+
+# pyloudnorm's integrated loudness needs at least one 400 ms gating block.
+_LUFS_MIN_SECONDS = 0.4
+
+
+def _clarity_eq_sos(sample_rate: int) -> np.ndarray:
+    """Second-order sections for the speech clarity EQ (see _apply_clarity_eq)."""
+    sections = []
+
+    # Stage 1: high-pass at 80 Hz
+    hp_norm = 80.0 / (sample_rate / 2.0)
+    if 0.0 < hp_norm < 1.0:
+        sections.append(signal.butter(2, hp_norm, btype='high', output='sos'))
+
+    # Stage 2: peaking EQ at 2500 Hz, +2.5 dB, Q=0.8
+    f0 = 2500.0
+    gain_db = 2.5
+    Q = 0.8
+    A = 10 ** (gain_db / 40.0)
+    w0 = 2.0 * np.pi * f0 / sample_rate
+    alpha = np.sin(w0) / (2.0 * Q)
+    cos_w0 = np.cos(w0)
+    b_peak = np.array([1.0 + alpha * A, -2.0 * cos_w0, 1.0 - alpha * A])
+    a_peak = np.array([1.0 + alpha / A, -2.0 * cos_w0, 1.0 - alpha / A])
+    sections.append(signal.tf2sos(b_peak, a_peak))
+
+    return np.vstack(sections)
+
+
+class _StreamingPlaybackProcessor:
+    """Chunk-by-chunk counterpart of AudioRouter._process_playback_audio.
+
+    Streaming audio arrives in ~40 ms chunks, so whole-signal processing does
+    not work: per-chunk peak normalization boosts quiet tails and breaths to
+    full scale, restarting the EQ filters on every chunk clicks at each chunk
+    boundary, and LUFS cannot be measured on such short blocks at all.  This
+    processor keeps the EQ filter state across chunks and normalizes with a
+    single gain derived from the loudest peak so far (never raised again),
+    whatever normalization type is configured.
+    """
+
+    _TARGET_PEAK = 0.891  # -1 dBFS, matching non-streaming Peak normalization
+    _MAX_GAIN = 4.0
+    _CLIP_LEVEL = 0.99
+
+    def __init__(self, sample_rate: int, normalize: bool, enable_clarity_eq: bool):
+        self._normalize = normalize
+        self._running_peak = 0.0
+        self._sos = _clarity_eq_sos(sample_rate) if enable_clarity_eq else None
+        self._zi: Optional[np.ndarray] = None
+
+    def process(self, chunk: np.ndarray) -> np.ndarray:
+        """Process one (frames, channels) chunk, carrying state to the next."""
+        if chunk.size == 0:
+            return chunk
+        if self._sos is not None:
+            if self._zi is None:
+                self._zi = np.zeros((self._sos.shape[0], 2, chunk.shape[1]))
+            filtered, self._zi = signal.sosfilt(self._sos, chunk, axis=0, zi=self._zi)
+            chunk = cast(np.ndarray, filtered)
+        if self._normalize:
+            self._running_peak = max(self._running_peak, float(np.max(np.abs(chunk))))
+            if self._running_peak > 1e-10:
+                chunk = chunk * min(self._TARGET_PEAK / self._running_peak, self._MAX_GAIN)
+        return np.clip(chunk, -self._CLIP_LEVEL, self._CLIP_LEVEL).astype(np.float32, copy=False)
+
 
 class AudioRouter:
     """Manages audio device enumeration and playback routing."""
+
+    MAIN_CHANNEL = MAIN_CHANNEL
+    PREVIEW_CHANNEL = PREVIEW_CHANNEL
 
     # Blocksize for passthrough streams to ensure synchronized callbacks
     _PASSTHROUGH_BLOCKSIZE = 512
@@ -54,9 +127,12 @@ class AudioRouter:
 
     def __init__(self):
         """Initialize the audio router."""
-        self._current_stream = None
-        self._stop_requested = threading.Event()
-        self._amplitude_callback = None
+        # Per-channel playback state.  A playback captures its channel's
+        # generation when it starts; stop_playback() bumps the generation, so a
+        # stop requested while audio is still being decoded is not lost.
+        self._playback_lock = threading.Lock()
+        self._playback_generation: Dict[str, int] = {}
+        self._playback_streams: Dict[str, Any] = {}
         self._current_amplitude = 0.0
         self._cached_linux_audio_system: Optional[str] = None
 
@@ -268,8 +344,10 @@ class AudioRouter:
             return data * gain
 
         elif norm_type == "LUFS":
-            # LUFS normalization for professional loudness standards
-            if pyln is None:
+            # LUFS normalization for professional loudness standards.  Clips
+            # shorter than one gating block cannot be measured (pyloudnorm
+            # raises), so they fall back to Peak like a missing pyloudnorm.
+            if pyln is None or len(data) <= _LUFS_MIN_SECONDS * sample_rate:
                 # Fallback to Peak normalization if pyloudnorm is not available
                 target_peak = 0.891  # -1 dB
                 gain = target_peak / max_val
@@ -424,39 +502,10 @@ class AudioRouter:
             (fricatives, plosives, formant transitions).  A gentle boost here
             makes voices noticeably clearer without sounding harsh.
         """
-        nyquist = sample_rate / 2.0
-
-        # --- Stage 1: high-pass at 80 Hz ---
-        hp_norm = 80.0 / nyquist
-        if 0.0 < hp_norm < 1.0:
-            sos_hp = signal.butter(2, hp_norm, btype='high', output='sos')
-        else:
-            sos_hp = None
-
-        # --- Stage 2: peaking EQ at 2500 Hz, +2.5 dB, Q=0.8 ---
-        f0 = 2500.0
-        gain_db = 2.5
-        Q = 0.8
-        A = 10 ** (gain_db / 40.0)
-        w0 = 2.0 * np.pi * f0 / sample_rate
-        sin_w0 = np.sin(w0)
-        cos_w0 = np.cos(w0)
-        alpha = sin_w0 / (2.0 * Q)
-        b_peak = np.array([1.0 + alpha * A, -2.0 * cos_w0, 1.0 - alpha * A])
-        a_peak = np.array([1.0 + alpha / A, -2.0 * cos_w0, 1.0 - alpha / A])
-        sos_peak = signal.tf2sos(b_peak, a_peak)
-
-        def _process(ch: np.ndarray) -> np.ndarray:
-            if sos_hp is not None:
-                # cast: scipy stubs union an initial-conditions tuple return
-                # that does not occur without the zi argument
-                ch = cast(np.ndarray, signal.sosfilt(sos_hp, ch))
-            return cast(np.ndarray, signal.sosfilt(sos_peak, ch))
-
-        if data.ndim == 1:
-            result = _process(data)
-        else:
-            result = np.column_stack([_process(data[:, i]) for i in range(data.shape[1])])
+        sos = _clarity_eq_sos(sample_rate)
+        # cast: scipy stubs union an initial-conditions tuple return that does
+        # not occur without the zi argument
+        result = cast(np.ndarray, signal.sosfilt(sos, data, axis=0))
 
         # Soft-limit to prevent any post-EQ clipping
         peak = np.max(np.abs(result))
@@ -658,6 +707,29 @@ class AudioRouter:
         )
         return PreparedAudioPayload(data=processed_data, sample_rate=effective_sr)
 
+    def _playback_token(self, channel: str) -> int:
+        """Return the channel's current generation (captured when playback starts)."""
+        with self._playback_lock:
+            return self._playback_generation.get(channel, 0)
+
+    def _playback_cancelled(self, channel: str, token: int) -> bool:
+        """True once stop_playback() has run for *channel* since *token* was taken."""
+        return self._playback_generation.get(channel, 0) != token
+
+    def _register_stream(self, channel: str, token: int, stream) -> bool:
+        """Publish *stream* so stop_playback() can stop it; False if already cancelled."""
+        with self._playback_lock:
+            if self._playback_cancelled(channel, token):
+                return False
+            self._playback_streams[channel] = stream
+            return True
+
+    def _unregister_stream(self, channel: str, stream) -> None:
+        """Forget *stream* unless a newer playback on the channel replaced it."""
+        with self._playback_lock:
+            if self._playback_streams.get(channel) is stream:
+                del self._playback_streams[channel]
+
     async def _play_prepared_audio(
         self,
         prepared_audio: PreparedAudioPayload,
@@ -665,98 +737,106 @@ class AudioRouter:
         amplitude_callback=None,
         wait_interval: float = 0.1,
         skip_sink_routing: bool = False,
+        *,
+        channel: str = MAIN_CHANNEL,
+        token: Optional[int] = None,
+        stop_event=None,
     ) -> bool:
-        """Play a previously prepared non-streaming payload."""
-        self._stop_requested.clear()
-        self._amplitude_callback = amplitude_callback
+        """Play a previously prepared non-streaming payload.
+
+        Returns False without playing if the channel was stopped (or
+        *stop_event* set) after *token* was captured.
+        """
+        if token is None:
+            token = self._playback_token(channel)
+
+        def stopped() -> bool:
+            return self._stream_stop_requested(stop_event, channel, token)
+
+        if stopped():
+            return False
 
         data = prepared_audio.data
         effective_sr = prepared_audio.sample_rate
         data_index = 0
         data_len = len(data)
 
+        def report_amplitude(amp: float) -> None:
+            self._current_amplitude = amp
+            if amplitude_callback:
+                try:
+                    amplitude_callback(amp)
+                except Exception:
+                    logger.debug("Amplitude callback failed", exc_info=True)
+
         def callback(outdata, frames, time, status):
-            if self._stop_requested.is_set():
+            nonlocal data_index
+            if stopped():
                 raise sd.CallbackStop()
 
-            nonlocal data_index, data_len
             if data_index < data_len:
                 chunksize = min(frames, data_len - data_index)
                 outdata[:chunksize] = data[data_index:data_index + chunksize]
                 if chunksize < frames:
                     outdata[chunksize:] = 0
-
-                if self._amplitude_callback:
-                    start = data_index
-                    chunk_for_amp = data[start:start + chunksize]
-                    amp = self._calculate_chunk_amplitude(chunk_for_amp)
-                    self._current_amplitude = amp
-                    try:
-                        self._amplitude_callback(amp)
-                    except Exception:
-                        logger.debug("Amplitude callback failed", exc_info=True)
-
+                if amplitude_callback:
+                    report_amplitude(self._calculate_chunk_amplitude(data[data_index:data_index + chunksize]))
                 data_index += chunksize
             else:
                 outdata[:] = 0
-                self._current_amplitude = 0.0
-                if self._amplitude_callback:
-                    try:
-                        self._amplitude_callback(0.0)
-                    except Exception:
-                        logger.debug("Amplitude callback failed", exc_info=True)
+                report_amplitude(0.0)
                 raise sd.CallbackStop()
 
         channels = data.shape[1] if len(data.shape) > 1 else 1
 
-        self._current_stream = sd.OutputStream(
-            device=device_index,
-            samplerate=effective_sr,
-            channels=channels,
-            callback=callback,
-            finished_callback=self._stream_finished
-        )
-
-        # Linux: spawn background poller to route to the configured sink.
+        # Linux: route the stream we are about to open to the configured sink
+        # (must run before opening; see LinuxSinkManager.route_to_sink).
         # Skip for previews so the user can hear the voice test through speakers.
         if not skip_sink_routing:
             self._route_to_linux_sink()
 
-        with self._current_stream:
-            while self._current_stream.active and not self._stop_requested.is_set():
-                await asyncio.sleep(wait_interval)
+        stream = sd.OutputStream(
+            device=device_index,
+            samplerate=effective_sr,
+            channels=channels,
+            callback=callback,
+            finished_callback=lambda: report_amplitude(0.0),
+        )
+        try:
+            if not self._register_stream(channel, token, stream):
+                return False
 
-        return not self._stop_requested.is_set()
+            with stream:
+                while stream.active and not stopped():
+                    await asyncio.sleep(wait_interval)
 
-    async def play_audio_to_device(
+            return not stopped()
+        finally:
+            self._unregister_stream(channel, stream)
+            try:
+                stream.close()
+            except Exception:
+                logger.debug("Stream close failed during cleanup", exc_info=True)
+
+    async def _play_audio_bytes(
         self,
         audio_data: bytes,
-        sample_rate: int = 48000,
-        device_index: Optional[int] = None,
-        enable_normalization: bool = True,
-        normalization_type: str = "Peak",
-        processing_profile: str = "balanced",
-        enable_clarity_eq: bool = True,
-        prepared_audio: Optional[PreparedAudioPayload] = None,
-        skip_sink_routing: bool = False,
+        device_index: Optional[int],
+        enable_normalization: bool,
+        normalization_type: str,
+        processing_profile: str,
+        enable_clarity_eq: bool,
+        prepared_audio: Optional[PreparedAudioPayload],
+        skip_sink_routing: bool,
+        amplitude_callback,
+        wait_interval: float,
+        stop_event,
+        channel: str,
     ) -> bool:
-
-        """
-        Play audio data to a specific output device.
-
-        Args:
-            audio_data: Raw audio data (MP3/WAV bytes from edge_tts)
-            sample_rate: Sample rate of the audio
-            device_index: Output device index (None for default)
-            enable_normalization: Whether to apply normalization (overridden by processing_profile)
-            normalization_type: Type of normalization (overridden by processing_profile)
-            processing_profile: Processing profile ("fast_preview", "balanced", "high_quality")
-            skip_sink_routing: If True, do not move the stream to the Linux sink
-                               (useful for voice previews that should play through speakers).
-
-        Returns:
-            True if playback succeeded, False otherwise.
-        """
+        """Shared body of play_audio_to_device / play_audio_with_amplitude."""
+        # Capture the channel generation before decoding so a Stop pressed
+        # while ffmpeg is still decoding cancels this playback.
+        token = self._playback_token(channel)
         try:
             if prepared_audio is None:
                 try:
@@ -774,43 +854,69 @@ class AudioRouter:
             return await self._play_prepared_audio(
                 prepared_audio,
                 device_index=device_index,
-                wait_interval=0.1,
+                amplitude_callback=amplitude_callback,
+                wait_interval=wait_interval,
                 skip_sink_routing=skip_sink_routing,
+                channel=channel,
+                token=token,
+                stop_event=stop_event,
             )
-
-        except PortAudioError:
+        except PortAudioError as e:
+            logger.error("Audio device error during playback: %s", e)
             return False
         except Exception as e:
-            logger.error("play_audio_to_device error: %s", e)
+            logger.error("Audio playback error: %s", e)
             return False
         finally:
-            try:
-                if self._current_stream is not None:
-                    try:
-                        self._current_stream.close()
-                    except Exception:
-                        logger.debug("Stream close failed during cleanup", exc_info=True)
-            finally:
-                self._current_stream = None
+            self._current_amplitude = 0.0
 
-    def _stream_finished(self):
-        """Callback when audio stream finishes."""
-        # Reset amplitude when stream finishes
-        self._current_amplitude = 0.0
-        if self._amplitude_callback:
-            try:
-                self._amplitude_callback(0.0)
-            except Exception:
-                logger.debug("Amplitude callback failed", exc_info=True)
+    async def play_audio_to_device(
+        self,
+        audio_data: bytes,
+        sample_rate: int = 48000,
+        device_index: Optional[int] = None,
+        enable_normalization: bool = True,
+        normalization_type: str = "Peak",
+        processing_profile: str = "balanced",
+        enable_clarity_eq: bool = True,
+        prepared_audio: Optional[PreparedAudioPayload] = None,
+        skip_sink_routing: bool = False,
+        stop_event=None,
+        channel: str = MAIN_CHANNEL,
+    ) -> bool:
 
-    def set_amplitude_callback(self, callback):
         """
-        Set a callback function to receive amplitude updates during playback.
+        Play audio data to a specific output device.
 
         Args:
-            callback: Function that takes a float (0.0-1.0) amplitude value
+            audio_data: Raw audio data (MP3/WAV bytes from edge_tts)
+            sample_rate: Sample rate of the audio
+            device_index: Output device index (None for default)
+            enable_normalization: Whether to apply normalization (overridden by processing_profile)
+            normalization_type: Type of normalization (overridden by processing_profile)
+            processing_profile: Processing profile ("fast_preview", "balanced", "high_quality")
+            skip_sink_routing: If True, do not move the stream to the Linux sink
+                               (useful for voice previews that should play through speakers).
+            stop_event: Optional threading.Event that cancels this playback.
+            channel: Playback channel; stop_playback(channel) only stops that channel.
+
+        Returns:
+            True if playback succeeded, False otherwise.
         """
-        self._amplitude_callback = callback
+        return await self._play_audio_bytes(
+            audio_data,
+            device_index,
+            enable_normalization,
+            normalization_type,
+            processing_profile,
+            enable_clarity_eq,
+            prepared_audio,
+            skip_sink_routing,
+            amplitude_callback=None,
+            wait_interval=0.1,
+            stop_event=stop_event,
+            channel=channel,
+        )
 
     def _calculate_chunk_amplitude(self, chunk: np.ndarray) -> float:
         """
@@ -878,12 +984,25 @@ class AudioRouter:
         if stream is not None:
             stream.start()
 
-    def stop_playback(self):
-        """Stop current audio playback."""
-        self._stop_requested.set()
+    def stop_playback(self, channel: Optional[str] = None):
+        """Stop audio playback on *channel*, or on every channel when None.
+
+        Also cancels playbacks of that channel that are still decoding and
+        have not opened their output stream yet.
+        """
+        with self._playback_lock:
+            if channel is None:
+                channels = {MAIN_CHANNEL, PREVIEW_CHANNEL, *self._playback_generation, *self._playback_streams}
+            else:
+                channels = {channel}
+            streams = []
+            for ch in channels:
+                self._playback_generation[ch] = self._playback_generation.get(ch, 0) + 1
+                stream = self._playback_streams.get(ch)
+                if stream is not None:
+                    streams.append(stream)
         self._current_amplitude = 0.0
-        stream = self._current_stream
-        if stream is not None:
+        for stream in streams:
             try:
                 stream.stop()
             except Exception:
@@ -910,16 +1029,17 @@ class AudioRouter:
         return LinuxSinkManager.ensure_modules(sink_name)
 
     def _route_to_linux_sink(self) -> None:
-        """Spawn a daemon thread that moves the new sink input to our sink.
+        """Route the output stream about to be opened to our sink (call before opening).
 
         See :meth:`LinuxSinkManager.route_to_sink` for details.
         """
         self._linux_sink.route_to_sink()
 
     def is_playing(self) -> bool:
-        """Check if audio is currently playing."""
-        stream = self._current_stream
-        return stream is not None and stream.active
+        """Check if audio is currently playing on any channel."""
+        with self._playback_lock:
+            streams = list(self._playback_streams.values())
+        return any(stream.active for stream in streams)
 
     @property
     def is_linux(self) -> bool:
@@ -984,6 +1104,8 @@ class AudioRouter:
         enable_clarity_eq: bool = True,
         prepared_audio: Optional[PreparedAudioPayload] = None,
         skip_sink_routing: bool = False,
+        stop_event=None,
+        channel: str = MAIN_CHANNEL,
     ) -> bool:
         """
         Play audio data with real-time amplitude analysis.
@@ -997,51 +1119,32 @@ class AudioRouter:
             amplitude_callback: Callback function for amplitude updates
             processing_profile: Processing profile ("fast_preview", "balanced", "high_quality")
             skip_sink_routing: If True, do not move the stream to the Linux sink.
+            stop_event: Optional threading.Event that cancels this playback.
+            channel: Playback channel; stop_playback(channel) only stops that channel.
 
         Returns:
             True if playback succeeded, False otherwise.
         """
-        try:
-            if prepared_audio is None:
-                try:
-                    prepared_audio = await self.prepare_audio_for_playback(
-                        audio_data,
-                        enable_normalization=enable_normalization,
-                        normalization_type=normalization_type,
-                        processing_profile=processing_profile,
-                        enable_clarity_eq=enable_clarity_eq,
-                    )
-                except RuntimeError as e:
-                    logger.error("Failed to decode audio data: %s", e)
-                    return False
+        return await self._play_audio_bytes(
+            audio_data,
+            device_index,
+            enable_normalization,
+            normalization_type,
+            processing_profile,
+            enable_clarity_eq,
+            prepared_audio,
+            skip_sink_routing,
+            amplitude_callback=amplitude_callback,
+            wait_interval=0.05,
+            stop_event=stop_event,
+            channel=channel,
+        )
 
-            return await self._play_prepared_audio(
-                prepared_audio,
-                device_index=device_index,
-                amplitude_callback=amplitude_callback,
-                wait_interval=0.05,
-                skip_sink_routing=skip_sink_routing,
-            )
-
-        except PortAudioError:
-            return False
-        except Exception as e:
-            logger.error("play_audio_with_amplitude error: %s", e)
-            return False
-        finally:
-            try:
-                if self._current_stream is not None:
-                    try:
-                        self._current_stream.close()
-                    except Exception:
-                        logger.debug("Stream close failed during cleanup", exc_info=True)
-            finally:
-                self._current_stream = None
-                self._current_amplitude = 0.0
-
-    def _stream_stop_requested(self, stop_event=None) -> bool:
-        """Return whether streaming playback has received either stop signal."""
-        return self._stop_requested.is_set() or bool(stop_event and stop_event.is_set())
+    def _stream_stop_requested(self, stop_event=None, channel: str = MAIN_CHANNEL, token: Optional[int] = None) -> bool:
+        """Return whether playback was stopped via its channel or *stop_event*."""
+        if token is not None and self._playback_cancelled(channel, token):
+            return True
+        return bool(stop_event is not None and stop_event.is_set())
 
     async def play_audio_streaming(
         self,
@@ -1054,6 +1157,7 @@ class AudioRouter:
         normalization_type: str = "Peak",
         amplitude_callback=None,
         enable_clarity_eq: bool = True,
+        channel: str = MAIN_CHANNEL,
     ) -> bool:
         """
         Play streaming audio data to a specific output device.
@@ -1071,6 +1175,11 @@ class AudioRouter:
             enable_normalization: Whether to apply normalization
             normalization_type: Type of normalization ("Peak", "RMS", "LUFS", or "None")
             amplitude_callback: Optional callback for real-time amplitude updates
+            channel: Playback channel; stop_playback(channel) only stops that channel.
+
+        Normalization in streaming mode always uses a running peak (see
+        _StreamingPlaybackProcessor); *normalization_type* only selects
+        whether it is on ("None" turns it off).
 
         Returns:
             True if playback succeeded, False otherwise.
@@ -1080,21 +1189,17 @@ class AudioRouter:
 
         process = None
         stream_tasks = []
+        stream = None
+        token = self._playback_token(channel)
+
+        def stopped() -> bool:
+            return self._stream_stop_requested(stop_event, channel, token)
 
         try:
-            self._stop_requested.clear()
-
             # Get profile settings
             profile_settings = self._get_profile_settings(processing_profile)
             target_sr = profile_settings["sample_rate"]  # None for fast_preview means no resampling
-            kaiser_beta = profile_settings["kaiser_beta"]
-            stereo_width = profile_settings["stereo_width"]
-
-            # Determine normalization type: respect enable_normalization flag
-            if enable_normalization:
-                norm_type = normalization_type
-            else:
-                norm_type = "None"
+            normalize = enable_normalization and normalization_type != "None"
 
             # Queue for decoded audio chunks - bounded to provide backpressure
             audio_queue = queue.Queue(maxsize=5)
@@ -1130,7 +1235,7 @@ class AudioRouter:
                 """Feed MP3 chunks into ffmpeg stdin."""
                 try:
                     async for chunk in audio_chunk_generator:
-                        if self._stream_stop_requested(stop_event):
+                        if stopped():
                             break
                         if process.stdin:
                             process.stdin.write(chunk)
@@ -1165,25 +1270,34 @@ class AudioRouter:
                 except Exception:
                     logger.debug("MP3 decode chunk processing failed", exc_info=True)
 
-            def enqueue_terminal_marker() -> None:
-                """Signal playback completion without blocking shutdown."""
-                try:
-                    audio_queue.put_nowait(None)
-                except queue.Full:
+            async def enqueue_audio(item) -> bool:
+                """Queue decoded audio without blocking the event loop or dropping data."""
+                while not stopped():
                     try:
-                        audio_queue.get_nowait()
-                    except queue.Empty:
-                        pass
-                    try:
-                        audio_queue.put_nowait(None)
+                        audio_queue.put_nowait(item)
+                        return True
                     except queue.Full:
-                        pass
+                        await asyncio.sleep(0.01)
+                return False
+
+            async def enqueue_terminal_marker() -> None:
+                """Signal playback completion after every queued audio chunk."""
+                await enqueue_audio(None)
+
+            processor: List[Optional[_StreamingPlaybackProcessor]] = [None]
+
+            def process_chunk(chunk: np.ndarray) -> np.ndarray:
+                """Run the stateful streaming pipeline (created on the first chunk)."""
+                if processor[0] is None:
+                    effective_sr = target_sr if target_sr is not None else (detected_sr[0] or sample_rate)
+                    processor[0] = _StreamingPlaybackProcessor(effective_sr, normalize, enable_clarity_eq)
+                return processor[0].process(chunk)
 
             async def read_stdout():
                 """Read decoded PCM from ffmpeg stdout and enqueue for playback."""
                 if not process.stdout:
                     decode_error[0] = RuntimeError("ffmpeg stdout unavailable")
-                    enqueue_terminal_marker()
+                    await enqueue_terminal_marker()
                     return
 
                 buffer = bytearray()
@@ -1193,7 +1307,7 @@ class AudioRouter:
 
                 try:
                     while True:
-                        if self._stream_stop_requested(stop_event):
+                        if stopped():
                             break
 
                         data = await process.stdout.read(4096)
@@ -1205,26 +1319,10 @@ class AudioRouter:
                             chunk_bytes = buffer[:min_bytes]
                             del buffer[:min_bytes]
 
-                            chunk = np.frombuffer(chunk_bytes, dtype=np.float32).reshape(-1, 2)
-                            effective_sr = target_sr if target_sr is not None else (detected_sr[0] or sample_rate)
-                            chunk, effective_sr = self._process_playback_audio(
-                                chunk,
-                                effective_sr,
-                                None,
-                                kaiser_beta,
-                                norm_type,
-                                enable_clarity_eq,
-                                stereo_width,
-                            )
+                            chunk = process_chunk(np.frombuffer(chunk_bytes, dtype=np.float32).reshape(-1, 2))
 
-                            while True:
-                                if self._stream_stop_requested(stop_event):
-                                    return
-                                try:
-                                    audio_queue.put(chunk, block=True, timeout=0.1)
-                                    break
-                                except queue.Full:
-                                    continue
+                            if not await enqueue_audio(chunk):
+                                return
 
                             if not playback_started.is_set():
                                 playback_started.set()
@@ -1234,35 +1332,26 @@ class AudioRouter:
                         usable = (len(buffer) // frame_bytes) * frame_bytes
                         if usable > 0:
                             chunk_bytes = buffer[:usable]
-                            chunk = np.frombuffer(chunk_bytes, dtype=np.float32).reshape(-1, 2)
-                            effective_sr = target_sr if target_sr is not None else (detected_sr[0] or sample_rate)
-                            chunk, effective_sr = self._process_playback_audio(
-                                chunk,
-                                effective_sr,
-                                None,
-                                kaiser_beta,
-                                norm_type,
-                                enable_clarity_eq,
-                                stereo_width,
-                            )
-                            while not self._stream_stop_requested(stop_event):
-                                try:
-                                    audio_queue.put(chunk, block=True, timeout=0.1)
-                                    break
-                                except queue.Full:
-                                    continue
+                            chunk = process_chunk(np.frombuffer(chunk_bytes, dtype=np.float32).reshape(-1, 2))
+                            if not await enqueue_audio(chunk):
+                                return
+                            if not playback_started.is_set():
+                                playback_started.set()
 
                 except Exception as e:
                     decode_error[0] = e
                 finally:
-                    enqueue_terminal_marker()
+                    await enqueue_terminal_marker()
+                    # Wake the startup wait even when no audio was decoded
+                    # (provider error, empty input) instead of timing out.
+                    playback_started.set()
 
             # Closure variable to hold leftover samples between callbacks
             leftover = [None]
 
             def audio_callback(outdata, frames, time, status):
                 """Sounddevice callback for streaming playback."""
-                if self._stop_requested.is_set():
+                if stopped():
                     raise sd.CallbackStop()
 
                 if leftover[0] is not None:
@@ -1314,9 +1403,13 @@ class AudioRouter:
             try:
                 await asyncio.wait_for(playback_started.wait(), timeout=5.0)
             except asyncio.TimeoutError:
+                logger.error("Streaming playback: no audio received within 5 seconds")
                 return False
 
             if decode_error[0]:
+                logger.error("Streaming playback failed: %s", decode_error[0])
+                return False
+            if stopped():
                 return False
 
             if target_sr is not None:
@@ -1330,34 +1423,37 @@ class AudioRouter:
                 )
                 output_sr = sample_rate
 
-            self._current_stream = sd.OutputStream(
+            # Linux: route the stream we are about to open to the configured sink.
+            self._route_to_linux_sink()
+
+            stream = sd.OutputStream(
                 device=device_index,
                 samplerate=output_sr,
                 channels=2,
                 callback=audio_callback,
                 finished_callback=lambda: playback_finished.set()
             )
+            if not self._register_stream(channel, token, stream):
+                return False
 
-            # Linux: spawn background poller to route to the configured sink.
-            self._route_to_linux_sink()
-
-            with self._current_stream:
-                while self._current_stream.active and not self._stop_requested.is_set():
-                    if self._stream_stop_requested(stop_event):
-                        self._stop_requested.set()
-                        break
+            with stream:
+                while stream.active and not stopped():
                     await asyncio.sleep(0.05)
 
             try:
                 await asyncio.wait_for(stdout_task, timeout=1.0)
             except asyncio.TimeoutError:
-                pass
+                return False
 
-            return not self._stop_requested.is_set()
+            if decode_error[0] is not None:
+                logger.error("Streaming playback failed: %s", decode_error[0])
+            return decode_error[0] is None and not stopped()
 
-        except PortAudioError:
+        except PortAudioError as e:
+            logger.error("Audio device error during streaming playback: %s", e)
             return False
-        except Exception:
+        except Exception as e:
+            logger.error("Streaming playback error: %s", e)
             return False
         finally:
             # Every exit path (including startup timeout and decoder errors) must
@@ -1388,426 +1484,211 @@ class AudioRouter:
                     await process.wait()
                 except Exception:
                     logger.debug("Waiting for decoder process exit failed", exc_info=True)
-            if self._current_stream is not None:
+            if stream is not None:
+                self._unregister_stream(channel, stream)
                 try:
-                    self._current_stream.close()
+                    stream.close()
                 except Exception:
                     logger.debug("Stream close failed during cleanup", exc_info=True)
-                self._current_stream = None
 
     def start_mic_passthrough(
         self,
         input_device_index: Optional[int],
         output_device_index: Optional[int],
         volume: float = 1.0,
-        sample_rate: int = 48000
+        sample_rate: int = 48000,
     ) -> Tuple[bool, Optional[str]]:
-        """
-        Start continuous microphone passthrough to an output device.
-
-        Creates an input stream from the microphone and an output stream to the
-        target device, with audio flowing through a queue in real-time.
-
-        For same-device (input == output), uses a single full-duplex stream
-        for glitch-free passthrough without queue overhead.
-
-        Args:
-            input_device_index: Input device index (None for system default)
-            output_device_index: Output device index (None for system default)
-            volume: Volume multiplier (0.0 to 2.0, where 1.0 is normal)
-            sample_rate: Sample rate for both streams (will be negotiated if unsupported)
-
-        Returns:
-            Tuple of (success: bool, error_message: Optional[str]).
-            If successful, error_message will be None.
-        """
+        """Start continuous microphone passthrough to an output device."""
         with self._passthrough_lock:
-            # Stop any existing passthrough first (without re-acquiring lock)
             self._stop_mic_passthrough_unlocked()
 
             try:
-                # Query native sample rates from devices for negotiation
                 input_native_sr = None
                 output_native_sr = None
 
                 if input_device_index is not None:
                     try:
                         input_device_info = sd.query_devices(input_device_index)
-                        input_native_sr = int(input_device_info.get('default_samplerate', sample_rate))
+                        input_native_sr = int(input_device_info.get("default_samplerate", sample_rate))
                     except Exception as e:
                         logger.warning("Could not query input device sample rate: %s", e)
 
                 if output_device_index is not None:
                     try:
                         output_device_info = sd.query_devices(output_device_index)
-                        output_native_sr = int(output_device_info.get('default_samplerate', sample_rate))
+                        output_native_sr = int(output_device_info.get("default_samplerate", sample_rate))
                     except Exception as e:
                         logger.warning("Could not query output device sample rate: %s", e)
 
-                # Determine the best sample rate to use
-                # Priority: caller's preference > input native > output native > default
-                chosen_sr = sample_rate
+                candidate_rates = list(
+                    dict.fromkeys(
+                        rate
+                        for rate in (sample_rate, input_native_sr, output_native_sr)
+                        if rate is not None
+                    )
+                )
 
-                # Check if same device (treat None == None as equal)
-                same_device = (input_device_index == output_device_index)
-
-                # ========== SAME-DEVICE PATH: Full-duplex stream ==========
-                if same_device:
-                    # Duplex callback: handles both input and output atomically
+                if input_device_index == output_device_index:
                     def duplex_callback(indata, outdata, frames, time, status):
                         try:
-                            # Direct copy with volume - no queue needed
                             outdata[:] = indata * volume
                         except Exception as e:
                             logger.warning("Passthrough duplex callback error: %s", e)
                             outdata[:] = 0
 
-                    # Try to open duplex stream with negotiated sample rate
-                    # Attempt 1: Use caller-provided sample rate
-                    try:
-                        self._passthrough_duplex_stream = sd.Stream(
-                            device=input_device_index,
-                            samplerate=chosen_sr,
-                            channels=1,
-                            dtype='float32',
-                            blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                            callback=duplex_callback
-                        )
-                        self._start_stream(self._passthrough_duplex_stream)
-
-                    except PortAudioError:
-                        # Attempt 2: Use input device's native sample rate
-                        if self._can_retry_with_native_rate(input_native_sr, chosen_sr):
-                            logger.info("Retrying passthrough with input device native sample rate: %d", input_native_sr)
+                    last_error = None
+                    for chosen_sr in candidate_rates:
+                        try:
+                            self._passthrough_duplex_stream = sd.Stream(
+                                device=input_device_index,
+                                samplerate=chosen_sr,
+                                channels=1,
+                                dtype="float32",
+                                blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                                callback=duplex_callback,
+                            )
+                            self._start_stream(self._passthrough_duplex_stream)
+                            break
+                        except PortAudioError as e:
+                            last_error = e
                             self._stop_mic_passthrough_unlocked()
-                            chosen_sr = input_native_sr
-
-                            try:
-                                self._passthrough_duplex_stream = sd.Stream(
-                                    device=input_device_index,
-                                    samplerate=chosen_sr,
-                                    channels=1,
-                                    dtype='float32',
-                                    blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                    callback=duplex_callback
-                                )
-                                self._start_stream(self._passthrough_duplex_stream)
-
-                            except PortAudioError as e2:
-                                # Attempt 3: Use output device's native sample rate
-                                if self._can_retry_with_native_rate(output_native_sr, chosen_sr):
-                                    logger.info("Retrying passthrough with output device native sample rate: %d", output_native_sr)
-                                    self._stop_mic_passthrough_unlocked()
-                                    chosen_sr = output_native_sr
-
-                                    self._passthrough_duplex_stream = sd.Stream(
-                                        device=input_device_index,
-                                        samplerate=chosen_sr,
-                                        channels=1,
-                                        dtype='float32',
-                                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                        callback=duplex_callback
-                                    )
-                                    self._start_stream(self._passthrough_duplex_stream)
-                                else:
-                                    raise e2
-                        else:
-                            raise
+                    else:
+                        raise last_error or RuntimeError("No usable passthrough sample rate")
 
                     self._passthrough_active = True
+                    logger.info(
+                        "Microphone passthrough started (duplex mode, device=%s, sample_rate=%d, volume=%.2f)",
+                        input_device_index,
+                        chosen_sr,
+                        volume,
+                    )
+                    return True, None
 
-                    logger.info("Microphone passthrough started (duplex mode, device=%s, sample_rate=%d, volume=%.2f)",
-                               input_device_index, chosen_sr, volume)
-                    return (True, None)
-
-                # ========== DIFFERENT-DEVICE PATH: Two streams with synchronized blocksize ==========
-
-                # Create bounded queue (smaller for tighter latency)
                 self._passthrough_queue = queue.Queue(maxsize=10)
 
-                # Input callback: puts audio data into the queue
+                def queue_chunk(audio_chunk):
+                    if self._passthrough_queue.full():
+                        try:
+                            self._passthrough_queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                    self._passthrough_queue.put_nowait(audio_chunk)
+
                 def input_callback(indata, frames, time, status):
                     try:
-                        # Apply volume and copy data
-                        audio_chunk = indata.copy() * volume
-                        # Put into queue, drop oldest if full
-                        if self._passthrough_queue.full():
-                            try:
-                                self._passthrough_queue.get_nowait()
-                            except queue.Empty:
-                                pass
-                        self._passthrough_queue.put(audio_chunk)
+                        queue_chunk(indata.copy() * volume)
                     except Exception as e:
                         logger.warning("Passthrough input callback error: %s", e)
 
-                # Output callback: gets audio data from the queue
                 def output_callback(outdata, frames, time, status):
                     try:
                         audio_chunk = self._passthrough_queue.get_nowait()
-                        # Flatten to 1-D if needed, then reshape to (frames, 1)
                         flat = audio_chunk.flatten()
                         chunk_len = min(len(flat), frames)
                         outdata[:chunk_len, 0] = flat[:chunk_len]
                         if chunk_len < frames:
                             outdata[chunk_len:] = 0
                     except queue.Empty:
-                        # No data available, output silence
                         outdata[:] = 0
                     except Exception as e:
                         logger.warning("Passthrough output callback error: %s", e)
                         outdata[:] = 0
 
-                # Pre-fill silence chunks for startup buffer
-                silence_chunk = np.zeros((self._PASSTHROUGH_BLOCKSIZE, 1), dtype='float32')
-
-                # Helper function to clean up partially created streams
-                def cleanup_partial_streams():
-                    """Clean up any partially created streams on error."""
-                    if self._passthrough_input_stream is not None:
-                        try:
-                            self._passthrough_input_stream.stop()
-                            self._passthrough_input_stream.close()
-                        except Exception:
-                            logger.debug("Passthrough input stream cleanup failed", exc_info=True)
-                        self._passthrough_input_stream = None
-                    if self._passthrough_output_stream is not None:
-                        try:
-                            self._passthrough_output_stream.stop()
-                            self._passthrough_output_stream.close()
-                        except Exception:
-                            logger.debug("Passthrough output stream cleanup failed", exc_info=True)
-                        self._passthrough_output_stream = None
-
-                # Try to open streams with negotiated sample rate
-                # Attempt 1: Use caller-provided sample rate
-                stream_opened = False
-                try:
-                    # Open input stream (mono) with fixed blocksize
+                def open_stream_pair(
+                    input_rate,
+                    output_rate,
+                    input_stream_callback,
+                    output_blocksize=self._PASSTHROUGH_BLOCKSIZE,
+                ):
+                    self._passthrough_queue = queue.Queue(maxsize=10)
                     self._passthrough_input_stream = sd.InputStream(
                         device=input_device_index,
-                        samplerate=chosen_sr,
+                        samplerate=input_rate,
                         channels=1,
-                        dtype='float32',
+                        dtype="float32",
                         blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                        callback=input_callback
+                        callback=input_stream_callback,
                     )
-
-                    # Open output stream (mono) with fixed blocksize
                     self._passthrough_output_stream = sd.OutputStream(
                         device=output_device_index,
-                        samplerate=chosen_sr,
+                        samplerate=output_rate,
                         channels=1,
-                        dtype='float32',
-                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                        callback=output_callback
+                        dtype="float32",
+                        blocksize=output_blocksize,
+                        callback=output_callback,
+                    )
+                    self._start_stream(self._passthrough_input_stream)
+                    silence = np.zeros((output_blocksize, 1), dtype="float32")
+                    self._passthrough_queue.put(silence)
+                    self._passthrough_queue.put(silence)
+                    self._start_stream(self._passthrough_output_stream)
+
+                last_error = None
+                chosen_sr = sample_rate
+                for candidate_sr in candidate_rates:
+                    try:
+                        open_stream_pair(candidate_sr, candidate_sr, input_callback)
+                        chosen_sr = candidate_sr
+                        break
+                    except PortAudioError as e:
+                        last_error = e
+                        logger.debug("Passthrough open failed at %d Hz", candidate_sr)
+                        self._stop_mic_passthrough_unlocked()
+                else:
+                    if not self._can_resample_between_native_rates(input_native_sr, output_native_sr):
+                        raise last_error or RuntimeError("No usable passthrough sample rate")
+                    if input_native_sr is None or output_native_sr is None:
+                        raise RuntimeError("Native sample rates unavailable for resampling")
+
+                    logger.info(
+                        "Retrying passthrough with native rates (input=%d, output=%d) and resampling",
+                        input_native_sr,
+                        output_native_sr,
                     )
 
-                    # Start input stream first
-                    self._start_stream(self._passthrough_input_stream)
-
-                    # Pre-fill queue with 2 silence chunks before starting output
-                    self._passthrough_queue.put(silence_chunk)
-                    self._passthrough_queue.put(silence_chunk)
-
-                    # Now start output stream
-                    self._start_stream(self._passthrough_output_stream)
-                    stream_opened = True
-
-                except PortAudioError:
-                    # Attempt 2: Use input device's native sample rate
-                    logger.debug("Passthrough open failed at %d Hz; considering input-native retry", chosen_sr)
-                    if self._can_retry_with_native_rate(input_native_sr, chosen_sr):
-                        logger.info("Retrying passthrough with input device native sample rate: %d", input_native_sr)
-                        cleanup_partial_streams()
-                        chosen_sr = input_native_sr
-
+                    def resampling_input_callback(indata, frames, time, status):
                         try:
-                            self._passthrough_input_stream = sd.InputStream(
-                                device=input_device_index,
-                                samplerate=chosen_sr,
-                                channels=1,
-                                dtype='float32',
-                                blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                callback=input_callback
+                            resampled = self._resample_high_quality(
+                                (indata.copy() * volume).flatten(),
+                                input_native_sr,
+                                output_native_sr,
+                                kaiser_beta=5.0,
                             )
+                            queue_chunk(resampled.reshape(-1, 1))
+                        except Exception as e:
+                            logger.warning("Passthrough resampling input callback error: %s", e)
 
-                            self._passthrough_output_stream = sd.OutputStream(
-                                device=output_device_index,
-                                samplerate=chosen_sr,
-                                channels=1,
-                                dtype='float32',
-                                blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                callback=output_callback
-                            )
+                    # ponytail: ceil prevents a one-frame underrun for ratios such as 48k/44.1k.
+                    output_blocksize = ceil(
+                        self._PASSTHROUGH_BLOCKSIZE * output_native_sr / input_native_sr
+                    )
+                    open_stream_pair(
+                        input_native_sr,
+                        output_native_sr,
+                        resampling_input_callback,
+                        output_blocksize,
+                    )
+                    chosen_sr = f"{input_native_sr}->{output_native_sr}"
 
-                            self._start_stream(self._passthrough_input_stream)
-
-                            # Pre-fill queue with 2 silence chunks
-                            self._passthrough_queue.put(silence_chunk)
-                            self._passthrough_queue.put(silence_chunk)
-
-                            self._start_stream(self._passthrough_output_stream)
-                            stream_opened = True
-
-                        except PortAudioError as e2:
-                            # Attempt 3: Use output device's native sample rate
-                            logger.debug("Passthrough retry failed at %d Hz; considering output-native retry", chosen_sr)
-                            if self._can_retry_with_native_rate(output_native_sr, chosen_sr):
-                                logger.info("Retrying passthrough with output device native sample rate: %d", output_native_sr)
-                                cleanup_partial_streams()
-                                chosen_sr = output_native_sr
-
-                                try:
-                                    self._passthrough_input_stream = sd.InputStream(
-                                        device=input_device_index,
-                                        samplerate=chosen_sr,
-                                        channels=1,
-                                        dtype='float32',
-                                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                        callback=input_callback
-                                    )
-
-                                    self._passthrough_output_stream = sd.OutputStream(
-                                        device=output_device_index,
-                                        samplerate=chosen_sr,
-                                        channels=1,
-                                        dtype='float32',
-                                        blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                        callback=output_callback
-                                    )
-
-                                    self._start_stream(self._passthrough_input_stream)
-
-                                    # Pre-fill queue with 2 silence chunks
-                                    self._passthrough_queue.put(silence_chunk)
-                                    self._passthrough_queue.put(silence_chunk)
-
-                                    self._start_stream(self._passthrough_output_stream)
-                                    stream_opened = True
-
-                                except PortAudioError as e3:
-                                    # Attempt 4: Use each device's native rate with resampling
-                                    # This handles the case where input and output only support different rates
-                                    logger.debug("Passthrough retry failed at %d Hz; considering dual-native resampling", chosen_sr)
-                                    if self._can_resample_between_native_rates(input_native_sr, output_native_sr):
-                                        logger.info("Retrying passthrough with native rates (input=%d, output=%d) and resampling",
-                                                   input_native_sr, output_native_sr)
-                                        cleanup_partial_streams()
-
-                                        # Store sample rates for resampling in callbacks.
-                                        # The guard above proved both are non-None;
-                                        # raise so the types reflect that.
-                                        if input_native_sr is None:
-                                            raise RuntimeError(
-                                                "Input native rate unavailable for resampling"
-                                            ) from e3
-                                        if output_native_sr is None:
-                                            raise RuntimeError(
-                                                "Output native rate unavailable for resampling"
-                                            ) from e3
-                                        input_sr_for_resample = input_native_sr
-                                        output_sr_for_resample = output_native_sr
-
-                                        # Resampling input callback: captures at input native rate
-                                        def resampling_input_callback(indata, frames, time, status):
-                                            try:
-                                                # Apply volume and copy data
-                                                audio_chunk = indata.copy() * volume
-                                                # Resample from input rate to output rate
-                                                resampled = self._resample_high_quality(
-                                                    audio_chunk.flatten(),
-                                                    input_sr_for_resample,
-                                                    output_sr_for_resample,
-                                                    kaiser_beta=5.0
-                                                )
-                                                # Reshape to match expected output format
-                                                resampled = resampled.reshape(-1, 1)
-                                                # Put into queue, drop oldest if full
-                                                if self._passthrough_queue.full():
-                                                    try:
-                                                        self._passthrough_queue.get_nowait()
-                                                    except queue.Empty:
-                                                        pass
-                                                self._passthrough_queue.put(resampled)
-                                            except Exception as e:
-                                                logger.warning("Passthrough resampling input callback error: %s", e)
-
-                                        # Resampling output callback: plays at output native rate
-                                        def resampling_output_callback(outdata, frames, time, status):
-                                            try:
-                                                audio_chunk = self._passthrough_queue.get_nowait()
-                                                # Flatten to 1-D if needed, then reshape to (frames, 1)
-                                                flat = audio_chunk.flatten()
-                                                chunk_len = min(len(flat), frames)
-                                                outdata[:chunk_len, 0] = flat[:chunk_len]
-                                                if chunk_len < frames:
-                                                    outdata[chunk_len:] = 0
-                                            except queue.Empty:
-                                                # No data available, output silence
-                                                outdata[:] = 0
-                                            except Exception as e:
-                                                logger.warning("Passthrough resampling output callback error: %s", e)
-                                                outdata[:] = 0
-
-                                        # Calculate appropriate blocksize for output based on resampling ratio
-                                        # ponytail: ceil prevents truncation underrun (557 not 556 for 512*48000/44100)
-                                        ratio = output_sr_for_resample / input_sr_for_resample
-                                        output_blocksize = ceil(self._PASSTHROUGH_BLOCKSIZE * ratio)
-
-                                        self._passthrough_input_stream = sd.InputStream(
-                                            device=input_device_index,
-                                            samplerate=input_native_sr,
-                                            channels=1,
-                                            dtype='float32',
-                                            blocksize=self._PASSTHROUGH_BLOCKSIZE,
-                                            callback=resampling_input_callback
-                                        )
-
-                                        self._passthrough_output_stream = sd.OutputStream(
-                                            device=output_device_index,
-                                            samplerate=output_native_sr,
-                                            channels=1,
-                                            dtype='float32',
-                                            blocksize=output_blocksize,
-                                            callback=resampling_output_callback
-                                        )
-
-                                        self._start_stream(self._passthrough_input_stream)
-
-                                        # Pre-fill queue with silence chunks (at output rate)
-                                        output_silence_chunk = np.zeros((output_blocksize, 1), dtype='float32')
-                                        self._passthrough_queue.put(output_silence_chunk)
-                                        self._passthrough_queue.put(output_silence_chunk)
-
-                                        self._start_stream(self._passthrough_output_stream)
-
-                                        # Update chosen_sr for logging
-                                        chosen_sr = f"{input_native_sr}->{output_native_sr}"
-                                        stream_opened = True
-                                    else:
-                                        raise e3
-                            else:
-                                raise e2
-                    else:
-                        raise
-
-                if stream_opened:
-                    self._passthrough_active = True
-
-                    logger.info("Microphone passthrough started (input=%s, output=%s, sample_rate=%s, volume=%.2f, blocksize=%d)",
-                               input_device_index, output_device_index, chosen_sr, volume, self._PASSTHROUGH_BLOCKSIZE)
-                    return (True, None)
-                else:
-                    return (False, "Failed to open audio streams")
+                self._passthrough_active = True
+                logger.info(
+                    "Microphone passthrough started (input=%s, output=%s, sample_rate=%s, volume=%.2f, blocksize=%d)",
+                    input_device_index,
+                    output_device_index,
+                    chosen_sr,
+                    volume,
+                    self._PASSTHROUGH_BLOCKSIZE,
+                )
+                return True, None
 
             except PortAudioError as e:
                 logger.error("PortAudio error starting mic passthrough: %s", e)
-                self.stop_mic_passthrough()
-                return (False, str(e))
+                self._stop_mic_passthrough_unlocked()
+                return False, str(e)
             except Exception as e:
                 logger.error("Error starting mic passthrough: %s", e)
-                self.stop_mic_passthrough()
-                return (False, str(e))
+                self._stop_mic_passthrough_unlocked()
+                return False, str(e)
 
     def _stop_mic_passthrough_unlocked(self):
         """

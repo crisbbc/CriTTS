@@ -43,6 +43,19 @@ def test_renders_success_result():
     )
 
 
+
+def test_renders_partial_success_as_warning():
+    router = MagicMock()
+    router.last_linux_sink_result = (True, "✅ Null sink ready.\n⚠ Virtual mic failed.")
+    tab = _make_tab(router)
+
+    AudioOutputTab._show_last_sink_result(tab)
+
+    tab.sink_status_label.configure.assert_called_once_with(
+        text="✅ Null sink ready.\n⚠ Virtual mic failed.",
+        text_color="#e74c3c",
+    )
+
 def test_renders_failure_result():
     router = MagicMock()
     router.last_linux_sink_result = (False, "⚠ pactl not found. Is PipeWire installed?")
@@ -116,6 +129,23 @@ def test_create_null_sink_records_success(monkeypatch):
 
     assert router.last_linux_sink_result == (True, "✅ Ready!")
     assert results == [("✅ Ready!", False)]
+
+
+def test_create_null_sink_shows_partial_success_as_warning(monkeypatch):
+    monkeypatch.setattr(threading, "Thread", FakeThread)
+    router = MagicMock()
+    message = "✅ Null sink ready.\n⚠ Virtual mic failed."
+    router.ensure_linux_sink_modules.return_value = (True, message)
+    tab = _make_tab(router)
+    tab.sink_name_var = MagicMock()
+    tab.create_sink_button = MagicMock()
+    tab.cleanup_sink_button = MagicMock()
+    results = []
+    tab._after_sink_result = lambda message, *, error: results.append((message, error))
+
+    AudioOutputTab._create_null_sink(tab)
+
+    assert results == [(message, True)]
 
 
 def test_cleanup_null_sink_records_removal(monkeypatch):

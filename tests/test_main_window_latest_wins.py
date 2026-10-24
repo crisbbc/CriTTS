@@ -604,4 +604,5 @@ async def test_play_audio_segment_prepares_audio_once_for_viseme_and_amplitude_p
         processing_profile="balanced",
         enable_clarity_eq=True,
         prepared_audio=prepared,
+        stop_event=None,
     )

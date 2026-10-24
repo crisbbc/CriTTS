@@ -93,8 +93,24 @@ def test_missing_pactl_returns_error(linux, monkeypatch):
     ok, message = AudioRouter.ensure_linux_sink_modules()
 
     assert ok is False
-    assert message == "⚠ pactl not found. Is PipeWire installed?"
+    assert message == "⚠ pactl is missing. Install the PulseAudio utilities package, then retry."
     assert calls == []
+
+
+def test_unavailable_audio_server_returns_actionable_error(linux, monkeypatch):
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: _result(returncode=1, stderr="Connection refused"),
+    )
+
+    ok, message = AudioRouter.ensure_linux_sink_modules()
+
+    assert ok is False
+    assert message == (
+        "⚠ Cannot contact the audio server: Connection refused. "
+        "Start PipeWire/PulseAudio, then retry."
+    )
 
 
 def test_sink_creation_failure_returns_error(linux, monkeypatch):

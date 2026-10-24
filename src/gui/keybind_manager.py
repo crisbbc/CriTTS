@@ -6,9 +6,12 @@ Supports both Tkinter application-wide keybinds and system-wide global hotkeys.
 import logging
 from typing import Dict, Any, Callable
 
+from ..utils.keybind_utils import parse_keybind_to_tkinter, validate_keybind_format
+
 logger = logging.getLogger(__name__)
 
 # Try to import keyboard library for global hotkeys
+keyboard = None
 _keyboard_available = False
 try:
     import keyboard
@@ -23,7 +26,6 @@ class KeybindManager:
     def __init__(self):
         """Initialize the keybind manager."""
         self._registered_keybinds = {}  # Maps keybind_string to bind_id and callback info
-        self._parsed_cache = {}  # Cache for parsed keybind strings
         self._keybind_to_actions = {}  # Maps keybind_string to list of action names (for duplicate detection)
         self._global_hotkeys_enabled = False  # Track if global hotkeys are enabled
         self._global_hotkeys = {}  # Maps keybind_string to keyboard hook
@@ -177,96 +179,11 @@ class KeybindManager:
         
         self._registered_keybinds.clear()
         self._keybind_to_actions.clear()
-        self._parsed_cache.clear()
     
     def parse_keybind(self, keybind_string: str) -> str:
-        """
-        Convert user-friendly keybind format to Tkinter format.
-        
-        Args:
-            keybind_string: User-friendly format (e.g., "Ctrl+Enter", "Ctrl+Shift+A")
-            
-        Returns:
-            Tkinter format string (e.g., "<Control-Return>", "<Control-Shift-A>")
-        """
-        if not keybind_string:
-            return ""
-        if keybind_string in self._parsed_cache:
-            return self._parsed_cache[keybind_string]
-        
-        parts = keybind_string.split('+')
-        modifiers = []
-        key = None
-        
-        for part in parts:
-            part = part.strip().lower()
-            if part in ['ctrl', 'control']:
-                modifiers.append('Control')
-            elif part == 'shift':
-                modifiers.append('Shift')
-            elif part == 'alt':
-                modifiers.append('Alt')
-            else:
-                key = part
-        
-        if not key:
-            return ""
-        
-        # Map special keys to Tkinter format
-        key_mapping = {
-            'enter': 'Return',
-            'return': 'Return',
-            'space': 'space',
-            'escape': 'Escape',
-            'esc': 'Escape',
-            'tab': 'Tab',
-            'backspace': 'BackSpace',
-            'delete': 'Delete',
-            'del': 'Delete',
-            'insert': 'Insert',
-            'home': 'Home',
-            'end': 'End',
-            'pageup': 'Prior',
-            'pagedown': 'Next',
-            'up': 'Up',
-            'down': 'Down',
-            'left': 'Left',
-            'right': 'Right',
-            'f1': 'F1', 'f2': 'F2', 'f3': 'F3', 'f4': 'F4',
-            'f5': 'F5', 'f6': 'F6', 'f7': 'F7', 'f8': 'F8',
-            'f9': 'F9', 'f10': 'F10', 'f11': 'F11', 'f12': 'F12',
-            'comma': 'comma',
-            'period': 'period',
-            'slash': 'slash',
-            'semicolon': 'semicolon',
-            'quote': 'quoteright',
-            'backslash': 'backslash',
-            'bracketleft': 'bracketleft',
-            'bracketright': 'bracketright',
-            'minus': 'minus',
-            'equal': 'equal',
-            'grave': 'grave',
-        }
-        
-        # Check if it's a special key
-        if key in key_mapping:
-            key = key_mapping[key]
-        elif len(key) == 1 and key.isalnum():
-            # Single alphanumeric key - use lowercase for Tkinter
-            # (Tkinter uses lowercase for key names, e.g., <Control-t> not <Control-T>)
-            key = key.lower()
-        else:
-            # Unknown key
-            return ""
-        
-        # Build Tkinter format
-        if modifiers:
-            result = f"<{'-'.join(modifiers)}-{key}>"
-        else:
-            result = f"<{key}>"
-        self._parsed_cache[keybind_string] = result
-        return result
-    
+        """Convert a user-friendly keybind to Tkinter format."""
+        return parse_keybind_to_tkinter(keybind_string) or ""
+
     def validate_keybind(self, keybind_string: str) -> bool:
         """
         Check if a keybind string is valid with comprehensive validation.
@@ -280,8 +197,6 @@ class KeybindManager:
         Returns:
             True if valid, False otherwise
         """
-        from ..utils.keybind_utils import validate_keybind_format
-        
         return validate_keybind_format(keybind_string)
     
     def check_duplicate_keybind(self, keybind_string: str, current_action: str = None) -> list:
@@ -378,7 +293,7 @@ class KeybindManager:
         Returns:
             True if registration successful, False otherwise
         """
-        if not _keyboard_available or not self._global_hotkeys_enabled:
+        if keyboard is None or not self._global_hotkeys_enabled:
             return False
         
         if not keybind_string or not callback:
@@ -419,7 +334,7 @@ class KeybindManager:
         Returns:
             True if unregistration successful, False otherwise
         """
-        if keybind_string not in self._global_hotkeys:
+        if keyboard is None or keybind_string not in self._global_hotkeys:
             return False
         
         try:
@@ -434,6 +349,9 @@ class KeybindManager:
     
     def _unregister_all_global_hotkeys(self):
         """Unregister all global hotkeys."""
+        if keyboard is None:
+            self._global_hotkeys.clear()
+            return
         for keybind_string in list(self._global_hotkeys.keys()):
             try:
                 info = self._global_hotkeys[keybind_string]

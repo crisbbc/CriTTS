@@ -1,4 +1,5 @@
 """Tests for VoiceTab provider-driven voice reload behavior."""
+
 import threading
 from unittest.mock import AsyncMock, MagicMock
 import sys
@@ -165,10 +166,7 @@ def test_settings_window_creation_applies_minimum_layout_guard_without_disabling
 
     settings_window_module.ctk.CTkToplevel.assert_called_once_with(window.parent)
     assert f"{WINDOW_SETTINGS_WIDTH}x{WINDOW_SETTINGS_HEIGHT}" in window_shell.geometry_calls
-    assert (
-        window_shell.minsize_call
-        == (WINDOW_SETTINGS_MIN_WIDTH, WINDOW_SETTINGS_MIN_HEIGHT)
-    )
+    assert window_shell.minsize_call == (WINDOW_SETTINGS_MIN_WIDTH, WINDOW_SETTINGS_MIN_HEIGHT)
     assert window_shell.resizable() == (True, True)
     assert window_shell.transient_parent is window.parent
     assert window_shell.grabbed is True
@@ -298,7 +296,10 @@ def test_refresh_theme_stops_active_voice_preview_before_rebuilding():
     assert voice_tab._async_callbacks_active is False
     assert voice_tab._preview_stop_event.is_set()
     assert voice_tab._preview_playing is False
-    voice_tab.audio_router.stop_playback.assert_called_once_with()
+    # Only the preview channel is stopped; main speech keeps playing.
+    voice_tab.audio_router.stop_playback.assert_called_once_with(
+        channel=voice_tab.audio_router.PREVIEW_CHANNEL
+    )
     child.destroy.assert_called_once_with()
     window._build_window_content.assert_called_once_with(selected_tab="Voice")
     window._on_refresh.assert_called_once_with()
@@ -344,9 +345,16 @@ def test_cancel_and_refresh_buttons_use_surface_theme_neutral_tokens_in_light_mo
     ctk.CTkButton.reset_mock()
 
     for name in (
-        "VoiceTab", "AudioOutputTab", "AppearanceTab", "AbbreviationsTab",
-        "KeybindsTab", "BehaviorTab", "SoundboardTab", "VRChatOSCTab",
-        "AdvancedTab", "TTSProviderTab",
+        "VoiceTab",
+        "AudioOutputTab",
+        "AppearanceTab",
+        "AbbreviationsTab",
+        "KeybindsTab",
+        "BehaviorTab",
+        "SoundboardTab",
+        "VRChatOSCTab",
+        "AdvancedTab",
+        "TTSProviderTab",
     ):
         monkeypatch.setattr(sw_module, name, MagicMock())
 
@@ -392,9 +400,16 @@ def test_build_window_content_resolves_surface_theme_once_for_tabview_style(monk
     ctk.get_appearance_mode.return_value = "Light"
 
     for name in (
-        "VoiceTab", "AudioOutputTab", "AppearanceTab", "AbbreviationsTab",
-        "KeybindsTab", "BehaviorTab", "SoundboardTab", "VRChatOSCTab",
-        "AdvancedTab", "TTSProviderTab",
+        "VoiceTab",
+        "AudioOutputTab",
+        "AppearanceTab",
+        "AbbreviationsTab",
+        "KeybindsTab",
+        "BehaviorTab",
+        "SoundboardTab",
+        "VRChatOSCTab",
+        "AdvancedTab",
+        "TTSProviderTab",
     ):
         monkeypatch.setattr(sw_module, name, MagicMock())
 
@@ -631,9 +646,7 @@ def test_load_voices_only_applies_latest_provider_result(monkeypatch):
     scheduled_callbacks[0]()
     scheduled_callbacks[1]()
 
-    tab._apply_voices_ui.assert_called_once_with(
-        [{"name": "piper", "short_name": "piper"}]
-    )
+    tab._apply_voices_ui.assert_called_once_with([{"name": "piper", "short_name": "piper"}])
 
 
 @pytest.mark.parametrize("close", [False, True])
@@ -734,9 +747,7 @@ def test_voice_preview_uses_unsaved_provider_override(monkeypatch):
 
     tab = object.__new__(VoiceTab)
     tab.settings = MagicMock()
-    tab.settings.get.side_effect = lambda key, default=None: (
-        "edge" if key == "tts_provider" else default
-    )
+    tab.settings.get.side_effect = lambda key, default=None: "edge" if key == "tts_provider" else default
     tab.tts_engine = MagicMock()
     tab.tts_engine.generate_speech = AsyncMock(return_value=(b"audio-bytes", None))
     tab.audio_router = MagicMock()
@@ -798,9 +809,7 @@ def test_voice_preview_resets_playing_flag_when_stop_pressed_during_playback(mon
 
     tab = object.__new__(VoiceTab)
     tab.settings = MagicMock()
-    tab.settings.get.side_effect = lambda key, default=None: (
-        "edge" if key == "tts_provider" else default
-    )
+    tab.settings.get.side_effect = lambda key, default=None: "edge" if key == "tts_provider" else default
     tab.tts_engine = MagicMock()
     tab.tts_engine.generate_speech = AsyncMock(return_value=(b"audio-bytes", None))
     tab.audio_router = MagicMock()
@@ -872,9 +881,7 @@ def test_voice_preview_resets_playing_flag_when_playback_completes_normally(monk
 
     tab = object.__new__(VoiceTab)
     tab.settings = MagicMock()
-    tab.settings.get.side_effect = lambda key, default=None: (
-        "edge" if key == "tts_provider" else default
-    )
+    tab.settings.get.side_effect = lambda key, default=None: "edge" if key == "tts_provider" else default
     tab.tts_engine = MagicMock()
     tab.tts_engine.generate_speech = AsyncMock(return_value=(b"audio-bytes", None))
     tab.audio_router = MagicMock()
@@ -924,9 +931,7 @@ def test_voice_preview_resets_playing_flag_when_playback_fails_without_stop(monk
 
     tab = object.__new__(VoiceTab)
     tab.settings = MagicMock()
-    tab.settings.get.side_effect = lambda key, default=None: (
-        "edge" if key == "tts_provider" else default
-    )
+    tab.settings.get.side_effect = lambda key, default=None: "edge" if key == "tts_provider" else default
     tab.tts_engine = MagicMock()
     tab.tts_engine.generate_speech = AsyncMock(return_value=(b"audio-bytes", None))
     tab.audio_router = MagicMock()
@@ -959,9 +964,7 @@ def test_voice_preview_resets_playing_flag_when_playback_fails_without_stop(monk
 
     assert tab._preview_playing is False
     tab._set_preview_ui_loading.assert_any_call(False)
-    tab.configure_surface_status_label.assert_any_call(
-        tab.preview_loading_label, "Playback failed.", "error"
-    )
+    tab.configure_surface_status_label.assert_any_call(tab.preview_loading_label, "Playback failed.", "error")
 
 
 def test_reset_to_defaults_aborts_success_flow_when_persistence_fails():

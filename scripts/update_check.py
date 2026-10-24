@@ -60,6 +60,8 @@ def _api_get(url: str, timeout: int = 15) -> dict | bytes:
 def get_remote_sha() -> str:
     """Return the latest commit SHA on the default branch."""
     data = _api_get(BRANCH_API, timeout=15)
+    if not isinstance(data, dict):
+        raise ValueError("GitHub branch API returned a non-JSON response")
     return data["commit"]["sha"]
 
 

@@ -2,11 +2,6 @@ import pytest
 import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 import numpy as np
-import sys
-
-# Mock sounddevice to avoid PortAudio dependency in tests
-sys.modules['sounddevice'] = MagicMock()
-
 from src.audio.audio_router import AudioRouter
 from src.audio.audio_router import PreparedAudioPayload
 

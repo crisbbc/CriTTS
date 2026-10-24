@@ -95,6 +95,18 @@ def test_report_success_flattens_message_and_uses_success_type(main_module):
     )
 
 
+
+def test_report_partial_success_uses_warning_type(main_module):
+    app = _make_app(main_module, "crittssink", True, "✅ Null sink ready.\n⚠ Virtual mic failed.")
+
+    main_module.CriTTSApp._report_linux_sink_status(
+        app, True, "✅ Null sink ready.\n⚠ Virtual mic failed."
+    )
+
+    assert _flush(app) == [
+        ("✅ Null sink ready. ⚠ Virtual mic failed.", "", "warning"),
+    ]
+
 def test_report_failure_uses_warning_type(main_module):
     app = _make_app(main_module, "crittssink", False, "⚠ pactl not found. Is PipeWire installed?")
 

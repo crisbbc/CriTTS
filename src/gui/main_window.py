@@ -598,8 +598,14 @@ class MainWindow(
             if not keybind_string:
                 continue
 
+            # The keyboard library fires hotkeys on its own listener thread,
+            # and these handlers touch Tk widgets, so marshal them onto the
+            # Tk main loop instead of calling them directly.
+            def on_hotkey(cb=callback):
+                self._safe_after(0, cb)
+
             try:
-                success = self.keybind_manager.register_global_hotkey(keybind_string, callback, action_name)
+                success = self.keybind_manager.register_global_hotkey(keybind_string, on_hotkey, action_name)
                 if success:
                     registered_count += 1
                     logger.debug("Registered global hotkey for '%s': '%s'", action_name, keybind_string)

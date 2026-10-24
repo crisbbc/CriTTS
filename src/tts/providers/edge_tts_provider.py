@@ -213,8 +213,8 @@ class EdgeTTSProvider(TTSProvider):
                         logger.debug("Edge TTS generation stopped by request")
                         return None  # Return None to indicate cancellation
 
-                    if chunk["type"] == "audio":
-                        audio_chunks.append(chunk["data"])
+                    if chunk["type"] == "audio" and (data := chunk.get("data")):
+                        audio_chunks.append(data)
 
                 return b"".join(audio_chunks)
 
@@ -286,8 +286,8 @@ class EdgeTTSProvider(TTSProvider):
                     logger.debug("Edge TTS streaming stopped by request")
                     return
 
-                if chunk["type"] == "audio":
-                    yield chunk["data"]
+                if chunk["type"] == "audio" and (data := chunk.get("data")):
+                    yield data
 
         except Exception as e:
             logger.error("Error streaming Edge TTS speech: %s", e)

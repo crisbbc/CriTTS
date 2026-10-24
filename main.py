@@ -205,7 +205,7 @@ class CriTTSApp(ctk.CTk):
             return
         status_text = " ".join(message.split())
         if message_type is None:
-            message_type = "success" if ok else "warning"
+            message_type = "warning" if not ok or "⚠" in message else "success"
         self.main_window._safe_after(
             0,
             lambda text=status_text, mtype=message_type: self.main_window._set_status(

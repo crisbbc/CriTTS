@@ -151,7 +151,10 @@ class TTSPipelineMixin:
             enable_normalization = self.settings.get("enable_normalization", True)
             normalization_type = self.settings.get("normalization_type", "Peak")
             processing_profile = self.settings.get("processing_profile", "balanced")
-            enable_streaming = self.settings.get("enable_streaming_playback", False)
+            enable_streaming = (
+                self.settings.get("enable_streaming_playback", False)
+                and self.settings.get("tts_provider", "edge") == "edge"
+            )
             soundboard_enabled = self.settings.get("soundboard_enabled", True)
             soundboard_slots = self.settings.get("soundboard_slots", {})
             if not isinstance(soundboard_slots, dict):
@@ -216,6 +219,7 @@ class TTSPipelineMixin:
                                 normalization_type,
                                 processing_profile,
                                 enable_viseme=True,
+                                stop_event=stop_event,
                             )
                         )
 
@@ -302,6 +306,7 @@ class TTSPipelineMixin:
                                 normalization_type,
                                 processing_profile,
                                 enable_viseme=False,
+                                stop_event=stop_event,
                             )
                         )
 
@@ -352,8 +357,13 @@ class TTSPipelineMixin:
         normalization_type: str,
         processing_profile: str,
         enable_viseme: bool,
+        stop_event: threading.Event | None = None,
     ) -> bool:
-        """Play a single prepared audio segment using existing routing settings."""
+        """Play a single prepared audio segment using existing routing settings.
+
+        *stop_event* is checked after decoding and handed to the router, so a
+        Stop pressed while the segment is still being decoded is honoured.
+        """
         voice_amplitude_enabled = self.settings.get("vrchat_voice_amplitude_enabled", False)
         enable_clarity_eq = self.settings.get("enable_clarity_eq", True)
         try:
@@ -365,6 +375,9 @@ class TTSPipelineMixin:
                 enable_clarity_eq=enable_clarity_eq,
             )
         except RuntimeError:
+            return False
+
+        if stop_event is not None and stop_event.is_set():
             return False
 
         if enable_viseme and self._viseme_mapper is not None and self.osc_client is not None:
@@ -398,6 +411,7 @@ class TTSPipelineMixin:
                 processing_profile=processing_profile,
                 enable_clarity_eq=enable_clarity_eq,
                 prepared_audio=prepared_audio,
+                stop_event=stop_event,
             )
 
         return await self.audio_router.play_audio_to_device(
@@ -409,6 +423,7 @@ class TTSPipelineMixin:
             processing_profile,
             enable_clarity_eq=enable_clarity_eq,
             prepared_audio=prepared_audio,
+            stop_event=stop_event,
         )
 
     async def _speak_streaming_async(self, text: str, voice: str, rate: int, volume: int, pitch: int, device_idx, processing_profile: str, stop_event: threading.Event, enable_normalization: bool = True, normalization_type: str = "Peak") -> bool:
@@ -503,7 +518,7 @@ class TTSPipelineMixin:
         
         # Set stop event to signal background thread to stop
         self._stop_event.set()
-        self.audio_router.stop_playback()
+        self.audio_router.stop_playback(channel=self.audio_router.MAIN_CHANNEL)
         if self._viseme_mapper is not None:
             self._viseme_mapper.stop_viseme_animation()
         with self._speaking_lock:

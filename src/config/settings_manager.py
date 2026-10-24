@@ -433,7 +433,8 @@ class SettingsManager:
                 os.replace(tmp_path, self.config_path)
                 self._update_persisted_settings_snapshot()
                 return True
-            except IOError as e:
+            except (OSError, TypeError, ValueError) as e:
+                # TypeError/ValueError: a value json cannot serialize.
                 logger.warning("Error saving settings: %s", e)
                 try:
                     tmp_path.unlink(missing_ok=True)

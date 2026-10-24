@@ -7,7 +7,7 @@ import threading
 import numpy as np
 import sounddevice as sd
 import speech_recognition as sr
-from typing import Optional, Callable, List
+from typing import Any, Callable, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -307,7 +307,9 @@ class STTEngine:
                 
                 # Ensure cutoff is valid (must be < 1)
                 if cutoff < 1:
-                    b, a = butter(1, cutoff, btype='high')
+                    b, a = cast(
+                        tuple[Any, Any], butter(1, cutoff, btype="highpass", output="ba")
+                    )
                     
                     # Convert to float for filtering, then back to int16
                     audio_float = audio_data.astype(np.float64)
@@ -479,7 +481,9 @@ class STTEngine:
             # Postprocess text
             text = self._postprocess_transcript(text)
             
-            logger.info("Transcription successful: '%s' (confidence: %.0f%%)", text, confidence * 100)
+            # The transcript itself only goes to DEBUG logs (it is what the user said).
+            logger.info("Transcription successful (%d chars, confidence: %.0f%%)", len(text), confidence * 100)
+            logger.debug("Transcript: %r", text)
             on_result(text)
             
         except sr.UnknownValueError:

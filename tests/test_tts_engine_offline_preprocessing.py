@@ -25,7 +25,7 @@ def _make_settings(provider: str, voice: str, coqui_language: str = "en"):
 
 class TestOfflinePreprocessing:
     @pytest.mark.asyncio
-    async def test_coqui_preprocess_uses_configured_language_for_numbers(self):
+    async def test_coqui_preprocess_keeps_digits_for_non_english_language(self):
         engine = TTSEngine(
             settings_manager=_make_settings(
                 provider="coqui",
@@ -36,10 +36,12 @@ class TestOfflinePreprocessing:
 
         processed = await engine.preprocess_text("J'ai 21 pommes.", "Claribel Dervla")
 
-        assert "vingt-un" in processed
+        # The configured Coqui language (not the voice name) decides; French
+        # digits are left for the model to read ("vingt et un", not "vingt-un").
+        assert "21" in processed
 
     @pytest.mark.asyncio
-    async def test_piper_preprocess_uses_voice_locale_for_numbers(self):
+    async def test_piper_preprocess_keeps_digits_for_non_english_voice(self):
         engine = TTSEngine(
             settings_manager=_make_settings(
                 provider="piper",
@@ -49,7 +51,36 @@ class TestOfflinePreprocessing:
 
         processed = await engine.preprocess_text("Wir haben 22 Optionen.", "de_DE-thorsten-medium")
 
-        assert "zweiundzwanzig" in processed
+        assert "22" in processed
+
+    @pytest.mark.asyncio
+    async def test_piper_preprocess_spells_numbers_for_english_voice(self):
+        engine = TTSEngine(
+            settings_manager=_make_settings(
+                provider="piper",
+                voice="en_US-lessac-medium",
+            )
+        )
+
+        processed = await engine.preprocess_text("We have 22 options.", "en_US-lessac-medium")
+
+        assert "twenty-two" in processed
+
+    def test_add_natural_pauses_keeps_numeric_separators(self):
+        engine = TTSEngine(
+            settings_manager=_make_settings(
+                provider="edge",
+                voice="en-US-AriaNeural",
+            )
+        )
+
+        processed = engine._add_natural_pauses("It is $5.99 for 1,234 at 12:30, 2020–2021, e.g. now.Next", "edge")
+
+        assert processed == "It is $5.99 for 1,234 at 12:30, 2020–2021, e.g. now. Next"
+
+    def test_clean_symbols_keeps_identifiers_and_arithmetic(self):
+        assert TTSEngine._clean_symbols("my_var_name and 5 * 3 * 2") == "my_var_name and 5 * 3 * 2"
+        assert TTSEngine._clean_symbols("**bold** and _it_") == "bold and it"
 
     def test_add_natural_pauses_preserves_offline_clause_breaks(self):
         engine = TTSEngine(

@@ -17,13 +17,13 @@ def run_benchmark():
     def bench_with_list():
         # Only measure the overhead of the list allocation
         children = list(frame1.winfo_children())
-        for c in children:
+        for _child in children:
             pass
 
     def bench_without_list():
         # Only measure without the list allocation
         children = frame2.winfo_children()
-        for c in children:
+        for _child in children:
             pass
 
     # Disable garbage collector for more stable timing

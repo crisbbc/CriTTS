@@ -29,7 +29,7 @@ class AudioCache:
     DEFAULT_MAX_SIZE_MB = 500
     # Increment when the cache-key schema changes so entries written under an
     # older key layout are invalidated instead of being served stale.
-    CACHE_VERSION = 3
+    CACHE_VERSION = 4
     
     # Batching configuration for index persistence
     FLUSH_INTERVAL_STORES = 10  # Flush index every N store operations
@@ -98,6 +98,16 @@ class AudioCache:
         )
         self._flush_thread.start()
     
+    def set_enabled(self, enabled: bool) -> None:
+        """Enable or disable caching at runtime.
+
+        The periodic index flush thread only starts for an enabled cache, so
+        enabling one that started disabled must start it here.
+        """
+        self.enabled = enabled
+        if enabled and (self._flush_thread is None or not self._flush_thread.is_alive()):
+            self._start_flush_timer()
+
     def _stop_flush_timer(self):
         """Stop the background flush thread."""
         self._flush_stop_event.set()
@@ -182,8 +192,8 @@ class AudioCache:
             logger.info("Loaded %d cached audio entries", len(self._index))
             
         except Exception as e:
-            logger.warning("Failed to load cache index: %s", e)
-            self._index = OrderedDict()
+            logger.warning("Failed to load cache index; rebuilding it from audio files: %s", e)
+            self._rebuild_index()
     
     def _save_index(self) -> bool:
         """Save cache index atomically so interruption cannot truncate it."""
@@ -236,8 +246,7 @@ class AudioCache:
                     # Create minimal metadata from file stats
                     stat = audio_file.stat()
                     self._index[key] = {
-                        "text": "",  # Unknown after rebuild
-                        "provider": "",  # Unknown after rebuild
+                            "provider": "",  # Unknown after rebuild
                         "voice": "",  # Unknown after rebuild
                         "rate": 0,
                         "volume": 100,
@@ -313,8 +322,9 @@ class AudioCache:
         Returns:
             Hash key for the parameters
         """
-        # Normalize text
-        normalized_text = text.strip().lower()
+        # Normalize surrounding whitespace only: case changes pronunciation
+        # ("US" vs "us", "WHO" vs "who"), so it must stay part of the key.
+        normalized_text = text.strip()
         normalized_provider = provider.strip().lower()
         
         # Create key string
@@ -448,8 +458,8 @@ class AudioCache:
                     raise
                 
                 # Create metadata (stored in centralized index, not individual files)
+                # The spoken text itself is deliberately not persisted here.
                 meta = {
-                    "text": text[:200],  # Truncate for storage
                     "provider": provider,
                     "voice": voice,
                     "rate": rate,

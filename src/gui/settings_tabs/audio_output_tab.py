@@ -203,7 +203,7 @@ class AudioOutputTab(BaseTab):
                     return
                 ok, message = self.audio_router.ensure_linux_sink_modules(sink_name)
                 self._record_last_sink_result(ok, message)
-                self._after_sink_result(message, error=not ok)
+                self._after_sink_result(message, error=not ok or "⚠" in message)
             except Exception as e:
                 message = f"❌ Unexpected error: {e}"
                 self._record_last_sink_result(False, message)
@@ -261,7 +261,7 @@ class AudioOutputTab(BaseTab):
         if not isinstance(result, tuple) or len(result) != 2:
             return
         ok, message = result
-        color = "#e74c3c" if not ok else "#27ae60"
+        color = "#e74c3c" if not ok or "⚠" in message else "#27ae60"
         self.sink_status_label.configure(text=message, text_color=color)
 
     def _after_sink_result(self, message: str, *, error: bool):
@@ -641,7 +641,7 @@ class AudioOutputTab(BaseTab):
 
     def _on_passthrough_volume_change(self, value):
         """Update passthrough volume label when slider changes."""
-        self.passthrough_volume_value_label.configure(text=f"{int(value)}%")
+        self.passthrough_volume_value_label.configure(text=f"{value:.0f}%")
 
     def get_settings(self) -> Dict[str, Any]:
         """Get current settings from the tab UI."""

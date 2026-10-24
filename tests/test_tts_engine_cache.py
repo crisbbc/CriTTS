@@ -408,6 +408,22 @@ class TestAudioCacheIsolation:
         finally:
             cache.shutdown()
 
+    def test_malformed_index_rebuilds_existing_audio_entries(self, tmp_path):
+        seed = AudioCache(cache_dir=tmp_path, enabled=True)
+        try:
+            assert seed.store(b"audio", "hello", "voice", provider="edge")
+        finally:
+            seed.shutdown()
+
+        (tmp_path / "cache_index.json").write_text("{", encoding="utf-8")
+        cache = AudioCache(cache_dir=tmp_path, enabled=True)
+        try:
+            assert cache.lookup("hello", "voice", provider="edge") == b"audio"
+            assert cache.get_statistics()["entries"] == 1
+        finally:
+            cache.shutdown()
+
+
 
 class TestGenerateSpeechCacheIsolation:
     @pytest.mark.asyncio

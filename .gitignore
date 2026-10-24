@@ -36,6 +36,7 @@ ENV/
 *.swo
 .claude
 .freebuff
+.pi/
 plans/
 
 # Launcher generated state
@@ -46,8 +47,10 @@ plans/
 .tmp-audio-cache/
 .tmp-audio-cache-*/
 
-# Test / coverage artifacts
+# Test / coverage / tooling artifacts
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
 .coverage.*
 htmlcov/
