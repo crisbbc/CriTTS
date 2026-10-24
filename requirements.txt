@@ -2,7 +2,7 @@
 # A lockfile is intentionally not committed: coqui-tts pulls in torch and
 # other large, platform-specific wheels that differ across OS/Python combos.
 customtkinter>=5.2.0
-edge-tts>=7.2.3
+edge-tts>=7.3.1
 piper-tts>=1.2.0
 coqui-tts[codec]>=0.27.5
 spacy[ja]>=3.7.0
