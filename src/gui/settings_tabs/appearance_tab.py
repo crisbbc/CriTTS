@@ -55,8 +55,8 @@ class AppearanceTab(BaseTab):
             ("speak", "Speak"),
             ("stop", "Stop"),
             ("clear", "Clear"),
-            ("voice", "Voice"),
-            ("overlay", "Overlay"),
+            ("voice", "Voice input"),
+            ("overlay", "Recording overlay"),
         ]
 
         for button_key, button_label in button_options:

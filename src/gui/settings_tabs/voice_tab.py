@@ -12,9 +12,9 @@ from typing import Any, Callable, Optional, List, Dict
 
 from .base_tab import BaseTab
 from ..theme_constants import (
+    COLOR_ON_FILL,
     FONT_SM,
     FONT_MD,
-    FONT_LG,
     FONT_WEIGHT_BOLD,
     BUTTON_HEIGHT,
     COLOR_DANGER,
@@ -233,8 +233,8 @@ class VoiceTab(BaseTab):
 
     def _create_search_section(self, parent):
         """Create the search section."""
-        self.search_label = self.create_setting_label("Search Voices:", parent)
-        self.search_label.pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
+        self.search_label = self.create_setting_label("Search voices", parent)
+        self.search_label.pack(anchor="w", pady=(SPACING_MD, SPACING_BASE))
 
         self.search_entry = ctk.CTkEntry(
             parent, font=ctk.CTkFont(size=FONT_MD), placeholder_text="Type to filter voices..."
@@ -254,14 +254,11 @@ class VoiceTab(BaseTab):
 
     def _create_voice_selection_section(self, parent):
         """Create the voice selection section."""
-        self.create_separator(parent).pack(fill="x", pady=SPACING_BASE)
+        # Same label-above-field pattern as the search box.
+        self.voice_label = self.create_setting_label("Selected voice", parent)
+        self.voice_label.pack(anchor="w", pady=(SPACING_SM, SPACING_BASE))
 
-        self.voice_selection_frame = self.create_inline_frame(parent)
-
-        self.voice_label = ctk.CTkLabel(
-            self.voice_selection_frame, text="Selected Voice:", font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD)
-        )
-        self.voice_label.pack(side="left", padx=SPACING_BASE)
+        self.voice_selection_frame = self.create_inline_frame(parent, pady=0)
 
         self.voice_var = ctk.StringVar()
         self.voice_dropdown = ctk.CTkComboBox(
@@ -272,7 +269,7 @@ class VoiceTab(BaseTab):
             dropdown_font=ctk.CTkFont(size=FONT_SM),
             state="readonly",
         )
-        self.voice_dropdown.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
+        self.voice_dropdown.pack(side="left", fill="x", expand=True, padx=(0, SPACING_SM))
         self.voice_dropdown.configure(command=self._on_voice_selection_change)
 
         # Favorite button
@@ -285,13 +282,13 @@ class VoiceTab(BaseTab):
             height=BUTTON_HEIGHT,
             **self.get_subtle_button_style(),
         )
-        self.favorite_button.pack(side="left", padx=SPACING_BASE)
+        self.favorite_button.pack(side="left")
 
     def _create_preview_section(self, parent):
         """Create the preview section."""
-        self.create_separator(parent).pack(fill="x", pady=SPACING_SM)
+        self.create_setting_label("Preview", parent).pack(anchor="w", pady=(SPACING_MD, SPACING_BASE))
 
-        self.preview_frame = self.create_inline_frame(parent, pady=SPACING_SM)
+        self.preview_frame = self.create_inline_frame(parent, pady=0)
 
         # Preview text entry
         preview_text_value = self.settings.get("voice_preview_text", DEFAULT_PREVIEW_TEXT)
@@ -305,7 +302,7 @@ class VoiceTab(BaseTab):
             font=ctk.CTkFont(size=FONT_MD),
             placeholder_text="Enter preview text...",
         )
-        self.preview_text_entry.pack(side="left", fill="x", expand=True, padx=SPACING_BASE)
+        self.preview_text_entry.pack(side="left", fill="x", expand=True, padx=(0, SPACING_SM))
 
         # Reset preview text button
         self.reset_preview_button = ctk.CTkButton(
@@ -329,6 +326,7 @@ class VoiceTab(BaseTab):
             height=BUTTON_HEIGHT,
             fg_color=COLOR_SUCCESS,
             hover_color=COLOR_SUCCESS_HOVER,
+            text_color=COLOR_ON_FILL,
         )
         self.preview_button.pack(side="left", padx=SPACING_BASE)
 
@@ -342,6 +340,7 @@ class VoiceTab(BaseTab):
             height=BUTTON_HEIGHT,
             fg_color=COLOR_DANGER,
             hover_color=COLOR_DANGER_HOVER,
+            text_color=COLOR_ON_FILL,
         )
 
         # Loading indicator

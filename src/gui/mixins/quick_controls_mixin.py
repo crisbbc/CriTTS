@@ -3,8 +3,7 @@ from typing import Any
 import customtkinter as ctk
 from ..theme_constants import (
     get_theme_colors,
-    ButtonColors,
-    COLOR_ON_FILL,
+    toggle_switch_style,
     COLOR_BG_SECONDARY,
     COLOR_NEUTRAL_LIGHTER,
     FONT_SM,
@@ -20,6 +19,7 @@ class QuickControlsMixin:
     # Attributes/methods provided by MainWindow (mixin contract).
     _show_error: Any
     controls_toggle_button: Any
+    _sync_switch: Any
     main_frame: Any
     settings: Any
 
@@ -32,27 +32,8 @@ class QuickControlsMixin:
         self._qc_volume_label.configure(text_color=colors["text_secondary"])
         self._qc_pitch_label.configure(text_color=colors["text_secondary"])
 
-        self.controls_toggle_button.configure(
-            **self._get_toggle_button_theme_colors(
-                colors=colors,
-                is_active=self._quick_controls_visible,
-            )
-        )
-
-    @staticmethod
-    def _get_toggle_button_theme_colors(colors: dict, is_active: bool) -> ButtonColors:
-        """Return the active or neutral theme colors for toggle-style control buttons."""
-        if is_active:
-            return {
-                "fg_color": colors["button_active"],
-                "hover_color": colors["button_active_hover"],
-                "text_color": COLOR_ON_FILL,
-            }
-        return {
-            "fg_color": colors["button_neutral"],
-            "hover_color": colors["button_neutral_hover"],
-            "text_color": colors["text_primary"],
-        }
+        self.controls_toggle_button.configure(**toggle_switch_style(mode))
+        self._sync_switch(self.controls_toggle_button, self._quick_controls_visible)
 
     def _create_quick_controls(self):
         """Create the collapsible quick controls panel with rate/volume/pitch sliders."""
@@ -62,7 +43,7 @@ class QuickControlsMixin:
             corner_radius=RADIUS_MD
         )
         self.quick_controls_frame.grid(
-            row=3, column=0, padx=SPACING_MD, pady=(0, SPACING_SM), sticky="ew"
+            row=4, column=0, padx=SPACING_MD, pady=(0, SPACING_SM), sticky="ew"
         )
         self.quick_controls_frame.grid_columnconfigure(0, weight=1)
 
@@ -136,6 +117,7 @@ class QuickControlsMixin:
         if not self.settings.save_settings():
             self.settings.set("quick_controls_visible", previous_visible)
             self._quick_controls_visible = previous_visible
+            self._sync_switch(self.controls_toggle_button, previous_visible)
             self._show_error("Could not save quick controls visibility.")
             return
 

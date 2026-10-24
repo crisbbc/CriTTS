@@ -9,7 +9,16 @@ import customtkinter as ctk
 from typing import Any, List, Dict
 
 from .base_tab import BaseTab
-from ..theme_constants import BUTTON_HEIGHT, FONT_SM, FONT_MD, SPACING_BASE, SPACING_MD, SPACING_SM, SPACING_XS
+from ..theme_constants import (
+    BUTTON_HEIGHT,
+    COLOR_DANGER_TEXT,
+    FONT_SM,
+    FONT_MD,
+    SPACING_BASE,
+    SPACING_MD,
+    SPACING_SM,
+    SPACING_XS,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -161,12 +170,11 @@ class AudioOutputTab(BaseTab):
 
         self.cleanup_sink_button = ctk.CTkButton(
             button_frame,
-            text="🗑 Remove",
+            text="Remove",
             font=ctk.CTkFont(size=FONT_MD),
             command=self._cleanup_null_sink,
             height=BUTTON_HEIGHT,
-            fg_color="#e74c3c",
-            hover_color="#c0392b",
+            text_color=COLOR_DANGER_TEXT,
         )
         self.cleanup_sink_button.pack(side="left")
 
@@ -268,7 +276,7 @@ class AudioOutputTab(BaseTab):
         """Schedule a UI update from the background thread."""
         def _apply():
             self.create_sink_button.configure(state="normal", text="🔧 Create Null Sink")
-            self.cleanup_sink_button.configure(state="normal", text="🗑 Remove")
+            self.cleanup_sink_button.configure(state="normal", text="Remove")
             color = "#e74c3c" if error else "#27ae60"
             self.sink_status_label.configure(text=message, text_color=color)
         try:
@@ -280,7 +288,7 @@ class AudioOutputTab(BaseTab):
                     state="normal", text="🔧 Create Null Sink"
                 )
                 self.cleanup_sink_button.configure(
-                    state="normal", text="🗑 Remove"
+                    state="normal", text="Remove"
                 )
             except Exception:
                 logger.debug("Remove-button state update failed", exc_info=True)

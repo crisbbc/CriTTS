@@ -30,6 +30,7 @@ SPACING_2XL = 48  # 12 * base - section spacing
 COLOR_PRIMARY = "#4f46e5"  # Indigo 600
 COLOR_PRIMARY_HOVER = "#4338ca"  # Indigo 700
 COLOR_PRIMARY_LIGHT = "#818cf8"  # Indigo 400
+COLOR_PRIMARY_BRIGHT = "#6366f1"  # Indigo 500: "on" switch track on dark surfaces
 
 # Accent colors (secondary actions)
 COLOR_ACCENT = "#7c3aed"  # Violet 600
@@ -190,10 +191,10 @@ ANIMATION_VERY_SLOW = 500  # ms - complex animations
 # WINDOW DIMENSIONS
 # Default and minimum window sizes
 # =============================================================================
-WINDOW_MAIN_WIDTH = 1200
-WINDOW_MAIN_HEIGHT = 640
-WINDOW_MAIN_MIN_WIDTH = 1180
-WINDOW_MAIN_MIN_HEIGHT = 500
+WINDOW_MAIN_WIDTH = 860
+WINDOW_MAIN_HEIGHT = 580
+WINDOW_MAIN_MIN_WIDTH = 600
+WINDOW_MAIN_MIN_HEIGHT = 440
 
 WINDOW_SETTINGS_WIDTH = 980
 WINDOW_SETTINGS_HEIGHT = 720
@@ -242,6 +243,30 @@ def neutral_button_style(mode: str | None = None) -> ButtonColors:
     return {
         "fg_color": colors["button_neutral"],
         "hover_color": colors["button_neutral_hover"],
+        "text_color": colors["text_primary"],
+    }
+
+
+class SwitchColors(TypedDict):
+    """Keyword arguments for a CTkSwitch's track, knob and label colors."""
+
+    fg_color: str
+    progress_color: str
+    button_color: str
+    button_hover_color: str
+    text_color: str
+
+
+def toggle_switch_style(mode: str | None = None) -> SwitchColors:
+    """Colors for on/off switches; both tracks clear 3:1 against the window background."""
+    resolved = mode if mode in ("Light", "Dark") else get_active_appearance_mode()
+    colors = get_theme_colors(resolved)
+    light = resolved == "Light"
+    return {
+        "fg_color": COLOR_NEUTRAL_LIGHT,
+        "progress_color": COLOR_PRIMARY if light else COLOR_PRIMARY_BRIGHT,
+        "button_color": "#ffffff" if light else COLOR_BG_TERTIARY_LIGHT,
+        "button_hover_color": "#ffffff" if light else COLOR_NEUTRAL_LIGHTEST,
         "text_color": colors["text_primary"],
     }
 
@@ -397,18 +422,57 @@ def get_theme_colors(mode: str) -> dict[str, Any]:
         }
 
 
-def apply_button_theme() -> None:
-    """Make CustomTkinter's default button colors meet WCAG AA.
+def apply_widget_theme() -> None:
+    """Replace CustomTkinter's stock blue defaults with the app palette.
 
-    The built-in theme draws #DCE4EE text on a mid blue (about 4.4:1).  Call
-    once after ``ctk.set_default_color_theme``; buttons that pass their own
-    colors are unaffected except for the white label text.
+    Call once after ``ctk.set_default_color_theme``.  Unstyled buttons and
+    menus become neutral (the stock blue was a fifth color with no meaning and
+    its label text was below WCAG AA); buttons with a colored fill pass their
+    own ``fg_color`` and ``text_color``.  Input borders clear 3:1 against the
+    window in both themes.
     """
     import customtkinter as ctk
 
-    button = ctk.ThemeManager.theme["CTkButton"]
-    button["fg_color"] = [COLOR_INFO, COLOR_INFO]
-    button["hover_color"] = [COLOR_INFO_HOVER, COLOR_INFO_HOVER]
-    button["text_color"] = [COLOR_ON_FILL, COLOR_ON_FILL]
+    theme = ctk.ThemeManager.theme
+    neutral_fill = [COLOR_BG_TERTIARY_LIGHT, COLOR_NEUTRAL_MEDIUM]
+    neutral_hover = [COLOR_NEUTRAL_MEDIUM_LIGHT, COLOR_NEUTRAL]
+    neutral_text = [COLOR_TEXT_PRIMARY_LIGHT, COLOR_NEUTRAL_LIGHTEST]
+    input_border = [COLOR_NEUTRAL_LIGHT, COLOR_NEUTRAL_LIGHT]
+
+    button = theme["CTkButton"]
+    button["fg_color"] = neutral_fill
+    button["hover_color"] = neutral_hover
+    button["text_color"] = neutral_text
     # Dimmer than enabled labels but still legible on both neutral fills.
     button["text_color_disabled"] = [COLOR_NEUTRAL_LIGHT, COLOR_NEUTRAL_LIGHTER]
+
+    # Value controls (checked, on, slider fill) share the indigo of the
+    # switches instead of the theme's stock blue, one meaning for one color.
+    # [light, dark] pairs; tracks and borders clear 3:1 against the window.
+    on_fill = [COLOR_PRIMARY, COLOR_PRIMARY]
+    for name in ("CTkCheckBox", "CTkRadioButton"):
+        ctk.ThemeManager.theme[name]["fg_color"] = on_fill
+        ctk.ThemeManager.theme[name]["hover_color"] = [COLOR_PRIMARY_HOVER, COLOR_PRIMARY_HOVER]
+        ctk.ThemeManager.theme[name]["border_color"] = [COLOR_NEUTRAL_LIGHT, COLOR_NEUTRAL_LIGHT]
+    ctk.ThemeManager.theme["CTkCheckBox"]["checkmark_color"] = [COLOR_ON_FILL, COLOR_ON_FILL]
+    switch = ctk.ThemeManager.theme["CTkSwitch"]
+    switch["fg_color"] = [COLOR_NEUTRAL_LIGHT, COLOR_NEUTRAL_LIGHT]
+    switch["progress_color"] = [COLOR_PRIMARY, COLOR_PRIMARY_BRIGHT]
+    slider = ctk.ThemeManager.theme["CTkSlider"]
+    slider["fg_color"] = [COLOR_NEUTRAL_MEDIUM_LIGHT, COLOR_NEUTRAL_MEDIUM]
+    slider["progress_color"] = [COLOR_PRIMARY, COLOR_PRIMARY_BRIGHT]
+    slider["button_color"] = [COLOR_PRIMARY, COLOR_BG_TERTIARY_LIGHT]
+    slider["button_hover_color"] = [COLOR_PRIMARY_HOVER, "#ffffff"]
+
+    menu = theme["CTkOptionMenu"]
+    menu["fg_color"] = neutral_fill
+    menu["button_color"] = neutral_hover
+    menu["button_hover_color"] = [COLOR_NEUTRAL_LIGHTER, COLOR_NEUTRAL_LIGHT]
+    menu["text_color"] = neutral_text
+    for name in ("CTkEntry", "CTkComboBox", "CTkTextbox"):
+        theme[name]["fg_color"] = ["#ffffff", COLOR_BG_SECONDARY]
+        theme[name]["border_color"] = input_border
+        theme[name]["text_color"] = neutral_text
+    combo = theme["CTkComboBox"]
+    combo["button_color"] = input_border
+    combo["button_hover_color"] = [COLOR_NEUTRAL, COLOR_NEUTRAL_LIGHTER]

@@ -8,10 +8,8 @@ from typing import Any, Callable, Optional, List, Dict
 from .base_tab import BaseTab
 from ..keybind_manager import KeybindManager
 from ..theme_constants import (
+    neutral_button_style,
     BUTTON_HEIGHT,
-    COLOR_PRIMARY,
-    COLOR_PRIMARY_HOVER,
-    COLOR_ON_FILL,
     COLOR_ON_WARNING,
     COLOR_WARNING,
     COLOR_WARNING_HOVER,
@@ -298,7 +296,7 @@ class KeybindsTab(BaseTab):
         
         for action, btn in self.keybind_capture_buttons.items():
             if action == self._capturing_keybind:
-                btn.configure(text="Set", fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER, text_color=COLOR_ON_FILL)
+                btn.configure(text="Set", **neutral_button_style())
             else:
                 btn.configure(state="normal")
         

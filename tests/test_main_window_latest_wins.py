@@ -12,7 +12,7 @@ from src.audio.audio_router import PreparedAudioPayload
 import numpy as np
 import pytest
 from src.gui.gui_utils import STTState
-from src.gui.theme_constants import COLOR_ON_FILL, get_theme_colors
+from src.gui.theme_constants import get_theme_colors, toggle_switch_style
 
 
 def test_latest_request_supersedes_older_request():
@@ -209,11 +209,13 @@ def test_refresh_after_text_mutation_updates_highlight_then_schedules_voice_indi
     window = MainWindow.__new__(MainWindow)
     calls = []
     window._highlight_current_line = lambda: calls.append("highlight")
+    window._update_placeholder = lambda: calls.append("placeholder")
     window._schedule_voice_indicator_update = lambda: calls.append("voice")
 
     MainWindow._refresh_after_text_mutation(window)
 
-    assert calls == ["highlight", "voice"]
+    # The placeholder must follow programmatic changes too (Clear, voice input).
+    assert calls == ["highlight", "placeholder", "voice"]
 
 
 def test_set_text_refreshes_after_programmatic_replace():
@@ -291,12 +293,13 @@ def test_insert_stt_text_refreshes_after_programmatic_insert():
 def test_on_text_changed_keeps_keyboard_path_limited_to_voice_update_and_typing():
     window = MainWindow.__new__(MainWindow)
     calls = []
+    window._update_placeholder = lambda: calls.append("placeholder")
     window._schedule_voice_indicator_update = lambda: calls.append("voice")
     window._handle_typing_animation = lambda: calls.append("typing")
 
     MainWindow._on_text_changed(window)
 
-    assert calls == ["voice", "typing"]
+    assert calls == ["placeholder", "voice", "typing"]
 
 
 @pytest.mark.parametrize("quick_controls_visible", [False, True])
@@ -305,9 +308,8 @@ def test_apply_theme_recolors_quick_controls(quick_controls_visible):
     window = MainWindow.__new__(MainWindow)
     window.root = MagicMock()
     window.main_frame = MagicMock()
-    window.text_frame = MagicMock()
     window.text_input = MagicMock()
-    window.text_label = MagicMock()
+    window._placeholder_label = MagicMock()
     window.voice_indicator_label = MagicMock()
     window.voice_indicator_value = MagicMock()
     window.status_frame = MagicMock()
@@ -333,9 +335,10 @@ def test_apply_theme_recolors_quick_controls(quick_controls_visible):
         "hover_color": colors["button_neutral_hover"],
         "text_color": colors["text_primary"],
     }
-    for button in (window.clear_button, window.settings_button, window.overlay_button,
-                   window.stop_button, window.voice_button):
+    for button in (window.clear_button, window.settings_button, window.stop_button, window.voice_button):
         button.configure.assert_called_once_with(**light_neutral)
+    # Overlay and quick controls are switches styled for the theme.
+    window.overlay_button.configure.assert_called_once_with(**toggle_switch_style("Light"))
 
     window.quick_controls_frame.configure.assert_called_once_with(
         fg_color=colors["bg_secondary"]
@@ -349,24 +352,12 @@ def test_apply_theme_recolors_quick_controls(quick_controls_visible):
     window._qc_pitch_label.configure.assert_called_once_with(
         text_color=colors["text_secondary"]
     )
-    expected_button_colors = (
-        {
-            "fg_color": colors["button_active"],
-            "hover_color": colors["button_active_hover"],
-            "text_color": COLOR_ON_FILL,
-        }
-        if quick_controls_visible
-        else {
-            "fg_color": colors["button_neutral"],
-            "hover_color": colors["button_neutral_hover"],
-            "text_color": colors["text_primary"],
-        }
-    )
-    window.controls_toggle_button.configure.assert_called_once_with(
-        **expected_button_colors
-    )
-    if not quick_controls_visible:
-        assert expected_button_colors["hover_color"] != expected_button_colors["fg_color"]
+    window.controls_toggle_button.configure.assert_called_once_with(**toggle_switch_style("Light"))
+    # The switch position follows the saved visibility.
+    if quick_controls_visible:
+        window.controls_toggle_button.select.assert_called_once_with()
+    else:
+        window.controls_toggle_button.deselect.assert_called_once_with()
 
 
 def test_refresh_quick_controls_resyncs_visibility_from_settings():
@@ -624,3 +615,34 @@ async def test_play_audio_segment_prepares_audio_once_for_viseme_and_amplitude_p
         prepared_audio=prepared,
         stop_event=None,
     )
+
+
+@pytest.mark.parametrize(
+    ("voice_id", "voice_info", "expected"),
+    [
+        ("en-US-ChristopherNeural", {"name": "Microsoft Christopher Online (Natural) - English (United States)"},
+         "Christopher · English (United States)"),
+        # Before the voice list has loaded, the Edge short name still reads as a name.
+        ("en-US-ChristopherNeural", None, "Christopher · en-US"),
+        ("Claribel Dervla", {"name": "Claribel Dervla"}, "Claribel Dervla"),
+        ("en_US-lessac-medium", None, "en_US-lessac-medium"),
+    ],
+)
+def test_voice_display_name_prefers_readable_names(voice_id, voice_info, expected):
+    from src.gui.mixins.animation_mixin import voice_display_name
+
+    assert voice_display_name(voice_id, voice_info) == expected
+
+
+def test_set_status_shows_plain_text_and_leaves_state_to_the_dot():
+    window = MainWindow.__new__(MainWindow)
+    shown = []
+    states = []
+    window._animate_status_change = lambda text, message_type: shown.append(text)
+    window._animate_activity_indicator = states.append
+
+    MainWindow._set_status(window, "⚠️ Could not save settings", "⚠️")
+    MainWindow._set_status(window, "✅ Ready! Set Discord input to: CriTTS_Virtual_Mic")
+
+    assert shown == ["Could not save settings", "Ready! Set Discord input to: CriTTS_Virtual_Mic"]
+    assert states == ["warning", "info"]

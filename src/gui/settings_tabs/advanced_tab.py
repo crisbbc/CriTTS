@@ -11,13 +11,12 @@ from typing import Any, Callable, Optional, List, Dict
 
 from .base_tab import BaseTab
 from ..theme_constants import (
+    COLOR_DANGER_TEXT,
     FONT_XS,
     FONT_SM,
     FONT_MD,
     BUTTON_HEIGHT,
     BUTTON_WIDTH_DEFAULT,
-    COLOR_DANGER,
-    COLOR_DANGER_HOVER,
     SPACING_MD,
     SPACING_BASE,
     SPACING_SM,
@@ -255,8 +254,7 @@ class AdvancedTab(BaseTab):
             command=self._on_clear_cache,
             width=BUTTON_WIDTH_DEFAULT,
             height=BUTTON_HEIGHT,
-            fg_color=COLOR_DANGER,
-            hover_color=COLOR_DANGER_HOVER,
+            text_color=COLOR_DANGER_TEXT,
         )
         self.clear_cache_button.pack(side="left", padx=SPACING_BASE)
 

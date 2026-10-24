@@ -29,32 +29,23 @@ from .mixins.animation_mixin import AnimationMixin
 from .mixins.quick_controls_mixin import QuickControlsMixin
 from .mixins.integrations_mixin import IntegrationsMixin
 from .theme_constants import (
+    COLOR_NEUTRAL_LIGHT,
+    SPACING_XS,
+    FONT_LG,
+    BUTTON_HEIGHT,
+    BUTTON_HEIGHT_SM,
     SPACING_SM,
     SPACING_MD,
     SPACING_LG,
     COLOR_SUCCESS,
     COLOR_SUCCESS_HOVER,
-    COLOR_PRIMARY,
-    COLOR_PRIMARY_HOVER,
-    COLOR_PRIMARY_LIGHT,
-    COLOR_NEUTRAL_DARK,
-    COLOR_NEUTRAL_MEDIUM,
-    COLOR_NEUTRAL_LIGHT,
-    COLOR_NEUTRAL_LIGHTER,
-    COLOR_NEUTRAL_LIGHTEST,
     COLOR_BG_PRIMARY,
-    COLOR_BG_SECONDARY,
     COLOR_STATUS_IDLE,
     FONT_XS,
     FONT_SM,
     FONT_MD,
     FONT_WEIGHT_BOLD,
-    BUTTON_HEIGHT_LG,
-    BUTTON_WIDTH_DEFAULT,
-    FRAME_CONTROLS_HEIGHT,
-    FRAME_STATUS_HEIGHT,
     RADIUS_MD,
-    RADIUS_LG,
     WINDOW_MAIN_MIN_WIDTH,
     WINDOW_MAIN_MIN_HEIGHT,
     WINDOW_MAIN_WIDTH,
@@ -63,7 +54,7 @@ from .theme_constants import (
     get_active_appearance_mode,
     get_theme_colors,
     neutral_button_style,
-    ButtonColors,
+    toggle_switch_style,
 )
 
 
@@ -250,57 +241,76 @@ class MainWindow(
         self.main_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(1, weight=1)  # Text area expands
-        self.main_frame.grid_rowconfigure(2, weight=0)  # Controls fixed
-        self.main_frame.grid_rowconfigure(3, weight=0)  # Quick controls (collapsible)
-        self.main_frame.grid_rowconfigure(4, weight=0)  # Status fixed
+        # 2 actions, 3 switches, 4 quick controls (collapsible), 5 status: fixed height
 
-        # Header with voice indicator
+        colors = get_theme_colors(get_active_appearance_mode())
+
+        # Header: which voice will speak (click to change it) and Settings.
         self.header_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        self.header_frame.grid(row=0, column=0, padx=SPACING_MD, pady=(SPACING_MD, SPACING_SM), sticky="ew")
+        self.header_frame.grid(row=0, column=0, padx=SPACING_MD, pady=(SPACING_SM, SPACING_XS), sticky="ew")
         self.header_frame.grid_columnconfigure(1, weight=1)
 
-        # Voice indicator with modern styling
         self.voice_indicator_label = ctk.CTkLabel(
             self.header_frame,
-            text="Voice:",
-            font=ctk.CTkFont(size=FONT_SM, weight=FONT_WEIGHT_BOLD),
-            text_color=COLOR_NEUTRAL_LIGHTER,
+            text="Voice",
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color=colors["text_secondary"],
         )
         self.voice_indicator_label.grid(row=0, column=0, sticky="w")
 
-        self.voice_indicator_value = ctk.CTkLabel(
-            self.header_frame, text="Loading...", font=ctk.CTkFont(size=FONT_SM), text_color=COLOR_PRIMARY_LIGHT
-        )
-        self.voice_indicator_value.grid(row=0, column=1, padx=SPACING_SM, sticky="w")
-
-        # Text input card with modern styling
-        self.text_frame = ctk.CTkFrame(self.main_frame, fg_color=COLOR_BG_SECONDARY, corner_radius=RADIUS_LG)
-        self.text_frame.grid(row=1, column=0, padx=SPACING_MD, pady=SPACING_MD, sticky="nsew")
-        self.text_frame.grid_columnconfigure(0, weight=1)
-        self.text_frame.grid_rowconfigure(1, weight=1)
-
-        self.text_label = ctk.CTkLabel(
-            self.text_frame,
-            text="Text to speak",
+        # Opens Settings, which starts on the Voice page.
+        self.voice_indicator_value = ctk.CTkButton(
+            self.header_frame,
+            text="Loading...",
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
-            text_color=COLOR_NEUTRAL_LIGHTEST,
+            anchor="w",
+            height=32,
+            fg_color="transparent",
+            hover_color=colors["button_neutral"],
+            text_color=colors["text_primary"],
+            corner_radius=RADIUS_MD,
+            command=self._on_settings,
         )
-        self.text_label.grid(row=0, column=0, padx=SPACING_LG, pady=(SPACING_LG, SPACING_SM), sticky="w")
+        self.voice_indicator_value.grid(row=0, column=1, padx=(SPACING_XS, 0), sticky="w")
 
-        self.text_input = ctk.CTkTextbox(
-            self.text_frame,
-            font=ctk.CTkFont(size=FONT_MD),
-            wrap="word",
-            activate_scrollbars=True,
-            fg_color=COLOR_NEUTRAL_DARK,
-            border_width=0,
+        self.settings_button = ctk.CTkButton(
+            self.header_frame,
+            text="Settings",
+            font=ctk.CTkFont(size=FONT_SM),
+            command=self._on_settings,
+            height=32,
+            width=96,
+            **neutral_button_style(),
             corner_radius=RADIUS_MD,
         )
-        self.text_input.grid(row=1, column=0, padx=SPACING_LG, pady=(SPACING_SM, SPACING_LG), sticky="nsew")
-        self.text_input.tag_config("current_line", background=COLOR_NEUTRAL_MEDIUM)
+        self.settings_button.grid(row=0, column=2, sticky="e")
+
+        # The text box sits directly on the window: no card or caption around it.
+        self.text_input = ctk.CTkTextbox(
+            self.main_frame,
+            font=ctk.CTkFont(size=FONT_LG),
+            wrap="word",
+            activate_scrollbars=True,
+            fg_color=colors["input_bg"],
+            border_width=1,
+            border_color=COLOR_NEUTRAL_LIGHT,
+            corner_radius=RADIUS_MD,
+        )
+        self.text_input.grid(row=1, column=0, padx=SPACING_MD, pady=SPACING_XS, sticky="nsew")
+        self.text_input.tag_config("current_line", background=colors["line_highlight"])
         self.text_input.bind("<KeyRelease>", lambda e: self._highlight_current_line())
         self.text_input.bind("<ButtonRelease>", lambda e: self._highlight_current_line())
         self.text_input.bind("<KeyRelease>", lambda e: self._on_text_changed(), add="+")
+
+        # CTkTextbox has no placeholder; a label over the empty box stands in.
+        self._placeholder_label = ctk.CTkLabel(
+            self.text_input,
+            text="Type something to say, then press Enter",
+            font=ctk.CTkFont(size=FONT_LG),
+            text_color=colors["text_secondary"],
+        )
+        self._placeholder_label.bind("<Button-1>", lambda _e: self.text_input.focus_set())
+        self._update_placeholder()
 
         # Bind Enter to trigger speak, Shift+Enter to allow line breaks
         self.text_input.bind("<Return>", self._on_enter_key)
@@ -310,140 +320,113 @@ class MainWindow(
         self._bind_text_editing_shortcuts()
         self._setup_text_context_menu()
 
-        # Control buttons frame with modern styling
+        # Actions: editing helpers on the left, Stop and Speak on the right.
         self.controls_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        self.controls_frame.grid(row=2, column=0, padx=SPACING_MD, pady=(SPACING_MD, SPACING_MD), sticky="ew")
-        self.controls_frame.grid_propagate(False)
-        self.controls_frame.configure(height=FRAME_CONTROLS_HEIGHT)
+        self.controls_frame.grid(row=2, column=0, padx=SPACING_MD, pady=(SPACING_SM, 0), sticky="ew")
+        self._actions_left = ctk.CTkFrame(self.controls_frame, fg_color="transparent")
+        self._actions_left.pack(side="left")
+        self._actions_right = ctk.CTkFrame(self.controls_frame, fg_color="transparent")
+        self._actions_right.pack(side="right")
 
-        # Speak button (primary action) - prominent styling
-        self.speak_button = ctk.CTkButton(
-            self.controls_frame,
-            text="▶  Speak",
-            font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
-            command=self._on_speak,
-            height=BUTTON_HEIGHT_LG,
-            width=BUTTON_WIDTH_DEFAULT,
-            fg_color=COLOR_SUCCESS,
-            hover_color=COLOR_SUCCESS_HOVER,
+        self.clear_button = ctk.CTkButton(
+            self._actions_left,
+            text="Clear",
+            font=ctk.CTkFont(size=FONT_MD),
+            command=self._on_clear,
+            height=BUTTON_HEIGHT_SM,
+            width=84,
+            **neutral_button_style(),
             corner_radius=RADIUS_MD,
         )
-        self.speak_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
 
-        # Stop button - danger styling
+        self.voice_button = ctk.CTkButton(
+            self._actions_left,
+            text="Voice input",
+            font=ctk.CTkFont(size=FONT_MD),
+            command=self._on_voice_input,
+            height=BUTTON_HEIGHT_SM,
+            width=120,
+            **neutral_button_style(),
+            corner_radius=RADIUS_MD,
+        )
+
         self.stop_button = ctk.CTkButton(
-            self.controls_frame,
+            self._actions_right,
             text="⏹  Stop",
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
             command=self._on_stop,
-            height=BUTTON_HEIGHT_LG,
-            width=BUTTON_WIDTH_DEFAULT,
+            height=BUTTON_HEIGHT,
+            width=100,
             **neutral_button_style(),
             state="disabled",
             corner_radius=RADIUS_MD,
         )
-        self.stop_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
 
-        # Clear button - subtle styling
-        self.clear_button = ctk.CTkButton(
-            self.controls_frame,
-            text="Clear",
-            font=ctk.CTkFont(size=FONT_MD),
-            command=self._on_clear,
-            height=BUTTON_HEIGHT_LG,
-            width=BUTTON_WIDTH_DEFAULT,
-            **neutral_button_style(),
+        # The one accent on the screen: the action the window exists for.
+        self.speak_button = ctk.CTkButton(
+            self._actions_right,
+            text="▶  Speak",
+            font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD),
+            command=self._on_speak,
+            height=BUTTON_HEIGHT,
+            width=148,
+            fg_color=COLOR_SUCCESS,
+            hover_color=COLOR_SUCCESS_HOVER,
+            text_color=COLOR_ON_FILL,
             corner_radius=RADIUS_MD,
         )
-        self.clear_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
 
-        # Voice input button - accent styling (for STT)
-        self.voice_button = ctk.CTkButton(
-            self.controls_frame,
-            text="Voice input",
-            font=ctk.CTkFont(size=FONT_MD),
-            command=self._on_voice_input,
-            height=BUTTON_HEIGHT_LG,
-            width=BUTTON_WIDTH_DEFAULT,
-            **neutral_button_style(),
-            corner_radius=RADIUS_MD,
-        )
-        self.voice_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
+        # On/off settings are switches, so they no longer look like actions.
+        self.toggles_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        self.toggles_frame.grid(row=3, column=0, padx=SPACING_MD, pady=(SPACING_SM, SPACING_SM), sticky="ew")
+        switch_colors = toggle_switch_style()
 
-        # Overlay toggle button - secondary styling
-        self.overlay_button = ctk.CTkButton(
-            self.controls_frame,
-            text="Overlay",
-            font=ctk.CTkFont(size=FONT_MD),
+        self.overlay_button = ctk.CTkSwitch(
+            self.toggles_frame,
+            text="Recording overlay",
+            font=ctk.CTkFont(size=FONT_SM),
             command=self._on_toggle_overlay,
-            height=BUTTON_HEIGHT_LG,
-            width=BUTTON_WIDTH_DEFAULT,
-            **self._overlay_button_style(),
-            corner_radius=RADIUS_MD,
+            **switch_colors,
         )
-        self.overlay_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
+        self._sync_switch(self.overlay_button, self._overlay_visible)
 
-        # Settings button - accent styling
-        self.settings_button = ctk.CTkButton(
-            self.controls_frame,
-            text="Settings",
-            font=ctk.CTkFont(size=FONT_MD),
-            command=self._on_settings,
-            height=BUTTON_HEIGHT_LG,
-            width=BUTTON_WIDTH_DEFAULT,
-            **neutral_button_style(),
-            corner_radius=RADIUS_MD,
-        )
-        self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
-
-        # Quick controls toggle button - always visible, toggles the slider panel
         self._quick_controls_visible = self.settings.get("quick_controls_visible", False)
-        self.controls_toggle_button = ctk.CTkButton(
-            self.controls_frame,
-            text="Controls",
-            font=ctk.CTkFont(size=FONT_MD),
+        self.controls_toggle_button = ctk.CTkSwitch(
+            self.toggles_frame,
+            text="Speed, volume and pitch",
+            font=ctk.CTkFont(size=FONT_SM),
             command=self._toggle_quick_controls,
-            height=BUTTON_HEIGHT_LG,
-            width=BUTTON_WIDTH_DEFAULT,
-            **self._get_toggle_button_theme_colors(
-                get_theme_colors(get_active_appearance_mode()), self._quick_controls_visible
-            ),
-            corner_radius=RADIUS_MD,
+            **switch_colors,
         )
-        self.controls_toggle_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
+        self._sync_switch(self.controls_toggle_button, self._quick_controls_visible)
 
         # Quick controls panel (collapsible) - row 3
         self._create_quick_controls()
 
-        # Status frame with modern styling
-        self.status_frame = ctk.CTkFrame(self.main_frame, fg_color=COLOR_BG_SECONDARY, corner_radius=RADIUS_MD)
-        self.status_frame.grid(row=4, column=0, padx=SPACING_MD, pady=(0, SPACING_MD), sticky="ew")
-        self.status_frame.grid_propagate(False)
-        self.status_frame.configure(height=FRAME_STATUS_HEIGHT)
+        # Status strip along the bottom edge: a state dot and one line of text.
+        self.status_frame = ctk.CTkFrame(self.main_frame, fg_color=colors["bg_secondary"], corner_radius=0)
+        self.status_frame.grid(row=5, column=0, sticky="ew")
 
-        # Status content
         self.status_log_frame = ctk.CTkFrame(self.status_frame, fg_color="transparent")
-        self.status_log_frame.pack(fill="both", expand=True, padx=SPACING_LG, pady=SPACING_MD)
+        self.status_log_frame.pack(fill="both", expand=True, padx=SPACING_MD, pady=SPACING_XS)
 
-        # Activity indicator (modern dot)
         self.activity_indicator = ctk.CTkLabel(
-            self.status_log_frame, text="●", font=ctk.CTkFont(size=FONT_MD), text_color=COLOR_STATUS_IDLE
+            self.status_log_frame, text="●", font=ctk.CTkFont(size=FONT_SM), text_color=COLOR_STATUS_IDLE
         )
-        self.activity_indicator.pack(side="right", padx=(SPACING_SM, 0))
+        self.activity_indicator.pack(side="left", padx=(0, SPACING_XS))
 
-        # Progress indicator
         self.progress_label = ctk.CTkLabel(
-            self.status_log_frame, text="", font=ctk.CTkFont(size=FONT_XS), text_color=COLOR_NEUTRAL_LIGHT
+            self.status_log_frame, text="", font=ctk.CTkFont(size=FONT_XS), text_color=colors["text_secondary"]
         )
-        self.progress_label.pack(side="right", padx=SPACING_SM)
+        self.progress_label.pack(side="right", padx=(SPACING_SM, 0))
 
-        # Main status message
         self.status_label = ctk.CTkLabel(
             self.status_log_frame,
             text="Ready to speak",
-            font=ctk.CTkFont(size=FONT_MD),
-            text_color=COLOR_NEUTRAL_LIGHTEST,
+            font=ctk.CTkFont(size=FONT_SM),
+            text_color=colors["text_primary"],
             anchor="w",
+            justify="left",
             wraplength=400,
         )
         self.status_label.pack(side="left", fill="x", expand=True)
@@ -647,6 +630,7 @@ class MainWindow(
 
     def _on_text_changed(self):
         """Handle text input changes for typing animation."""
+        self._update_placeholder()
         self._schedule_voice_indicator_update()
 
         # Handle typing animation if OSC is enabled
@@ -720,17 +704,12 @@ class MainWindow(
         self.root.configure(fg_color=colors["bg_primary"])
         self.main_frame.configure(fg_color=colors["bg_primary"])
 
-        # Reconfigure text frame and input
-        self.text_frame.configure(fg_color=colors["bg_secondary"])
         self.text_input.configure(fg_color=colors["input_bg"])
         self.text_input.tag_config("current_line", background=colors["line_highlight"])
+        self._placeholder_label.configure(text_color=colors["text_secondary"])
 
-        # Reconfigure text label
-        self.text_label.configure(text_color=colors["text_primary"])
-
-        # Reconfigure voice indicator labels
         self.voice_indicator_label.configure(text_color=colors["text_secondary"])
-        self.voice_indicator_value.configure(text_color=colors["voice_name"])
+        self.voice_indicator_value.configure(text_color=colors["text_primary"], hover_color=colors["button_neutral"])
 
         # Reconfigure status frame and labels
         self.status_frame.configure(fg_color=colors["bg_secondary"])
@@ -739,18 +718,27 @@ class MainWindow(
         self._apply_quick_controls_theme(mode)
         self._apply_button_row_theme(mode)
 
-    def _overlay_button_style(self, mode: Optional[str] = None) -> ButtonColors:
-        """Indigo while the overlay is shown, neutral while hidden."""
-        if self._overlay_visible:
-            return {"fg_color": COLOR_PRIMARY, "hover_color": COLOR_PRIMARY_HOVER, "text_color": COLOR_ON_FILL}
-        return neutral_button_style(mode)
+    @staticmethod
+    def _sync_switch(switch, on: bool) -> None:
+        """Show *on* on a toggle switch (after a click, or when saving reverted it)."""
+        if on:
+            switch.select()
+        else:
+            switch.deselect()
+
+    def _update_placeholder(self) -> None:
+        """Show the hint only while the text box is empty."""
+        if self.text_input.index("end-1c") != "1.0":
+            self._placeholder_label.place_forget()
+        else:
+            self._placeholder_label.place(x=14, y=10)
 
     def _apply_button_row_theme(self, mode: str) -> None:
         """Recolor the neutral buttons for *mode*; state colors (speaking, recording) are left alone."""
         neutral = neutral_button_style(mode)
         self.clear_button.configure(**neutral)
         self.settings_button.configure(**neutral)
-        self.overlay_button.configure(**self._overlay_button_style(mode))
+        self.overlay_button.configure(**toggle_switch_style(mode))
         if not getattr(self, "_tts_speaking", False):
             self.stop_button.configure(**neutral)
         if self._stt_state == STTState.IDLE:
@@ -770,43 +758,26 @@ class MainWindow(
         Apply button visibility based on saved settings.
 
         Reads the 'visible_buttons' setting and shows/hides toggleable buttons.
-        Settings button is always visible. Re-packs in fixed order for consistency.
+        Settings and the speed/volume/pitch switch are always visible.
         """
-        # Get visible buttons from settings (default: all five toggleable buttons visible)
         visible_buttons = self.settings.get("visible_buttons", ["speak", "stop", "clear", "voice", "overlay"])
 
-        # All toggleable buttons in fixed order
-        toggleable_buttons = [
-            ("speak", self.speak_button),
-            ("stop", self.stop_button),
-            ("clear", self.clear_button),
-            ("voice", self.voice_button),
-            ("overlay", self.overlay_button),
+        placements = [
+            ("clear", self.clear_button, {"side": "left", "padx": (0, SPACING_SM)}),
+            ("voice", self.voice_button, {"side": "left", "padx": (0, SPACING_SM)}),
+            # Right group packs right-to-left so Speak ends at the edge.
+            ("speak", self.speak_button, {"side": "right"}),
+            ("stop", self.stop_button, {"side": "right", "padx": (0, SPACING_SM)}),
+            ("overlay", self.overlay_button, {"side": "left", "padx": (0, SPACING_LG)}),
         ]
-
-        # Unpack all toggleable buttons AND always-visible buttons
-        for _, button in toggleable_buttons:
-            button.pack_forget()
+        for _, widget, _ in placements:
+            widget.pack_forget()
         self.controls_toggle_button.pack_forget()
-        self.settings_button.pack_forget()
 
-        # Re-pack everything left-to-right in fixed order; expand=True makes
-        # buttons spread out evenly when the window is stretched.
-        for name, button in toggleable_buttons:
+        for name, widget, pack_options in placements:
             if name in visible_buttons:
-                button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
-
-        self.settings_button.pack_forget()
-        self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
-        self.controls_toggle_button.pack_forget()
-        self.controls_toggle_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
-
-        # Enforce a minimum width wide enough to always show every visible button.
-        # Each button occupies BUTTON_WIDTH_DEFAULT + 2 * SPACING_SM horizontal space.
-        # Add 2 visible fixed buttons (controls_toggle + settings) to the count.
-        n_visible = sum(1 for name, _ in toggleable_buttons if name in visible_buttons) + 2
-        required = n_visible * (BUTTON_WIDTH_DEFAULT + 2 * SPACING_SM) + 2 * SPACING_MD
-        self.root.minsize(max(required, WINDOW_MAIN_MIN_WIDTH), WINDOW_MAIN_MIN_HEIGHT)
+                widget.pack(**pack_options)
+        self.controls_toggle_button.pack(side="left")
 
     def set_text(self, text: str):
         """Set text in the input area."""

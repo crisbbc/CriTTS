@@ -22,7 +22,7 @@ from src.gui.settings_tabs.audio_output_tab import AudioOutputTab
 from src.gui.settings_tabs.behavior_tab import BehaviorTab
 from src.gui.settings_tabs.keybinds_tab import KeybindsTab
 from src.gui.settings_tabs.soundboard_tab import SoundboardTab
-from src.gui.settings_window import SETTINGS_TAB_ORDER, get_settings_tabview_style
+from src.gui.settings_window import SETTINGS_TAB_ORDER
 from src.gui.theme_constants import (
     COLOR_BG_PRIMARY,
     COLOR_BG_PRIMARY_LIGHT,
@@ -34,8 +34,6 @@ from src.gui.theme_constants import (
     COLOR_TEXT_PRIMARY_LIGHT,
     RADIUS_LG,
     RADIUS_MD,
-    SETTINGS_TAB_SELECTED_COLOR,
-    SETTINGS_TAB_SELECTED_HOVER,
     get_settings_surface_theme,
 )
 
@@ -126,45 +124,14 @@ def test_settings_surface_theme_system_mode_tracks_active_appearance():
     assert theme["section_fg"] == COLOR_BG_TERTIARY_LIGHT
 
 
-def test_settings_tabview_style_uses_shared_surface_theme():
-    """Tab chrome should be derived from the shared settings surface theme."""
-    style = get_settings_tabview_style()
+@pytest.mark.parametrize("mode", ["Dark", "Light"])
+def test_settings_sidebar_labels_are_readable(mode):
+    """Sidebar entries (see SidebarTabView) must stay readable in both themes."""
+    theme = get_settings_surface_theme(mode)
 
-    assert style["fg_color"] == COLOR_BG_SECONDARY
-    assert style["segmented_button_fg_color"] == COLOR_BG_TERTIARY
-    assert style["segmented_button_selected_color"] == SETTINGS_TAB_SELECTED_COLOR
-    assert style["segmented_button_selected_hover_color"] == SETTINGS_TAB_SELECTED_HOVER
-    assert style["corner_radius"] == RADIUS_LG
-
-
-def test_settings_tabview_style_default_contract_stays_on_dark_baseline():
-    """Default tabview chrome should remain stable when no appearance mode is supplied."""
-    sys.modules["customtkinter"].get_appearance_mode.return_value = "Light"
-
-    style = get_settings_tabview_style()
-
-    assert style["fg_color"] == COLOR_BG_SECONDARY
-    assert style["segmented_button_fg_color"] == COLOR_BG_TERTIARY
-    assert style["text_color"] == COLOR_NEUTRAL_LIGHTEST
-
-
-def test_settings_tabview_style_adapts_to_light_mode():
-    """Tab chrome should follow the active light appearance palette."""
-    style = get_settings_tabview_style("Light")
-
-    assert style["fg_color"] == COLOR_BG_SECONDARY_LIGHT
-    assert style["segmented_button_fg_color"] == COLOR_BG_TERTIARY_LIGHT
-    assert style["text_color"] == COLOR_TEXT_PRIMARY_LIGHT
-
-
-def test_settings_tabview_selected_label_contrast_is_accessible():
-    """Selected tab labels must remain readable on the chosen accent surface."""
-    style = get_settings_tabview_style()
-
-    assert _contrast_ratio(
-        style["text_color"],
-        style["segmented_button_selected_color"],
-    ) >= 4.5
+    # Selected entry: primary text on the raised surface; others: secondary on the pane.
+    assert _contrast_ratio(theme["text_primary"], theme["section_fg"]) >= 4.5
+    assert _contrast_ratio(theme["text_secondary"], theme["pane_fg"]) >= 4.5
 
 
 def test_settings_tab_order_remains_stable():
@@ -252,15 +219,13 @@ def test_helper_text_defaults_to_stronger_supporting_token():
     assert dummy_tab._wraplength_labels == [label]
 
 
-def test_section_sidebar_buttons_use_shared_surface_theme_tokens():
-    """Sidebar anchor buttons should derive their chrome from the shared settings surface theme."""
+def test_section_header_registers_section_without_nav_buttons():
+    """Navigation lives in the settings sidebar; section headers no longer add buttons."""
     base_tab_module.ctk.get_appearance_mode.return_value = "Light"
-    surface_theme = get_settings_surface_theme("Light")
     label = MagicMock()
     dummy_tab = object.__new__(_ConcreteBaseTab)
     dummy_tab.tab = MagicMock()
     dummy_tab.scroll = MagicMock()
-    dummy_tab.sidebar = MagicMock()
     dummy_tab._sections = []
 
     base_tab_module.ctk.CTkLabel.reset_mock()
@@ -269,8 +234,8 @@ def test_section_sidebar_buttons_use_shared_surface_theme_tokens():
 
     BaseTab.create_section_header(dummy_tab, "Section Title")
 
-    assert base_tab_module.ctk.CTkButton.call_args.kwargs["hover_color"] == surface_theme["sidebar_button_hover"]
-    assert base_tab_module.ctk.CTkButton.call_args.kwargs["text_color"] == surface_theme["text_secondary"]
+    assert dummy_tab._sections == [{"title": "Section Title", "label": label}]
+    base_tab_module.ctk.CTkButton.assert_not_called()
 
 
 def test_setup_layout_uses_shared_scrollbar_theme_tokens():

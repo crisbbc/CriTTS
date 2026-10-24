@@ -1,8 +1,11 @@
 """AnimationMixin - extracted from main_window.py (behavior unchanged)."""
 
-import datetime
+import re
 from typing import Optional, Any
 from ..theme_constants import (
+    get_active_appearance_mode,
+    get_color_for_state,
+    get_theme_colors,
     SPACING_SM,
     ANIMATION_NORMAL,
     BUTTON_WIDTH_DEFAULT,
@@ -12,6 +15,31 @@ from ..theme_constants import (
     neutral_button_style,
 )
 from ..gui_utils import DeferredTextAnalysisRequest
+
+
+# Leading status glyphs that callers put in messages; the activity dot already
+# shows the state, so the status line drops them.
+_LEADING_STATUS_GLYPHS = re.compile("^[\\s\u2705\u26a0\u274c\u2713\u2715\u2022\u23f3\u23f9\u25b6\U0001f399\U0001f50a\u2b07\u2611\ufe0f]+")
+_ICON_MESSAGE_TYPES = {"❌": "error", "⚠️": "warning", "⚠": "warning", "✅": "success", "▶️": "speaking"}
+_MESSAGE_TYPE_STATES = {"speaking": "active", "error": "error", "warning": "warning", "success": "success"}
+# "Microsoft Christopher Online (Natural) - English (United States)"
+_EDGE_DISPLAY_NAME = re.compile(r"^Microsoft (.+?) Online \(Natural\) - (.+)$")
+# "en-US-ChristopherNeural" (before the voice list has loaded)
+_EDGE_SHORT_NAME = re.compile(r"^([a-z]{2,3}-[A-Z]{2}(?:-[A-Za-z]+)?)-([A-Za-z]+?)(?:Multilingual)?Neural$")
+
+
+def voice_display_name(voice_id: str, voice_info: Optional[dict]) -> str:
+    """A readable voice name: "Christopher · English (United States)" rather than an ID."""
+    name = (voice_info or {}).get("name") or ""
+    match = _EDGE_DISPLAY_NAME.match(name)
+    if match:
+        return f"{match.group(1)} · {match.group(2)}"
+    if name:
+        return name
+    match = _EDGE_SHORT_NAME.match(voice_id or "")
+    if match:
+        return f"{match.group(2)} · {match.group(1)}"
+    return voice_id or "Default"
 
 
 class AnimationMixin:
@@ -63,7 +91,9 @@ class AnimationMixin:
         request: Optional[DeferredTextAnalysisRequest] = None,
     ):
         """Update the voice indicator label for a specific text snapshot."""
-        voice = self.settings.get("voice", "Default")
+        voice_id = self.settings.get("voice", "Default")
+        voice = voice_display_name(voice_id, self.tts_engine.get_voice_info(voice_id))
+        colors = get_theme_colors(get_active_appearance_mode())
         auto_language = self.settings.get("auto_language_detection", False)
 
         if auto_language:
@@ -82,11 +112,9 @@ class AnimationMixin:
                     if custom_voice:
                         voice_name = custom_voice
                     else:
-                        voice_info = self.tts_engine.get_voice_info(voice_short_name)
-                        if voice_info:
-                            voice_name = f"{voice_info['name']} ({voice_info['locale']})"
-                        else:
-                            voice_name = voice_short_name
+                        voice_name = voice_display_name(
+                            voice_short_name, self.tts_engine.get_voice_info(voice_short_name)
+                        )
 
                     lang_names = {
                         "zh": "Chinese",
@@ -104,19 +132,21 @@ class AnimationMixin:
                     }
 
                     detected_lang_name = lang_names.get(detected_lang, detected_lang.title())
-                    new_text = f"{voice_name} (Auto: {detected_lang_name})"
-                    new_color = "green"
+                    new_text = f"{voice_name}  (auto: {detected_lang_name})"
+                    new_color = colors["voice_name"]
 
                     if not self._is_latest_voice_indicator_request(request):
                         return
 
                     self._animate_voice_indicator(new_text, new_color)
                 else:
-                    self.voice_indicator_value.configure(text=f"{voice} (Auto: Unknown)", text_color="orange")
+                    self.voice_indicator_value.configure(
+                        text=f"{voice}  (auto: language not detected)", text_color=colors["text_secondary"]
+                    )
             else:
-                self.voice_indicator_value.configure(text=f"{voice} (Auto: No text)", text_color="gray")
+                self.voice_indicator_value.configure(text=f"{voice}  (auto)", text_color=colors["text_primary"])
         else:
-            self.voice_indicator_value.configure(text=voice, text_color="gray")
+            self.voice_indicator_value.configure(text=voice, text_color=colors["text_primary"])
 
     def _schedule_voice_indicator_update(self):
         """Debounce expensive voice-indicator analysis with latest-wins semantics."""
@@ -352,13 +382,14 @@ class AnimationMixin:
             pass  # Button may not support width configuration
 
     def _set_status(self, message: str, icon: str = "", message_type: str = "info"):
-        """Update status message with enhanced formatting and visual indicators."""
-        # Format message with timestamp for better logging
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        formatted_message = f"[{timestamp}] {message}"
+        """Show *message* in the status line; *icon* only picks the dot's state.
 
-        # Animate status text change
-        self._animate_status_change(f"{icon} {formatted_message}" if icon else formatted_message, message_type)
+        The colored dot carries the state, so neither the icon nor glyphs at
+        the start of the message are shown as text.
+        """
+        if message_type == "info":
+            message_type = _ICON_MESSAGE_TYPES.get(icon, "info")
+        self._animate_status_change(_LEADING_STATUS_GLYPHS.sub("", message), message_type)
 
         # Update activity indicator based on message type
         self._animate_activity_indicator(message_type)
@@ -388,15 +419,7 @@ class AnimationMixin:
     def _animate_activity_indicator(self, message_type: str):
         """Animate the activity indicator based on message type."""
         # Get target color based on message type
-        color_map = {
-            "speaking": "#2ecc71",  # Green for active
-            "error": "#e74c3c",  # Red for error
-            "warning": "#f39c12",  # Orange for warning
-            "success": "#27ae60",  # Dark green for success
-            "info": "gray60",  # Gray for normal
-        }
-
-        target_color = color_map.get(message_type, "gray60")
+        target_color = get_color_for_state(_MESSAGE_TYPE_STATES.get(message_type, "idle"))
 
         # Animate color change
         self._animate_indicator_color(self.activity_indicator, target_color, 0.2)

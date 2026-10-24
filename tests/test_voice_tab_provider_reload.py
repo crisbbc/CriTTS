@@ -355,6 +355,7 @@ def test_cancel_and_refresh_buttons_use_surface_theme_neutral_tokens_in_light_mo
         "VRChatOSCTab",
         "AdvancedTab",
         "TTSProviderTab",
+        "SidebarTabView",
     ):
         monkeypatch.setattr(sw_module, name, MagicMock())
 
@@ -410,6 +411,7 @@ def test_build_window_content_resolves_surface_theme_once_for_tabview_style(monk
         "VRChatOSCTab",
         "AdvancedTab",
         "TTSProviderTab",
+        "SidebarTabView",
     ):
         monkeypatch.setattr(sw_module, name, MagicMock())
 

@@ -13,7 +13,7 @@ class IntegrationsMixin:
 
     # Attributes/methods provided by MainWindow (mixin contract).
     _chatbox: Any
-    _overlay_button_style: Any
+    _sync_switch: Any
     _safe_after: Any
     _set_status: Any
     _show_error: Any
@@ -38,6 +38,7 @@ class IntegrationsMixin:
         if not self.settings.save_settings():
             self.settings.set("overlay_visible", previous_visible)
             self._overlay_visible = previous_visible
+            self._sync_switch(self.overlay_button, previous_visible)
             self._show_error("Could not save overlay visibility.")
             return
 
@@ -48,12 +49,9 @@ class IntegrationsMixin:
             # Sync current recording state (using state machine)
             is_recording = self._stt_state == STTState.RECORDING
             self._recording_overlay.set_recording(is_recording)
-            # Update button appearance to active
-            self.overlay_button.configure(**self._overlay_button_style())
         else:
             self._recording_overlay.hide_overlay()
-            # Update button appearance to inactive
-            self.overlay_button.configure(**self._overlay_button_style())
+        self._sync_switch(self.overlay_button, self._overlay_visible)
 
     def _setup_osc_client(self):
         """Setup OSC client for VRChat chatbox integration."""

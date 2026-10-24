@@ -20,7 +20,9 @@ from .settings_tabs import (
     AdvancedTab,
     TTSProviderTab,
 )
+from .sidebar_tabview import SidebarTabView
 from .theme_constants import (
+    COLOR_ON_FILL,
     SPACING_SM,
     SPACING_MD,
     SPACING_LG,
@@ -32,12 +34,10 @@ from .theme_constants import (
     FONT_SM,
     FONT_MD,
     FONT_LG,
-    FONT_XL,
     FONT_WEIGHT_BOLD,
     BUTTON_HEIGHT,
     BUTTON_WIDTH_DEFAULT,
     RADIUS_MD,
-    RADIUS_LG,
     WINDOW_SETTINGS_WIDTH,
     WINDOW_SETTINGS_HEIGHT,
     WINDOW_SETTINGS_MIN_WIDTH,
@@ -76,25 +76,12 @@ SETTINGS_TAB_OBJECT_ATTRIBUTES = {
 EAGER_SETTINGS_TABS = frozenset(("Voice", "Advanced", "TTS Provider"))
 
 
-def get_settings_tabview_style(
-    mode: Optional[str] = None,
-    *,
-    surface_theme: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Return the shared style used by the settings tab chrome."""
-    resolved_surface_theme = surface_theme if surface_theme is not None else get_settings_surface_theme(mode)
-    return {
-        "fg_color": resolved_surface_theme["pane_fg"],
-        "corner_radius": resolved_surface_theme["shell_corner_radius"],
-        "border_width": 1,
-        "border_color": resolved_surface_theme["border_color"],
-        "segmented_button_fg_color": resolved_surface_theme["section_fg"],
-        "segmented_button_selected_color": resolved_surface_theme["tab_selected_color"],
-        "segmented_button_selected_hover_color": resolved_surface_theme["tab_selected_hover"],
-        "segmented_button_unselected_color": resolved_surface_theme["pane_fg"],
-        "segmented_button_unselected_hover_color": resolved_surface_theme["tab_unselected_hover"],
-        "text_color": resolved_surface_theme["tab_text_color"],
-    }
+# Names shown in the settings sidebar where they differ from the page key.
+SETTINGS_TAB_LABELS = {
+    "Audio Output": "Audio output",
+    "VRChat OSC": "VRChat",
+    "TTS Provider": "TTS provider",
+}
 
 
 class SettingsWindow:
@@ -141,31 +128,27 @@ class SettingsWindow:
         self.window.grid_rowconfigure(0, weight=1)  # Content expands
         self.window.grid_rowconfigure(1, weight=0)  # Buttons fixed
 
-        # Main container with standardized padding
-        self.main_frame = ctk.CTkFrame(self.window, fg_color=surface_theme["window_fg"])
+        self.main_frame = ctk.CTkFrame(self.window, fg_color=surface_theme["window_fg"], corner_radius=0)
         self.main_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
         self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(1, weight=1)  # Tabview expands
+        self.main_frame.grid_rowconfigure(0, weight=1)
 
-        # Title with theme font
-        self.title_label = ctk.CTkLabel(
+        # One level of navigation: categories on the left, the page on the right.
+        self.tabview = SidebarTabView(
             self.main_frame,
-            text="Settings",
-            font=ctk.CTkFont(size=FONT_XL, weight=FONT_WEIGHT_BOLD),
-            text_color=surface_theme["text_primary"],
-        )
-        self.title_label.grid(row=0, column=0, padx=SPACING_LG, pady=(SPACING_MD, 0), sticky="w")
-
-        # Create tabbed interface with consistent padding
-        self.tabview = ctk.CTkTabview(
-            self.main_frame,
+            surface_theme=surface_theme,
             command=self._on_tab_selected,
-            **get_settings_tabview_style(
-                appearance_mode,
-                surface_theme=surface_theme,
-            ),
+            labels=SETTINGS_TAB_LABELS,
         )
-        self.tabview.grid(row=1, column=0, padx=SPACING_LG, pady=(0, SPACING_MD), sticky="nsew")
+        self.tabview.grid(row=0, column=0, sticky="nsew")
+        for sequence, offset in (
+            ("<Control-Tab>", 1),
+            ("<Control-Next>", 1),
+            ("<Control-Shift-Tab>", -1),
+            ("<Control-ISO_Left_Tab>", -1),
+            ("<Control-Prior>", -1),
+        ):
+            self.window.bind(sequence, lambda _event, step=offset: self._step_page(step))
 
         self._initialize_tab_hydration_state()
         self._register_tab_factory(
@@ -192,15 +175,13 @@ class SettingsWindow:
         self._register_tab_factory("TTS Provider", TTSProviderTab)
         self._hydrate_initial_tabs(selected_tab)
 
-        # Buttons frame - fixed at bottom with standardized padding
-        self.buttons_frame = ctk.CTkFrame(
-            self.window,
-            fg_color=surface_theme["pane_fg"],
-            corner_radius=RADIUS_LG,
-            border_width=1,
-            border_color=surface_theme["border_color"],
+        # Footer: a plain strip under a divider rather than another card.
+        self.window.grid_rowconfigure(2, weight=0)
+        ctk.CTkFrame(self.window, height=1, fg_color=surface_theme["border_color"], corner_radius=0).grid(
+            row=1, column=0, sticky="ew"
         )
-        self.buttons_frame.grid(row=1, column=0, padx=SPACING_LG, pady=(0, SPACING_MD), sticky="ew")
+        self.buttons_frame = ctk.CTkFrame(self.window, fg_color=surface_theme["window_fg"], corner_radius=0)
+        self.buttons_frame.grid(row=2, column=0, padx=SPACING_MD, pady=SPACING_SM, sticky="ew")
 
         # Save button with theme colors
         self.save_button = ctk.CTkButton(
@@ -210,6 +191,7 @@ class SettingsWindow:
             command=self._on_save,
             fg_color=COLOR_SUCCESS,
             hover_color=COLOR_SUCCESS_HOVER,
+            text_color=COLOR_ON_FILL,
             width=BUTTON_WIDTH_DEFAULT,
             height=BUTTON_HEIGHT,
             corner_radius=RADIUS_MD,
@@ -394,6 +376,13 @@ class SettingsWindow:
 
         for tab_name in SETTINGS_TAB_ORDER:
             self._ensure_tab_hydrated(tab_name)
+
+    def _step_page(self, offset: int) -> str:
+        """Keyboard page switching (Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+PageDown / PageUp)."""
+        step = getattr(self.tabview, "step", None)
+        if callable(step):
+            step(offset)
+        return "break"
 
     def _on_tab_selected(self) -> None:
         """Hydrate tabs lazily the first time users navigate to them."""
@@ -668,6 +657,7 @@ class SettingsWindow:
             width=100,
             fg_color=COLOR_DANGER,
             hover_color=COLOR_DANGER_HOVER,
+            text_color=COLOR_ON_FILL,
         ).pack(side="left", padx=SPACING_SM)
 
         ctk.CTkButton(

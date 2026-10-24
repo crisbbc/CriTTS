@@ -4,6 +4,8 @@ Abstract base class for settings tabs.
 """
 
 import logging
+import tkinter
+
 import customtkinter as ctk
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Optional, List, Dict, Tuple
@@ -18,14 +20,13 @@ from ..theme_constants import (
     FONT_LG,
     FONT_WEIGHT_BOLD,
     RADIUS_MD,
-    RADIUS_LG,
     get_color_for_state,
     get_settings_surface_theme,
-    SPACING_BASE,
 )
 
 SETTINGS_CARD_BOUNDARY_RULES: Tuple[str, ...] = (
-    "Apply card treatment only to top-level section containers and shell surfaces.",
+    "Top-level sections are flat (a heading, separated from the previous section by a divider); "
+    "the only boxed surfaces are read-only text and lists.",
     "Keep inner rows transparent by default so alignment and widths stay unchanged.",
     "Do not wrap textboxes, lists, or notes in extra cards unless an existing secondary surface already communicates structure.",
     "Preserve anchor headers, conditional blocks, and nested scrollables without introducing extra section buttons or wrapper levels.",
@@ -177,15 +178,6 @@ class BaseTab(ABC):
 
         # Create the tab content
         self._create_content()
-        self._hide_single_section_sidebar()
-
-    def _hide_single_section_sidebar(self) -> None:
-        """Drop the section nav when it would only point at the one visible section."""
-        sidebar_shell = getattr(self, "sidebar_shell", None)
-        if sidebar_shell is None or len(self._sections) > 1:
-            return
-        sidebar_shell.pack_forget()
-        self.content_shell.pack_configure(padx=SPACING_MD)
 
     @staticmethod
     def get_active_surface_theme() -> Dict[str, Any]:
@@ -195,17 +187,6 @@ class BaseTab(ABC):
         except Exception:
             appearance_mode = "Dark"
         return get_settings_surface_theme(appearance_mode)
-
-    @staticmethod
-    def get_section_surface_style() -> Dict[str, Any]:
-        """Return reusable styling for top-level settings section cards."""
-        surface_theme = BaseTab.get_active_surface_theme()
-        return {
-            "fg_color": surface_theme["section_fg"],
-            "corner_radius": surface_theme["section_corner_radius"],
-            "border_width": 1,
-            "border_color": surface_theme["border_color"],
-        }
 
     @staticmethod
     def get_input_surface_style() -> Dict[str, Any]:
@@ -358,7 +339,7 @@ class BaseTab(ABC):
         parent: Any = None,
         register_sidebar: bool = True,
     ) -> ctk.CTkLabel:
-        """Create a section header label and add a sidebar button for it."""
+        """Create a section header label; *register_sidebar* records it in ``_sections``."""
         surface_theme = self.get_active_surface_theme()
         parent_widget = parent or getattr(self, "scroll", self.tab)
         label = ctk.CTkLabel(
@@ -368,24 +349,8 @@ class BaseTab(ABC):
             text_color=surface_theme["text_primary"],
         )
 
-        # Add to sections tracking
         if register_sidebar:
             self._sections.append({"title": text, "label": label})
-
-        # If sidebar exists, add a button
-        if register_sidebar and hasattr(self, "sidebar"):
-            btn = ctk.CTkButton(
-                self.sidebar,
-                text=text,
-                fg_color="transparent",
-                hover_color=surface_theme["sidebar_button_hover"],
-                text_color=surface_theme["text_secondary"],
-                anchor="w",
-                font=ctk.CTkFont(size=FONT_SM),
-                corner_radius=RADIUS_MD,
-                command=lambda section=label: self._scroll_to_section(section),
-            )
-            btn.pack(fill="x", padx=SPACING_XS, pady=SPACING_BASE)
 
         return label
 
@@ -396,55 +361,29 @@ class BaseTab(ABC):
         description: Optional[str] = None,
         register_sidebar: bool = True,
     ) -> Tuple[ctk.CTkFrame, ctk.CTkFrame]:
-        """Create a reusable top-level section card and inner content frame."""
+        """Create a flat top-level section: a heading over its content.
+
+        Sections after the first start with a divider, so the page reads as one
+        list of groups instead of a stack of boxes.
+        """
         parent_widget = parent or getattr(self, "scroll", self.tab)
-        section_frame = ctk.CTkFrame(parent_widget, **self.get_section_surface_style())
+        section_frame = ctk.CTkFrame(parent_widget, fg_color="transparent", corner_radius=0)
         content_frame = ctk.CTkFrame(section_frame, fg_color="transparent")
 
+        section_index = getattr(self, "_section_surface_count", 0)
+        self._section_surface_count = section_index + 1
+        if section_index:
+            self.create_separator(section_frame).pack(fill="x", pady=(0, SPACING_MD))
+
         header = self.create_section_header(title, parent=section_frame, register_sidebar=register_sidebar)
-        header.pack(anchor="w", padx=SPACING_LG, pady=(SPACING_LG, SPACING_XS))
+        header.pack(anchor="w", pady=(0, SPACING_XS))
 
         if description:
             description_label = self.create_description(description, parent=section_frame)
-            description_label.pack(anchor="w", padx=SPACING_LG, pady=(0, SPACING_SM))
+            description_label.pack(anchor="w", pady=(0, SPACING_SM))
 
-        content_frame.pack(fill="both", expand=True, padx=SPACING_LG, pady=(0, SPACING_LG))
+        content_frame.pack(fill="both", expand=True, pady=(0, SPACING_SM))
         return section_frame, content_frame
-
-    def _scroll_to_section(self, label: ctk.CTkLabel):
-        """Scroll the main scrollable frame to the given label.
-
-        Walks up the widget hierarchy from *label* to ``self.scroll`` accumulating
-        Y offsets at each level.  This correctly handles labels that live inside
-        nested intermediate frames (e.g. _pitch_section_frame, _piper_sliders_frame)
-        rather than being direct children of the scroll frame.
-        """
-        if not hasattr(self, "scroll"):
-            return
-
-        # Ensure UI is updated so we get correct coordinates
-        self.scroll.update_idletasks()
-
-        try:
-            canvas = self.scroll._parent_canvas
-
-            # Accumulate Y by walking from label up to self.scroll
-            target_y = 0
-            widget = label
-            while widget is not None and widget is not self.scroll:
-                target_y += widget.winfo_y()
-                widget = widget.master
-
-            bbox = canvas.bbox("all")
-            if bbox:
-                total_height = bbox[3]
-                if total_height > 0:
-                    # Small offset so the header isn't flush with the top
-                    fraction = max(0.0, target_y / total_height - 0.01)
-                    canvas.yview_moveto(fraction)
-        except Exception as e:
-            print(f"Error scrolling: {e}")
-            pass
 
     # --------------------------------------------------------------------------
     # Resize coalescing rule
@@ -474,7 +413,7 @@ class BaseTab(ABC):
     #                                     applied skips the schedule
     #                                     entirely.
     def setup_layout(self):
-        """Setup the two-pane layout with a sidebar on the left and scrollable content on the right."""
+        """Fill the page with one scrollable column (navigation lives in the settings window)."""
         surface_theme = self.get_active_surface_theme()
 
         self.tab.configure(fg_color="transparent")
@@ -483,41 +422,14 @@ class BaseTab(ABC):
         self.layout_frame = ctk.CTkFrame(self.tab, fg_color="transparent")
         self.layout_frame.pack(fill="both", expand=True, padx=0, pady=0)
 
-        self.sidebar_shell = ctk.CTkFrame(
-            self.layout_frame,
-            width=200,
-            fg_color=surface_theme["pane_fg"],
-            corner_radius=RADIUS_LG,
-            border_width=1,
-            border_color=surface_theme["border_color"],
-        )
-        self.sidebar_shell.pack(side="left", fill="y", padx=(SPACING_MD, SPACING_SM), pady=SPACING_MD)
-        self.sidebar_shell.pack_propagate(False)
-
-        # Left sidebar for navigation.  Tabs have at most a handful of
-        # sections, so a plain frame: a scrollbar here only stole width and
-        # truncated the section names.
-        self.sidebar = ctk.CTkFrame(self.sidebar_shell, corner_radius=0, fg_color="transparent")
-        self.sidebar.pack(fill="both", expand=True, padx=SPACING_XS, pady=SPACING_SM)
-
-        self.content_shell = ctk.CTkFrame(
-            self.layout_frame,
-            fg_color=surface_theme["pane_fg"],
-            corner_radius=RADIUS_LG,
-            border_width=1,
-            border_color=surface_theme["border_color"],
-        )
-        self.content_shell.pack(side="right", fill="both", expand=True, padx=(SPACING_SM, SPACING_MD), pady=SPACING_MD)
-
-        # Right content area
         self.scroll = ctk.CTkScrollableFrame(
-            self.content_shell,
+            self.layout_frame,
             corner_radius=0,
             fg_color="transparent",
             scrollbar_button_color=surface_theme["scrollbar_button_color"],
             scrollbar_button_hover_color=surface_theme["scrollbar_button_hover_color"],
         )
-        self.scroll.pack(fill="both", expand=True, padx=SPACING_MD, pady=SPACING_MD)
+        self.scroll.pack(fill="both", expand=True, padx=(SPACING_LG, SPACING_XS), pady=(SPACING_LG, 0))
 
         # Update wraplength labels when the scroll pane is resized.
         # add="+" preserves CTkScrollableFrame's own <Configure> binding
@@ -716,9 +628,12 @@ class BaseTab(ABC):
     def create_separator(self, parent: Any = None):
         """Create a horizontal separator line."""
         surface_theme = self.get_active_surface_theme()
-        return ctk.CTkFrame(
+        # A plain Tk frame: CTkFrame draws its fill as a polygon that vanishes
+        # at 1px tall.  Settings rebuilds on theme change, so a fixed color is fine.
+        return tkinter.Frame(
             parent or self.tab,
             height=1,
-            fg_color=surface_theme["border_color"],
-            corner_radius=RADIUS_MD,
+            background=surface_theme["border_color"],
+            borderwidth=0,
+            highlightthickness=0,
         )

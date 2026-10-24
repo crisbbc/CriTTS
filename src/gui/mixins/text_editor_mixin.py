@@ -9,6 +9,7 @@ class TextEditorMixin:
     # Attributes/methods provided by MainWindow (mixin contract).
     _on_speak: Any
     _schedule_voice_indicator_update: Any
+    _update_placeholder: Any
     root: Any
     settings: Any
     text_input: Any
@@ -39,6 +40,7 @@ class TextEditorMixin:
     def _refresh_after_text_mutation(self):
         """Refresh lightweight editor state after any text mutation."""
         self._highlight_current_line()
+        self._update_placeholder()
         self._schedule_voice_indicator_update()
 
     def _bind_text_editing_shortcuts(self):
