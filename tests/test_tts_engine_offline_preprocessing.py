@@ -78,6 +78,31 @@ class TestOfflinePreprocessing:
 
         assert processed == "It is $5.99 for 1,234 at 12:30, 2020–2021, e.g. now. Next"
 
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            # Run-on sentences get their space back...
+            ("I.Then we go", "I. Then we go"),
+            ("ok.next", "ok. next"),
+            ("Done.5 more", "Done. 5 more"),
+            ("Mr.Smith", "Mr. Smith"),
+            ("Wait...what", "Wait... what"),
+            # ...while decimals, versions, abbreviations and dotted names stay.
+            ("Pi is 3.14 and v1.2.3", "Pi is 3.14 and v1.2.3"),
+            ("The U.S. team at 5 p.m.", "The U.S. team at 5 p.m."),
+            ("Visit google.com or read notes.txt in Node.js", "Visit google.com or read notes.txt in Node.js"),
+        ],
+    )
+    def test_add_natural_pauses_spaces_run_on_periods(self, text, expected):
+        engine = TTSEngine(
+            settings_manager=_make_settings(
+                provider="edge",
+                voice="en-US-AriaNeural",
+            )
+        )
+
+        assert engine._add_natural_pauses(text, "edge") == expected
+
     def test_clean_symbols_keeps_identifiers_and_arithmetic(self):
         assert TTSEngine._clean_symbols("my_var_name and 5 * 3 * 2") == "my_var_name and 5 * 3 * 2"
         assert TTSEngine._clean_symbols("**bold** and _it_") == "bold and it"

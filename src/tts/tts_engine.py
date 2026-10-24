@@ -7,7 +7,7 @@ import asyncio
 import threading
 from collections import OrderedDict
 from importlib import import_module
-from typing import List, Dict, Optional, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 import time
 import logging
 import re
@@ -59,6 +59,12 @@ class TTSEngine:
     _CLAUSE_COLON = re.compile(r"(?<!\d)\s*:\s*|\s*:\s*(?!\d)")
     _CLAUSE_SEMICOLON = re.compile(r"(?<!\d)\s*;\s*|\s*;\s*(?!\d)")
     _CLAUSE_COMMA = re.compile(r"(?<!\d)\s*,\s*|\s*,\s*(?!\d)")
+    # A period squeezed between two words ("ok.next", "I.Then", "Done.5").
+    _RUN_ON_PERIOD = re.compile(r"([^\W_]+)\.(?=([^\W_]+))")
+    # Dotted names that are not sentence breaks: domains, file types, Node.js.
+    _DOTTED_SUFFIXES = frozenset(
+        "com org net io gg tv dev app co uk jp txt json py js ts exe png jpg jpeg gif mp3 wav md html zip pdf".split()
+    )
     _PIPER_VOICE_LANGUAGE = re.compile(r"^([A-Za-z]{2,3})(?:[_-][A-Za-z]{2,4})?[-_]")
     _CURRENCY_SYMBOLS = "$€£¥₹₽₩¢₿"
     _PERCENT_SYMBOLS = "%‰"
@@ -573,10 +579,15 @@ class TTSEngine:
         self,
         voice_short_name: str,
         provider_name: Optional[str] = None,
+        *,
+        load_voices: Optional[Callable[[], Awaitable[List[Dict]]]] = None,
     ) -> bool:
         """
         Return True if the given voice short_name exists in the available voices.
         Can be called before TTS generation to prevent errors.
+
+        *load_voices* replaces the voice-list fetch on a cache miss, so a caller
+        validating several voices can share one fetch.
         """
         provider_cache_key = provider_name or self._get_active_provider_name()
         cache_key = (provider_cache_key, voice_short_name)
@@ -587,7 +598,10 @@ class TTSEngine:
                 self._voice_cache.move_to_end(cache_key)
                 return self._voice_cache[cache_key]
 
-        voices = await self.get_available_voices(provider_override=provider_name)
+        if load_voices is not None:
+            voices = await load_voices()
+        else:
+            voices = await self.get_available_voices(provider_override=provider_name)
         if not voices:
             # The voice list could not be loaded (network down, provider not
             # configured).  Don't cache a verdict, or one offline start would
@@ -855,11 +869,11 @@ class TTSEngine:
             chunk = self._CLAUSE_SEMICOLON.sub("; ", chunk)
             chunk = self._CLAUSE_COMMA.sub(", ", chunk)
             chunk = re.sub(r"\s+([,;:.!?…])", r"\1", chunk)
-            # Space after sentence punctuation that runs into the next word.
-            # A period only counts when a word ends and a capitalised one
-            # starts, so decimals (3.14) and abbreviations (e.g., U.S.) stay.
+            # Space after sentence punctuation that runs into the next word
+            # (see _space_run_on_period for which periods are left alone).
             chunk = re.sub(r"([!?…])(?=[^\s!?….,;:)\]}\"'»”’])", r"\1 ", chunk)
-            chunk = re.sub(r"(?<=[^\W\d_]{2})\.(?=[A-ZÀ-ÖØ-Þ])", ". ", chunk)
+            chunk = re.sub(r"\.{3}(?=[^\W_])", "... ", chunk)
+            chunk = self._RUN_ON_PERIOD.sub(self._space_run_on_period, chunk)
             chunk = re.sub(r" {2,}", " ", chunk).strip()
 
             if provider_name in {"piper", "coqui"} and chunk[-1] not in ".!?…":
@@ -868,6 +882,19 @@ class TTSEngine:
             processed_paragraphs.append(chunk)
 
         return "\n\n".join(processed_paragraphs)
+
+    @classmethod
+    def _space_run_on_period(cls, match: re.Match) -> str:
+        """Add the missing space after a run-on period, keeping decimals,
+        abbreviations and dotted names intact."""
+        left, right = match.group(1), match.group(2)
+        if left[-1].isdigit() and right[0].isdigit():
+            return match.group(0)  # 3.14, v1.2.3, 192.168.0.1
+        if len(left) == 1 and len(right) == 1 and left.isalpha() and right.isalpha():
+            return match.group(0)  # U.S., e.g., a.m.
+        if right.lower() in cls._DOTTED_SUFFIXES:
+            return match.group(0)  # google.com, notes.txt, Node.js
+        return f"{left}. "
 
     async def speak(
         self,
@@ -945,11 +972,31 @@ class TTSEngine:
         except Exception:
             logger.debug("Auto language voice selection failed", exc_info=True)
 
-        # Validate voice before generation (cached); fall back to provider default if mismatched
-        if not await self.validate_voice(actual_voice, provider_name=provider_name):
+        # Validate voice before generation (cached); fall back to provider default if mismatched.
+        # The voice list is fetched at most once per resolution: offline, every
+        # extra fetch is another network timeout before the error shows.
+        fetched_voices: Optional[List[Dict]] = None
+
+        async def load_voices() -> List[Dict]:
+            nonlocal fetched_voices
+            if fetched_voices is None:
+                fetched_voices = await self.get_available_voices(provider_override=provider_name)
+            return fetched_voices
+
+        def list_unavailable() -> bool:
+            return fetched_voices is not None and not fetched_voices
+
+        if not await self.validate_voice(actual_voice, provider_name=provider_name, load_voices=load_voices):
+            if list_unavailable():
+                # Unknown, not invalid: don't swap the user's voice for the
+                # default because one fetch failed.
+                return actual_voice, (
+                    f"Could not load the voice list for the '{provider_name}' TTS provider. "
+                    "Check your internet connection (Edge TTS) or the provider settings."
+                )
             provider = self._get_provider_by_name(provider_name)
             fallback = provider.get_default_voice()
-            if fallback and await self.validate_voice(fallback, provider_name=provider_name):
+            if fallback and await self.validate_voice(fallback, provider_name=provider_name, load_voices=load_voices):
                 logger.info(
                     "Voice '%s' is not valid for the current provider; falling back to '%s'", actual_voice, fallback
                 )
@@ -960,7 +1007,7 @@ class TTSEngine:
                 with self._voice_cache_lock:
                     self._voice_cache.pop((provider_name, invalid_voice), None)
             else:
-                if not await self.get_available_voices(provider_override=provider_name):
+                if list_unavailable():
                     return actual_voice, (
                         f"Could not load the voice list for the '{provider_name}' TTS provider. "
                         "Check your internet connection (Edge TTS) or the provider settings."

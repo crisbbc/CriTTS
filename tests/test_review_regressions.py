@@ -73,10 +73,25 @@ def test_streaming_processor_does_not_boost_quiet_tail():
     quiet = np.full((2048, 2), 0.001, dtype=np.float32)
 
     processor.process(loud)
-    tail = processor.process(quiet)
+    tail = np.concatenate([processor.process(quiet), processor.flush()])[-2048:]
 
     # Same gain as the loud part (0.891 / 0.5), not re-normalized to -1 dBFS.
     assert np.max(np.abs(tail)) == pytest.approx(0.001 * 0.891 / 0.5, rel=1e-3)
+
+
+def test_streaming_processor_soft_onset_gets_the_speech_gain():
+    # A breath, then speech: the breath must not be boosted 4x and then drop.
+    processor = _StreamingPlaybackProcessor(48000, normalize=True, enable_clarity_eq=False)
+    breath = np.full((2048, 2), 0.1, dtype=np.float32)
+    speech = np.full((2048, 2), 0.8, dtype=np.float32)
+
+    out = [processor.process(breath)] + [processor.process(speech) for _ in range(10)] + [processor.flush()]
+    audio = np.concatenate(out)
+
+    gain = 0.891 / 0.8
+    assert len(audio) == 2048 * 11
+    assert np.max(np.abs(audio[:2048])) == pytest.approx(0.1 * gain, rel=1e-3)
+    assert np.max(np.abs(audio[-2048:])) == pytest.approx(0.8 * gain, rel=1e-3)
 
 
 def test_streaming_processor_eq_is_continuous_across_chunks():
@@ -216,6 +231,40 @@ def _routed_manager():
     manager = LinuxSinkManager()
     manager.set_sink_name("crittssink")
     return manager
+
+
+def test_offline_voice_resolution_fetches_voice_list_once(tmp_path):
+    engine = _engine(tmp_path)
+    fetches = []
+
+    async def voices():
+        fetches.append(1)
+        return []
+
+    engine._edge_tts_provider.get_available_voices = voices
+    try:
+        _voice, error = asyncio.run(engine._resolve_synthesis_voice("hello", "en-GB-RyanNeural", "edge"))
+        assert error is not None and "Could not load the voice list" in error
+        assert len(fetches) == 1
+    finally:
+        engine.shutdown()
+
+
+def test_flaky_voice_list_does_not_swap_to_default_voice(tmp_path):
+    engine = _engine(tmp_path)
+    results = iter([[], [{"short_name": "en-US-AriaNeural", "name": "Aria"}]])
+
+    async def voices():
+        return next(results)
+
+    engine._edge_tts_provider.get_available_voices = voices
+    try:
+        voice, error = asyncio.run(engine._resolve_synthesis_voice("hello", "en-GB-RyanNeural", "edge"))
+        # One failed fetch must not quietly speak in the default voice.
+        assert voice == "en-GB-RyanNeural"
+        assert error is not None and "Could not load the voice list" in error
+    finally:
+        engine.shutdown()
 
 
 def test_linux_routing_moves_new_stream_not_existing_passthrough(monkeypatch):

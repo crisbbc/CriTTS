@@ -408,18 +408,30 @@ class TestAudioCacheIsolation:
         finally:
             cache.shutdown()
 
-    def test_malformed_index_rebuilds_existing_audio_entries(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("damaged_index", "kept"),
+        [
+            # Truncated, but written by this version: rebuild from the audio files.
+            ('{\n  "version": %d,\n  "entries": {\n    "abc' % AudioCache.CACHE_VERSION, True),
+            # Truncated index from an older version: its files use old keys.
+            ('{\n  "version": %d,\n  "entries": {' % (AudioCache.CACHE_VERSION - 1), False),
+            # Version unreadable: never adopt files of unknown provenance.
+            ("{", False),
+        ],
+    )
+    def test_malformed_index_only_rebuilds_current_version_entries(self, tmp_path, damaged_index, kept):
         seed = AudioCache(cache_dir=tmp_path, enabled=True)
         try:
             assert seed.store(b"audio", "hello", "voice", provider="edge")
         finally:
             seed.shutdown()
 
-        (tmp_path / "cache_index.json").write_text("{", encoding="utf-8")
+        (tmp_path / "cache_index.json").write_text(damaged_index, encoding="utf-8")
         cache = AudioCache(cache_dir=tmp_path, enabled=True)
         try:
-            assert cache.lookup("hello", "voice", provider="edge") == b"audio"
-            assert cache.get_statistics()["entries"] == 1
+            expected = b"audio" if kept else None
+            assert cache.lookup("hello", "voice", provider="edge") == expected
+            assert cache.get_statistics()["entries"] == (1 if kept else 0)
         finally:
             cache.shutdown()
 
@@ -614,7 +626,7 @@ class TestProviderStableValidationAndPreprocessing:
         edge_provider.generate_speech = AsyncMock(return_value=b"edge-audio")
         edge_provider.get_default_voice = MagicMock(return_value="SharedVoice")
 
-        async def _validate(voice, provider_name=None):
+        async def _validate(voice, provider_name=None, load_voices=None):
             return provider_name == "edge"
 
         async def _preprocess(text, voice, provider_name=None):
@@ -637,7 +649,7 @@ class TestProviderStableValidationAndPreprocessing:
         edge_provider.generate_speech.assert_awaited_once_with(
             "Hello there", "SharedVoice", 0, 100, 0, None
         )
-        assert engine.validate_voice.await_args_list[0].kwargs == {"provider_name": "edge"}
+        assert engine.validate_voice.await_args_list[0].kwargs["provider_name"] == "edge"
         assert engine.preprocess_text.await_args.kwargs == {"provider_name": "edge"}
 
 

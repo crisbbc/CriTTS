@@ -10,6 +10,7 @@ import logging
 import os
 import tempfile
 import math
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any
 from collections import OrderedDict
@@ -192,8 +193,25 @@ class AudioCache:
             logger.info("Loaded %d cached audio entries", len(self._index))
             
         except Exception as e:
-            logger.warning("Failed to load cache index; rebuilding it from audio files: %s", e)
-            self._rebuild_index()
+            # Rebuilding adopts every .mp3 on disk, and keys do not include the
+            # cache version, so only do it when the damaged index still shows it
+            # was written by this version (it is the first key saved).
+            if self._damaged_index_version(index_path) == self.CACHE_VERSION:
+                logger.warning("Failed to load cache index; rebuilding it from audio files: %s", e)
+                self._rebuild_index()
+            else:
+                logger.warning("Failed to load cache index of unknown version; clearing the cache: %s", e)
+                self._clear_incompatible_cache_entries()
+
+    @staticmethod
+    def _damaged_index_version(index_path: Path) -> Optional[int]:
+        """Read the version from an index file that no longer parses as JSON."""
+        try:
+            head = index_path.read_text(encoding="utf-8", errors="replace")[:200]
+        except OSError:
+            return None
+        match = re.search(r'"version"\s*:\s*(\d+)', head)
+        return int(match.group(1)) if match else None
     
     def _save_index(self) -> bool:
         """Save cache index atomically so interruption cannot truncate it."""

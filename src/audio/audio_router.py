@@ -85,20 +85,33 @@ class _StreamingPlaybackProcessor:
     processor keeps the EQ filter state across chunks and normalizes with a
     single gain derived from the loudest peak so far (never raised again),
     whatever normalization type is configured.
+
+    With normalization on, the first ``_PRIME_SECONDS`` of audio are held back
+    and released together, so the starting gain is measured on real speech:
+    otherwise a soft first syllable or breath sets a large gain that drops as
+    soon as the louder speech arrives.  :meth:`flush` releases audio still held
+    when the stream ends early.
     """
 
     _TARGET_PEAK = 0.891  # -1 dBFS, matching non-streaming Peak normalization
     _MAX_GAIN = 4.0
     _CLIP_LEVEL = 0.99
+    _PRIME_SECONDS = 0.3
 
     def __init__(self, sample_rate: int, normalize: bool, enable_clarity_eq: bool):
         self._normalize = normalize
         self._running_peak = 0.0
         self._sos = _clarity_eq_sos(sample_rate) if enable_clarity_eq else None
         self._zi: Optional[np.ndarray] = None
+        self._prime_frames = int(sample_rate * self._PRIME_SECONDS) if normalize else 0
+        self._held: List[np.ndarray] = []
+        self._held_frames = 0
 
     def process(self, chunk: np.ndarray) -> np.ndarray:
-        """Process one (frames, channels) chunk, carrying state to the next."""
+        """Process one (frames, channels) chunk, carrying state to the next.
+
+        May return an empty array while the opening audio is being held back.
+        """
         if chunk.size == 0:
             return chunk
         if self._sos is not None:
@@ -108,8 +121,29 @@ class _StreamingPlaybackProcessor:
             chunk = cast(np.ndarray, filtered)
         if self._normalize:
             self._running_peak = max(self._running_peak, float(np.max(np.abs(chunk))))
-            if self._running_peak > 1e-10:
-                chunk = chunk * min(self._TARGET_PEAK / self._running_peak, self._MAX_GAIN)
+            if self._held_frames < self._prime_frames:
+                self._held.append(chunk)
+                self._held_frames += len(chunk)
+                if self._held_frames < self._prime_frames:
+                    return chunk[:0].astype(np.float32, copy=False)
+                chunk = self._take_held()
+        return self._finish(chunk)
+
+    def flush(self) -> np.ndarray:
+        """Release audio still held back (stream shorter than the priming window)."""
+        if not self._held:
+            return np.zeros((0, 2), dtype=np.float32)
+        self._prime_frames = 0
+        return self._finish(self._take_held())
+
+    def _take_held(self) -> np.ndarray:
+        held = np.concatenate(self._held)
+        self._held = []
+        return held
+
+    def _finish(self, chunk: np.ndarray) -> np.ndarray:
+        if self._normalize and self._running_peak > 1e-10:
+            chunk = chunk * min(self._TARGET_PEAK / self._running_peak, self._MAX_GAIN)
         return np.clip(chunk, -self._CLIP_LEVEL, self._CLIP_LEVEL).astype(np.float32, copy=False)
 
 
@@ -1208,6 +1242,12 @@ class AudioRouter:
             playback_finished = th.Event()
             decode_error = [None]  # type: List[Optional[Exception]]
             detected_sr = [None]  # type: List[Optional[int]]
+            # Without resampling (fast_preview) the output rate is only known
+            # once ffmpeg reports it on stderr, which can lag the first PCM
+            # chunk; the EQ and the output stream must not guess it.
+            sample_rate_known = asyncio.Event()
+            if target_sr is not None:
+                sample_rate_known.set()
 
             # Build persistent ffmpeg decoder
             ffmpeg_cmd = [
@@ -1266,10 +1306,13 @@ class AudioRouter:
                             match = re.search(r'(\d+)\s*Hz', text)
                             if match:
                                 detected_sr[0] = int(match.group(1))
+                                sample_rate_known.set()
                             if len(buffer) > 4096:
                                 buffer = buffer[-2048:]
                 except Exception:
                     logger.debug("MP3 decode chunk processing failed", exc_info=True)
+                finally:
+                    sample_rate_known.set()
 
             async def enqueue_audio(item) -> bool:
                 """Queue decoded audio without blocking the event loop or dropping data."""
@@ -1294,6 +1337,16 @@ class AudioRouter:
                     processor[0] = _StreamingPlaybackProcessor(effective_sr, normalize, enable_clarity_eq)
                 return processor[0].process(chunk)
 
+            async def enqueue_processed(chunk: np.ndarray) -> bool:
+                """Queue a processed chunk (skipping empty ones held back for priming)."""
+                if len(chunk) == 0:
+                    return True
+                if not await enqueue_audio(chunk):
+                    return False
+                if not playback_started.is_set():
+                    playback_started.set()
+                return True
+
             async def read_stdout():
                 """Read decoded PCM from ffmpeg stdout and enqueue for playback."""
                 if not process.stdout:
@@ -1316,17 +1369,19 @@ class AudioRouter:
                             break
                         buffer.extend(data)
 
+                        if not sample_rate_known.is_set():
+                            try:
+                                await asyncio.wait_for(sample_rate_known.wait(), timeout=1.0)
+                            except asyncio.TimeoutError:
+                                pass
+
                         while len(buffer) >= min_bytes:
                             chunk_bytes = buffer[:min_bytes]
                             del buffer[:min_bytes]
 
                             chunk = process_chunk(np.frombuffer(chunk_bytes, dtype=np.float32).reshape(-1, 2))
-
-                            if not await enqueue_audio(chunk):
+                            if not await enqueue_processed(chunk):
                                 return
-
-                            if not playback_started.is_set():
-                                playback_started.set()
 
                     # Flush remaining buffer
                     if buffer:
@@ -1334,10 +1389,11 @@ class AudioRouter:
                         if usable > 0:
                             chunk_bytes = buffer[:usable]
                             chunk = process_chunk(np.frombuffer(chunk_bytes, dtype=np.float32).reshape(-1, 2))
-                            if not await enqueue_audio(chunk):
+                            if not await enqueue_processed(chunk):
                                 return
-                            if not playback_started.is_set():
-                                playback_started.set()
+                    if processor[0] is not None and not stopped():
+                        if not await enqueue_processed(processor[0].flush()):
+                            return
 
                 except Exception as e:
                     decode_error[0] = e

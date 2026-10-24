@@ -43,11 +43,24 @@ class _Stdin:
         pass
 
 
+class _LateReader(_Reader):
+    """Releases its data only after *delay* seconds (ffmpeg stderr lagging stdout)."""
+
+    def __init__(self, data: bytes, delay: float):
+        super().__init__(data)
+        self.delay = delay
+
+    async def read(self, size: int) -> bytes:
+        await asyncio.sleep(self.delay)
+        self.delay = 0
+        return await super().read(size)
+
+
 class _Process:
-    def __init__(self, pcm: bytes):
+    def __init__(self, pcm: bytes, stderr: bytes = b"48000 Hz", stderr_delay: float = 0.0):
         self.stdin = _Stdin()
         self.stdout = _Reader(pcm)
-        self.stderr = _Reader(b"48000 Hz")
+        self.stderr = _LateReader(stderr, stderr_delay)
         self.returncode = None
 
     def kill(self) -> None:
@@ -157,3 +170,25 @@ async def test_streaming_does_not_retry_after_emitting_audio(monkeypatch):
 
     assert chunks == [b"prefix"]
     assert provider.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_eq_uses_detected_rate_even_when_stderr_lags(monkeypatch):
+    # fast_preview does not resample, so the rate comes from ffmpeg's stderr,
+    # which here arrives after the first PCM chunk.
+    process = _Process(np.ones((4096, 2), dtype=np.float32).tobytes(), stderr=b"24000 Hz", stderr_delay=0.05)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    monkeypatch.setattr(audio_router_module.sd, "OutputStream", _OutputStream)
+    rates = []
+    real_processor = audio_router_module._StreamingPlaybackProcessor
+
+    def recording_processor(sample_rate, *args):
+        rates.append(sample_rate)
+        return real_processor(sample_rate, *args)
+
+    monkeypatch.setattr(audio_router_module, "_StreamingPlaybackProcessor", recording_processor)
+    router = AudioRouter()
+    monkeypatch.setattr(router, "_begin_stream_open", AsyncMock(return_value=_NoopTicket()))
+
+    assert await router.play_audio_streaming(_one_chunk_then(), processing_profile="fast_preview")
+    assert rates == [24000]
