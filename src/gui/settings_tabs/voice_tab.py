@@ -25,6 +25,7 @@ from ..theme_constants import (
     SPACING_BASE,
     SPACING_LG,
     SPACING_SM,
+    SPACING_XS,
 )
 from ..utils.scroll_utils import prevent_scroll_propagation
 
@@ -172,6 +173,10 @@ class VoiceTab(BaseTab):
     def _create_filters_section(self, parent):
         """Create the filters section."""
         self.filters_frame = self.create_inline_frame(parent)
+        # Four equal columns share the card width, so no control is squeezed
+        # when the settings window or the section nav changes size.
+        for column in range(4):
+            self.filters_frame.grid_columnconfigure(column, weight=1, uniform="filters")
 
         # Language filter — transient UI state, not persisted
         self.language_filter_var = ctk.StringVar(value="All Languages")
@@ -181,24 +186,24 @@ class VoiceTab(BaseTab):
             values=["All Languages"],
             font=ctk.CTkFont(size=FONT_SM),
             dropdown_font=ctk.CTkFont(size=10),
-            width=150,
+            width=120,
             state="readonly",
         )
-        self.language_filter.pack(side="left", padx=SPACING_BASE)
+        self.language_filter.grid(row=0, column=0, sticky="ew", padx=(0, SPACING_XS))
         self.language_filter.configure(command=lambda _: self._apply_voice_filters())
 
         # Gender filter — transient UI state, not persisted
-        self.gender_filter_var = ctk.StringVar(value="All")
+        self.gender_filter_var = ctk.StringVar(value="All Genders")
         self.gender_filter = ctk.CTkComboBox(
             self.filters_frame,
             variable=self.gender_filter_var,
-            values=["All", "Male", "Female"],
+            values=["All Genders", "Male", "Female"],
             font=ctk.CTkFont(size=FONT_SM),
             dropdown_font=ctk.CTkFont(size=10),
-            width=150,
+            width=120,
             state="readonly",
         )
-        self.gender_filter.pack(side="left", padx=SPACING_BASE)
+        self.gender_filter.grid(row=0, column=1, sticky="ew", padx=SPACING_XS)
         self.gender_filter.configure(command=lambda _: self._apply_voice_filters())
 
         # Region filter — transient UI state, not persisted
@@ -209,21 +214,22 @@ class VoiceTab(BaseTab):
             values=["All Regions"],
             font=ctk.CTkFont(size=FONT_SM),
             dropdown_font=ctk.CTkFont(size=10),
-            width=150,
+            width=120,
             state="readonly",
         )
-        self.region_filter.pack(side="left", padx=SPACING_BASE)
+        self.region_filter.grid(row=0, column=2, sticky="ew", padx=SPACING_XS)
         self.region_filter.configure(command=lambda _: self._apply_voice_filters())
 
         # Clear filters button
         self.clear_filters_button = ctk.CTkButton(
             self.filters_frame,
-            text="Clear Filters",
-            font=ctk.CTkFont(size=10),
-            width=150,
+            text="Clear filters",
+            font=ctk.CTkFont(size=FONT_SM),
+            width=100,
             command=self._clear_filters,
+            **self.get_subtle_button_style(),
         )
-        self.clear_filters_button.pack(side="left", padx=SPACING_SM)
+        self.clear_filters_button.grid(row=0, column=3, sticky="ew", padx=(SPACING_XS, 0))
 
     def _create_search_section(self, parent):
         """Create the search section."""
@@ -459,8 +465,8 @@ class VoiceTab(BaseTab):
 
         self.create_helper_text(
             text=(
-                "🎚  Speed, Volume, Pitch, and Expressiveness sliders are available in the\n"
-                "Quick Controls panel — click the  🎚 Controls  button in the main window."
+                "Speed, Volume, Pitch, and Expressiveness sliders are in the Quick Controls "
+                "panel. Open it with the Controls button in the main window."
             ),
             parent=parent,
             font_size=FONT_MD,
@@ -599,7 +605,7 @@ class VoiceTab(BaseTab):
                 if v.get("locale", "").startswith(lang.split("-")[0] + "-") or v.get("locale") == lang
             ]
 
-        if gender and gender != "All":
+        if gender and gender not in ("All", "All Genders"):
             filtered = [v for v in filtered if (v.get("gender") or "").lower() == gender.lower()]
 
         if region and region != "All" and region != "All Regions":
@@ -634,7 +640,7 @@ class VoiceTab(BaseTab):
     def _clear_filters(self):
         """Clear all filters."""
         self.language_filter_var.set("All Languages")
-        self.gender_filter_var.set("All")
+        self.gender_filter_var.set("All Genders")
         self.region_filter_var.set("All Regions")
         self.search_entry.delete(0, "end")
         self._apply_voice_filters()

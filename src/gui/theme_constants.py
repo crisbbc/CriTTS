@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, TypedDict
 
 """
 Design System Constants for CriTTS
@@ -25,31 +25,39 @@ SPACING_2XL = 48  # 12 * base - section spacing
 # =============================================================================
 
 # Primary colors (main brand color - vibrant blue)
-COLOR_PRIMARY = "#6366f1"  # Indigo 500
-COLOR_PRIMARY_HOVER = "#4f46e5"  # Indigo 600
+# Button fills are the 600/700 shades so white label text clears WCAG AA
+# (4.5:1); the 500 shades only reached 2-3.5:1.
+COLOR_PRIMARY = "#4f46e5"  # Indigo 600
+COLOR_PRIMARY_HOVER = "#4338ca"  # Indigo 700
 COLOR_PRIMARY_LIGHT = "#818cf8"  # Indigo 400
 
 # Accent colors (secondary actions)
-COLOR_ACCENT = "#8b5cf6"  # Violet 500
-COLOR_ACCENT_HOVER = "#7c3aed"  # Violet 600
+COLOR_ACCENT = "#7c3aed"  # Violet 600
+COLOR_ACCENT_HOVER = "#6d28d9"  # Violet 700
 
 # Success colors (positive actions like speak)
-COLOR_SUCCESS = "#10b981"  # Emerald 500
-COLOR_SUCCESS_HOVER = "#059669"  # Emerald 600
+COLOR_SUCCESS = "#047857"  # Emerald 700
+COLOR_SUCCESS_HOVER = "#065f46"  # Emerald 800
 COLOR_SUCCESS_LIGHT = "#34d399"  # Emerald 400
 
 # Danger colors (destructive actions like stop, close)
-COLOR_DANGER = "#ef4444"  # Red 500
-COLOR_DANGER_HOVER = "#dc2626"  # Red 600
+COLOR_DANGER = "#dc2626"  # Red 600
+COLOR_DANGER_HOVER = "#b91c1c"  # Red 700
 COLOR_DANGER_LIGHT = "#f87171"  # Red 400
+# (light, dark) red for text on neutral surfaces: 5.3:1 and 5.5:1.
+COLOR_DANGER_TEXT = ("#b91c1c", "#fca5a5")
 
 # Warning colors (caution states)
 COLOR_WARNING = "#f59e0b"  # Amber 500
 COLOR_WARNING_HOVER = "#d97706"  # Amber 600
 
 # Info colors (informational states)
-COLOR_INFO = "#3b82f6"  # Blue 500
-COLOR_INFO_HOVER = "#2563eb"  # Blue 600
+COLOR_INFO = "#1d4ed8"  # Blue 700
+COLOR_INFO_HOVER = "#1e40af"  # Blue 800
+
+# Label text on filled buttons.  Amber fills are too light for white text.
+COLOR_ON_FILL = "#ffffff"
+COLOR_ON_WARNING = "#0f172a"  # Slate 900, 8.3:1 on Amber 500
 
 # Neutral colors (backgrounds, text, borders) - Dark theme optimized
 COLOR_NEUTRAL_DARKEST = "#0f172a"  # Slate 900
@@ -220,6 +228,24 @@ def get_active_appearance_mode() -> str:
     return mode if mode in {"Light", "Dark"} else "Dark"
 
 
+class ButtonColors(TypedDict):
+    """Keyword arguments for a CTkButton's fill, hover and label colors."""
+
+    fg_color: str
+    hover_color: str
+    text_color: str
+
+
+def neutral_button_style(mode: str | None = None) -> ButtonColors:
+    """Fill, hover and label colors for neutral buttons in the active appearance mode."""
+    colors = get_theme_colors(mode or get_active_appearance_mode())
+    return {
+        "fg_color": colors["button_neutral"],
+        "hover_color": colors["button_neutral_hover"],
+        "text_color": colors["text_primary"],
+    }
+
+
 def get_settings_surface_theme(mode: str | None = None) -> dict[str, Any]:
     """
     Get shared style tokens for the settings shell and section surfaces.
@@ -271,6 +297,7 @@ def get_settings_surface_theme(mode: str | None = None) -> dict[str, Any]:
         "tab_text_color": tab_text_color,
         "button_neutral": colors["button_neutral"],
         "button_neutral_hover": colors["button_neutral_hover"],
+        "button_neutral_text": colors["text_primary"],
         "shell_corner_radius": RADIUS_LG,
         "section_corner_radius": RADIUS_MD,
     }
@@ -368,3 +395,20 @@ def get_theme_colors(mode: str) -> dict[str, Any]:
             "button_neutral": COLOR_NEUTRAL_MEDIUM,
             "button_neutral_hover": COLOR_NEUTRAL,
         }
+
+
+def apply_button_theme() -> None:
+    """Make CustomTkinter's default button colors meet WCAG AA.
+
+    The built-in theme draws #DCE4EE text on a mid blue (about 4.4:1).  Call
+    once after ``ctk.set_default_color_theme``; buttons that pass their own
+    colors are unaffected except for the white label text.
+    """
+    import customtkinter as ctk
+
+    button = ctk.ThemeManager.theme["CTkButton"]
+    button["fg_color"] = [COLOR_INFO, COLOR_INFO]
+    button["hover_color"] = [COLOR_INFO_HOVER, COLOR_INFO_HOVER]
+    button["text_color"] = [COLOR_ON_FILL, COLOR_ON_FILL]
+    # Dimmer than enabled labels but still legible on both neutral fills.
+    button["text_color_disabled"] = [COLOR_NEUTRAL_LIGHT, COLOR_NEUTRAL_LIGHTER]

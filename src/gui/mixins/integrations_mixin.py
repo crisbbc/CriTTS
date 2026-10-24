@@ -1,12 +1,6 @@
 """IntegrationsMixin - extracted from main_window.py (behavior unchanged)."""
 
 from typing import Any
-from ..theme_constants import (
-    COLOR_NEUTRAL,
-    COLOR_NEUTRAL_MEDIUM,
-    COLOR_PRIMARY,
-    COLOR_PRIMARY_HOVER,
-)
 from ..recording_overlay import RecordingOverlay
 from ...vrchat import VRChatOSCClient
 from ...vrchat.chatbox_controller import OscAmplitudeForwarder
@@ -19,6 +13,7 @@ class IntegrationsMixin:
 
     # Attributes/methods provided by MainWindow (mixin contract).
     _chatbox: Any
+    _overlay_button_style: Any
     _safe_after: Any
     _set_status: Any
     _show_error: Any
@@ -54,11 +49,11 @@ class IntegrationsMixin:
             is_recording = self._stt_state == STTState.RECORDING
             self._recording_overlay.set_recording(is_recording)
             # Update button appearance to active
-            self.overlay_button.configure(fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER)
+            self.overlay_button.configure(**self._overlay_button_style())
         else:
             self._recording_overlay.hide_overlay()
             # Update button appearance to inactive
-            self.overlay_button.configure(fg_color=COLOR_NEUTRAL_MEDIUM, hover_color=COLOR_NEUTRAL)
+            self.overlay_button.configure(**self._overlay_button_style())
 
     def _setup_osc_client(self):
         """Setup OSC client for VRChat chatbox integration."""

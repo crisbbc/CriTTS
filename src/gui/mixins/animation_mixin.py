@@ -6,10 +6,10 @@ from ..theme_constants import (
     SPACING_SM,
     ANIMATION_NORMAL,
     BUTTON_WIDTH_DEFAULT,
-    COLOR_NEUTRAL,
-    COLOR_NEUTRAL_MEDIUM,
+    COLOR_DANGER,
+    COLOR_ON_FILL,
     COLOR_SUCCESS,
-    COLOR_WARNING,
+    neutral_button_style,
 )
 from ..gui_utils import DeferredTextAnalysisRequest
 
@@ -203,24 +203,40 @@ class AnimationMixin:
             self._start_speaking_animation()
 
             # Animate speak button to disabled/speaking state
+            neutral = neutral_button_style()
             self._animate_button(
-                self.speak_button, "disabled", "▶  Speaking...", COLOR_NEUTRAL_MEDIUM, ANIMATION_NORMAL
+                self.speak_button, "disabled", "▶  Speaking...", neutral["fg_color"], ANIMATION_NORMAL,
+                text_color=neutral["text_color"],
             )
             # Animate stop button to active state
-            self._animate_button(self.stop_button, "normal", "⏹  Stop", COLOR_WARNING, ANIMATION_NORMAL)
+            self._animate_button(
+                self.stop_button, "normal", "⏹  Stop", COLOR_DANGER, ANIMATION_NORMAL, text_color=COLOR_ON_FILL
+            )
             # Animate clear button to disabled state
-            self._animate_button(self.clear_button, "disabled", "🗑  Clear", COLOR_NEUTRAL, ANIMATION_NORMAL)
+            self._animate_button(
+                self.clear_button, "disabled", "Clear", neutral["fg_color"], ANIMATION_NORMAL,
+                text_color=neutral["text_color"],
+            )
         else:
             # Stop speaking animation
             self._tts_speaking = False
             self._stop_speaking_animation()
 
             # Animate speak button back to normal
-            self._animate_button(self.speak_button, "normal", "▶  Speak", COLOR_SUCCESS, ANIMATION_NORMAL)
+            neutral = neutral_button_style()
+            self._animate_button(
+                self.speak_button, "normal", "▶  Speak", COLOR_SUCCESS, ANIMATION_NORMAL, text_color=COLOR_ON_FILL
+            )
             # Animate stop button back to disabled
-            self._animate_button(self.stop_button, "disabled", "⏹  Stop", COLOR_NEUTRAL_MEDIUM, ANIMATION_NORMAL)
+            self._animate_button(
+                self.stop_button, "disabled", "⏹  Stop", neutral["fg_color"], ANIMATION_NORMAL,
+                text_color=neutral["text_color"],
+            )
             # Animate clear button back to normal
-            self._animate_button(self.clear_button, "normal", "🗑  Clear", COLOR_NEUTRAL_MEDIUM, ANIMATION_NORMAL)
+            self._animate_button(
+                self.clear_button, "normal", "Clear", neutral["fg_color"], ANIMATION_NORMAL,
+                text_color=neutral["text_color"],
+            )
 
     def _start_speaking_animation(self):
         """Start the speaking animation with animated dots."""
@@ -251,7 +267,9 @@ class AnimationMixin:
         """Stop the speaking animation."""
         self._speaking_animation_running = False
 
-    def _animate_button(self, button, state: str, text: str, color: str, duration: float):
+    def _animate_button(
+        self, button, state: str, text: str, color: str, duration: float, text_color: Optional[str] = None
+    ):
         """
         Animate a button with smooth color and text transitions.
 
@@ -261,6 +279,7 @@ class AnimationMixin:
             text: Target button text
             color: Target foreground color
             duration: Animation duration in seconds
+            text_color: Label color for the target fill (keeps text readable on light fills)
         """
         # Store original color for hover effect
         button._original_color = color
@@ -270,6 +289,8 @@ class AnimationMixin:
 
         # Update text and state
         button.configure(text=text, state=state)
+        if text_color is not None:
+            button.configure(text_color=text_color)
 
     def _animate_button_color(self, button, target_color: str, duration: float):
         """

@@ -31,6 +31,7 @@ from src.audio import AudioRouter
 from src.stt import STTEngine
 from src.gui import MainWindow, SettingsWindow
 from src.gui.theme_constants import (
+    apply_button_theme,
     WINDOW_MAIN_WIDTH, WINDOW_MAIN_HEIGHT,
     WINDOW_MAIN_MIN_WIDTH, WINDOW_MAIN_MIN_HEIGHT
 )
@@ -113,6 +114,7 @@ class CriTTSApp(ctk.CTk):
         appearance_mode = self.settings_manager.get("appearance_mode", "Dark")
         ctk.set_appearance_mode(appearance_mode)
         ctk.set_default_color_theme("dark-blue")
+        apply_button_theme()
         
         # Window configuration with theme constants
         self.title("CriTTS Recoded")

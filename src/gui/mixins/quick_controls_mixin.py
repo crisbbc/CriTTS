@@ -3,6 +3,8 @@ from typing import Any
 import customtkinter as ctk
 from ..theme_constants import (
     get_theme_colors,
+    ButtonColors,
+    COLOR_ON_FILL,
     COLOR_BG_SECONDARY,
     COLOR_NEUTRAL_LIGHTER,
     FONT_SM,
@@ -38,16 +40,18 @@ class QuickControlsMixin:
         )
 
     @staticmethod
-    def _get_toggle_button_theme_colors(colors: dict, is_active: bool) -> dict:
+    def _get_toggle_button_theme_colors(colors: dict, is_active: bool) -> ButtonColors:
         """Return the active or neutral theme colors for toggle-style control buttons."""
         if is_active:
             return {
                 "fg_color": colors["button_active"],
                 "hover_color": colors["button_active_hover"],
+                "text_color": COLOR_ON_FILL,
             }
         return {
             "fg_color": colors["button_neutral"],
             "hover_color": colors["button_neutral_hover"],
+            "text_color": colors["text_primary"],
         }
 
     def _create_quick_controls(self):

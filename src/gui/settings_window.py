@@ -28,6 +28,7 @@ from .theme_constants import (
     COLOR_SUCCESS_HOVER,
     COLOR_DANGER,
     COLOR_DANGER_HOVER,
+    COLOR_DANGER_TEXT,
     FONT_SM,
     FONT_MD,
     FONT_LG,
@@ -153,7 +154,7 @@ class SettingsWindow:
             font=ctk.CTkFont(size=FONT_XL, weight=FONT_WEIGHT_BOLD),
             text_color=surface_theme["text_primary"],
         )
-        self.title_label.grid(row=0, column=0, padx=SPACING_MD, pady=(SPACING_MD, SPACING_LG), sticky="w")
+        self.title_label.grid(row=0, column=0, padx=SPACING_LG, pady=(SPACING_MD, 0), sticky="w")
 
         # Create tabbed interface with consistent padding
         self.tabview = ctk.CTkTabview(
@@ -164,7 +165,7 @@ class SettingsWindow:
                 surface_theme=surface_theme,
             ),
         )
-        self.tabview.grid(row=1, column=0, padx=SPACING_LG, pady=SPACING_LG, sticky="nsew")
+        self.tabview.grid(row=1, column=0, padx=SPACING_LG, pady=(0, SPACING_MD), sticky="nsew")
 
         self._initialize_tab_hydration_state()
         self._register_tab_factory(
@@ -219,10 +220,11 @@ class SettingsWindow:
         self.apply_button = ctk.CTkButton(
             self.buttons_frame,
             text="Apply",
-            font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
+            font=ctk.CTkFont(size=FONT_MD),
             command=self._on_apply,
-            fg_color=COLOR_SUCCESS,
-            hover_color=COLOR_SUCCESS_HOVER,
+            fg_color=surface_theme["button_neutral"],
+            hover_color=surface_theme["button_neutral_hover"],
+            text_color=surface_theme["button_neutral_text"],
             width=BUTTON_WIDTH_DEFAULT,
             height=BUTTON_HEIGHT,
             corner_radius=RADIUS_MD,
@@ -237,6 +239,7 @@ class SettingsWindow:
             command=self._on_cancel,
             fg_color=surface_theme["button_neutral"],
             hover_color=surface_theme["button_neutral_hover"],
+            text_color=surface_theme["button_neutral_text"],
             width=BUTTON_WIDTH_DEFAULT,
             height=BUTTON_HEIGHT,
             corner_radius=RADIUS_MD,
@@ -249,8 +252,9 @@ class SettingsWindow:
             text="Reset to Defaults",
             font=ctk.CTkFont(size=FONT_MD),
             command=self._on_reset_to_defaults,
-            fg_color=COLOR_DANGER,
-            hover_color=COLOR_DANGER_HOVER,
+            fg_color=surface_theme["button_neutral"],
+            hover_color=surface_theme["button_neutral_hover"],
+            text_color=COLOR_DANGER_TEXT,
             width=BUTTON_WIDTH_DEFAULT,
             height=BUTTON_HEIGHT,
             corner_radius=RADIUS_MD,
@@ -265,6 +269,7 @@ class SettingsWindow:
             command=self._on_refresh,
             fg_color=surface_theme["button_neutral"],
             hover_color=surface_theme["button_neutral_hover"],
+            text_color=surface_theme["button_neutral_text"],
             width=BUTTON_WIDTH_DEFAULT,
             height=BUTTON_HEIGHT,
             corner_radius=RADIUS_MD,
@@ -499,7 +504,7 @@ class SettingsWindow:
             error_dialog,
             text=heading,
             font=ctk.CTkFont(size=FONT_LG, weight=FONT_WEIGHT_BOLD),
-            text_color=COLOR_DANGER,
+            text_color=COLOR_DANGER_TEXT,
         ).pack(pady=(SPACING_LG, SPACING_SM))
 
         ctk.CTkLabel(

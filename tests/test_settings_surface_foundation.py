@@ -285,11 +285,11 @@ def test_setup_layout_uses_shared_scrollbar_theme_tokens():
 
     BaseTab.setup_layout(dummy_tab)
 
+    # Only the content pane scrolls; the short section nav is a plain frame.
     scroll_calls = base_tab_module.ctk.CTkScrollableFrame.call_args_list
+    assert len(scroll_calls) == 1
     assert scroll_calls[0].kwargs["scrollbar_button_color"] == surface_theme["scrollbar_button_color"]
     assert scroll_calls[0].kwargs["scrollbar_button_hover_color"] == surface_theme["scrollbar_button_hover_color"]
-    assert scroll_calls[1].kwargs["scrollbar_button_color"] == surface_theme["scrollbar_button_color"]
-    assert scroll_calls[1].kwargs["scrollbar_button_hover_color"] == surface_theme["scrollbar_button_hover_color"]
 
 
 def test_scroll_resize_defers_wraplength_updates_via_next_idle_after():

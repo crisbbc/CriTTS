@@ -38,7 +38,7 @@ _PROVIDER_DESCRIPTIONS = {
         "• Rate, volume, and pitch controls"
     ),
     "piper": (
-        "Piper — Fast Offline Neural TTS\n\n"
+        "Piper: Fast Offline Neural TTS\n\n"
         "• Works fully offline after each voice model is downloaded\n"
         "• Lightweight local inference with low startup overhead\n"
         "• Curated multilingual voice list for quick local playback\n"
@@ -47,8 +47,8 @@ _PROVIDER_DESCRIPTIONS = {
         "• Note: pitch control is not supported by Piper"
     ),
     "coqui": (
-        "Coqui XTTS v2 — High-Quality Offline Neural TTS\n\n"
-        "• Works fully offline — no internet needed after first run\n"
+        "Coqui XTTS v2: High-Quality Offline Neural TTS\n\n"
+        "• Works fully offline, no internet needed after first run\n"
         "• Natural, expressive speech with 15 built-in speakers\n"
         "• Multilingual: 17 languages supported\n"
         "• Model downloaded automatically on first use (~1.8 GB)\n"

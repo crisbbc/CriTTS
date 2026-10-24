@@ -11,7 +11,8 @@ from src.gui.main_window import LatestWinsTextAnalysisScheduler, MainWindow
 from src.audio.audio_router import PreparedAudioPayload
 import numpy as np
 import pytest
-from src.gui.theme_constants import get_theme_colors
+from src.gui.gui_utils import STTState
+from src.gui.theme_constants import COLOR_ON_FILL, get_theme_colors
 
 
 def test_latest_request_supersedes_older_request():
@@ -318,8 +319,23 @@ def test_apply_theme_recolors_quick_controls(quick_controls_visible):
     window._qc_pitch_label = MagicMock()
     window.controls_toggle_button = MagicMock()
     window._quick_controls_visible = quick_controls_visible
+    for name in ("clear_button", "settings_button", "overlay_button", "stop_button", "voice_button"):
+        setattr(window, name, MagicMock())
+    window._overlay_visible = False
+    window._tts_speaking = False
+    window._stt_state = STTState.IDLE
 
     MainWindow.apply_theme(window, "Light")
+
+    # The neutral button row follows the theme instead of staying dark slate.
+    light_neutral = {
+        "fg_color": colors["button_neutral"],
+        "hover_color": colors["button_neutral_hover"],
+        "text_color": colors["text_primary"],
+    }
+    for button in (window.clear_button, window.settings_button, window.overlay_button,
+                   window.stop_button, window.voice_button):
+        button.configure.assert_called_once_with(**light_neutral)
 
     window.quick_controls_frame.configure.assert_called_once_with(
         fg_color=colors["bg_secondary"]
@@ -337,11 +353,13 @@ def test_apply_theme_recolors_quick_controls(quick_controls_visible):
         {
             "fg_color": colors["button_active"],
             "hover_color": colors["button_active_hover"],
+            "text_color": COLOR_ON_FILL,
         }
         if quick_controls_visible
         else {
             "fg_color": colors["button_neutral"],
             "hover_color": colors["button_neutral_hover"],
+            "text_color": colors["text_primary"],
         }
     )
     window.controls_toggle_button.configure.assert_called_once_with(

@@ -17,7 +17,7 @@ class WayVRQuickMenu(ctk.CTkToplevel):
         super().__init__(parent)
         self._settings = settings_manager
         self._speak = speak_callback
-        self.title("CriTTS — Quick Responses (WayVR)")
+        self.title("CriTTS: Quick Responses (WayVR)")
         self.geometry(f"{PANEL_W}x{PANEL_H}")
         self.attributes("-topmost", True)
         self.resizable(False, False)

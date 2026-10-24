@@ -177,6 +177,15 @@ class BaseTab(ABC):
 
         # Create the tab content
         self._create_content()
+        self._hide_single_section_sidebar()
+
+    def _hide_single_section_sidebar(self) -> None:
+        """Drop the section nav when it would only point at the one visible section."""
+        sidebar_shell = getattr(self, "sidebar_shell", None)
+        if sidebar_shell is None or len(self._sections) > 1:
+            return
+        sidebar_shell.pack_forget()
+        self.content_shell.pack_configure(padx=SPACING_MD)
 
     @staticmethod
     def get_active_surface_theme() -> Dict[str, Any]:
@@ -256,7 +265,9 @@ class BaseTab(ABC):
         surface_theme = BaseTab.get_active_surface_theme()
         return {
             "fg_color": surface_theme["pane_fg"],
-            "hover_color": surface_theme["section_fg"],
+            # Not section_fg: that is the card behind the button, so the
+            # button vanished into it on hover.
+            "hover_color": surface_theme["button_neutral_hover"],
             "text_color": surface_theme["text_primary"],
             "border_width": 1,
             "border_color": surface_theme["border_color"],
@@ -272,13 +283,54 @@ class BaseTab(ABC):
         self._wraplength_labels.append(label)
 
     def update_wraplength(self, available_width: int):
-        """Update wraplength for all tracked labels."""
+        """Update wraplength for all tracked labels.
+
+        *available_width* is the width of the scroll pane.  Each label wraps
+        at that width minus the horizontal padding of its own container chain;
+        otherwise text inside a section card is wider than the card and Tk
+        crops it on both sides.
+        """
+        # Padding is set once at build time, so each label's inset is walked
+        # once and cached; resize drags then cost one configure per label.
+        insets: Dict[int, int] = getattr(self, "_wrap_insets", None) or {}
+        self._wrap_insets = insets
         for label in self._wraplength_labels:
             try:
                 if label.winfo_exists():
-                    label.configure(wraplength=available_width)
+                    inset = insets.get(id(label))
+                    if inset is None:
+                        inset = insets[id(label)] = self._horizontal_inset(label)
+                    label.configure(wraplength=max(100, available_width - inset))
             except Exception:
                 logger.debug("Label wraplength update failed", exc_info=True)
+
+    def _horizontal_inset(self, widget: Any) -> int:
+        """Sum the configured horizontal padding between *widget* and the scroll pane.
+
+        Reads pack/grid options rather than measured sizes, so the result does
+        not depend on (and cannot feed back into) the label's own width.
+        """
+        scroll = getattr(self, "scroll", None)
+        inset = 0
+        while widget is not None and widget is not scroll:
+            try:
+                manager = widget.winfo_manager()
+                if manager == "pack":
+                    info = widget.pack_info()
+                elif manager == "grid":
+                    info = widget.grid_info()
+                else:
+                    info = {}
+            except Exception:
+                info = {}
+            # Tk reports padx as 8, "8 24" or (8, 24) depending on version;
+            # a single value pads both sides.
+            raw = info.get("padx", 0)
+            values = raw if isinstance(raw, (tuple, list)) else str(raw).split()
+            pads = [int(float(v)) for v in values] or [0]
+            inset += pads[0] * 2 if len(pads) == 1 else sum(pads)
+            widget = getattr(widget, "master", None)
+        return inset
 
     @abstractmethod
     def get_settings(self) -> Dict[str, Any]:
@@ -433,7 +485,7 @@ class BaseTab(ABC):
 
         self.sidebar_shell = ctk.CTkFrame(
             self.layout_frame,
-            width=170,
+            width=200,
             fg_color=surface_theme["pane_fg"],
             corner_radius=RADIUS_LG,
             border_width=1,
@@ -442,16 +494,11 @@ class BaseTab(ABC):
         self.sidebar_shell.pack(side="left", fill="y", padx=(SPACING_MD, SPACING_SM), pady=SPACING_MD)
         self.sidebar_shell.pack_propagate(False)
 
-        # Left sidebar for navigation
-        self.sidebar = ctk.CTkScrollableFrame(
-            self.sidebar_shell,
-            width=150,
-            corner_radius=0,
-            fg_color="transparent",
-            scrollbar_button_color=surface_theme["scrollbar_button_color"],
-            scrollbar_button_hover_color=surface_theme["scrollbar_button_hover_color"],
-        )
-        self.sidebar.pack(fill="both", expand=True, padx=SPACING_XS, pady=SPACING_XS)
+        # Left sidebar for navigation.  Tabs have at most a handful of
+        # sections, so a plain frame: a scrollbar here only stole width and
+        # truncated the section names.
+        self.sidebar = ctk.CTkFrame(self.sidebar_shell, corner_radius=0, fg_color="transparent")
+        self.sidebar.pack(fill="both", expand=True, padx=SPACING_XS, pady=SPACING_SM)
 
         self.content_shell = ctk.CTkFrame(
             self.layout_frame,

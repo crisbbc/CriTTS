@@ -493,7 +493,7 @@ class AdvancedTab(BaseTab):
         else:
             self.configure_surface_status_label(
                 self.pregenerate_status_label,
-                "Nothing to pre-generate — speak phrases first or lower 'Minimum Uses'.",
+                "Nothing to pre-generate. Speak some phrases first, or lower 'Minimum Uses'.",
                 "idle",
             )
 

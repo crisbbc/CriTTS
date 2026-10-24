@@ -429,7 +429,7 @@ class AudioOutputTab(BaseTab):
                 elif detected == "pipewire":
                     audio_system = "PipeWire"
             return (
-                f"Select \"default\" (or \"pulse\"/\"pipewire\") — "
+                f"Select \"default\" (or \"pulse\"/\"pipewire\"). "
                 f"{audio_system} aggregates all sinks into a single ALSA device, "
                 f"so individual virtual sinks won't appear here. "
                 f"Use pavucontrol or pactl move-sink-input to redirect TTS audio to a null sink. "
@@ -442,7 +442,7 @@ class AudioOutputTab(BaseTab):
             )
         # Windows
         return (
-            "Select where TTS audio should play. Only VB-Cable virtual audio devices are shown — "
+            "Select where TTS audio should play. Only VB-Cable virtual audio devices are shown: "
             "TTS audio passes through the cable and appears as a microphone in VRChat/Discord."
         )
 
@@ -573,10 +573,10 @@ class AudioOutputTab(BaseTab):
 
         if device:
             lines = [
-                f"Name: {device.get('name', '—')}",
-                f"Index: {device.get('index', '—')}",
-                f"Channels: {device.get('channels', '—')}",
-                f"Sample rate: {device.get('sample_rate', '—')} Hz",
+                f"Name: {device.get('name', 'unknown')}",
+                f"Index: {device.get('index', 'unknown')}",
+                f"Channels: {device.get('channels', 'unknown')}",
+                f"Sample rate: {device.get('sample_rate', 'unknown')} Hz",
             ]
             self.device_info_text.insert("1.0", "\n".join(lines))
         else:

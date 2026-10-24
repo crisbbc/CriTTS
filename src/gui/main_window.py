@@ -6,7 +6,7 @@ Primary application window with text input, controls, and status display.
 import customtkinter as ctk
 import threading
 import tkinter as tk
-from typing import Optional, Callable
+from typing import Callable, Optional
 import os
 import logging
 
@@ -34,16 +34,11 @@ from .theme_constants import (
     SPACING_LG,
     COLOR_SUCCESS,
     COLOR_SUCCESS_HOVER,
-    COLOR_DANGER,
-    COLOR_DANGER_HOVER,
     COLOR_PRIMARY,
     COLOR_PRIMARY_HOVER,
     COLOR_PRIMARY_LIGHT,
-    COLOR_ACCENT,
-    COLOR_ACCENT_HOVER,
     COLOR_NEUTRAL_DARK,
     COLOR_NEUTRAL_MEDIUM,
-    COLOR_NEUTRAL,
     COLOR_NEUTRAL_LIGHT,
     COLOR_NEUTRAL_LIGHTER,
     COLOR_NEUTRAL_LIGHTEST,
@@ -64,7 +59,11 @@ from .theme_constants import (
     WINDOW_MAIN_MIN_HEIGHT,
     WINDOW_MAIN_WIDTH,
     WINDOW_MAIN_HEIGHT,
+    COLOR_ON_FILL,
+    get_active_appearance_mode,
     get_theme_colors,
+    neutral_button_style,
+    ButtonColors,
 )
 
 
@@ -263,7 +262,7 @@ class MainWindow(
         # Voice indicator with modern styling
         self.voice_indicator_label = ctk.CTkLabel(
             self.header_frame,
-            text="🎤 Voice:",
+            text="Voice:",
             font=ctk.CTkFont(size=FONT_SM, weight=FONT_WEIGHT_BOLD),
             text_color=COLOR_NEUTRAL_LIGHTER,
         )
@@ -282,7 +281,7 @@ class MainWindow(
 
         self.text_label = ctk.CTkLabel(
             self.text_frame,
-            text="✍️ Enter text to speak:",
+            text="Text to speak",
             font=ctk.CTkFont(size=FONT_MD, weight=FONT_WEIGHT_BOLD),
             text_color=COLOR_NEUTRAL_LIGHTEST,
         )
@@ -339,8 +338,7 @@ class MainWindow(
             command=self._on_stop,
             height=BUTTON_HEIGHT_LG,
             width=BUTTON_WIDTH_DEFAULT,
-            fg_color=COLOR_DANGER,
-            hover_color=COLOR_DANGER_HOVER,
+            **neutral_button_style(),
             state="disabled",
             corner_radius=RADIUS_MD,
         )
@@ -349,13 +347,12 @@ class MainWindow(
         # Clear button - subtle styling
         self.clear_button = ctk.CTkButton(
             self.controls_frame,
-            text="🗑  Clear",
+            text="Clear",
             font=ctk.CTkFont(size=FONT_MD),
             command=self._on_clear,
             height=BUTTON_HEIGHT_LG,
             width=BUTTON_WIDTH_DEFAULT,
-            fg_color=COLOR_NEUTRAL_MEDIUM,
-            hover_color=COLOR_NEUTRAL,
+            **neutral_button_style(),
             corner_radius=RADIUS_MD,
         )
         self.clear_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
@@ -363,29 +360,25 @@ class MainWindow(
         # Voice input button - accent styling (for STT)
         self.voice_button = ctk.CTkButton(
             self.controls_frame,
-            text="🎙  Voice",
+            text="Voice input",
             font=ctk.CTkFont(size=FONT_MD),
             command=self._on_voice_input,
             height=BUTTON_HEIGHT_LG,
             width=BUTTON_WIDTH_DEFAULT,
-            fg_color=COLOR_ACCENT,
-            hover_color=COLOR_ACCENT_HOVER,
+            **neutral_button_style(),
             corner_radius=RADIUS_MD,
         )
         self.voice_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
 
         # Overlay toggle button - secondary styling
-        overlay_color = COLOR_PRIMARY if self._overlay_visible else COLOR_NEUTRAL_MEDIUM
-        overlay_hover = COLOR_PRIMARY_HOVER if self._overlay_visible else COLOR_NEUTRAL
         self.overlay_button = ctk.CTkButton(
             self.controls_frame,
-            text="👁  Overlay",
+            text="Overlay",
             font=ctk.CTkFont(size=FONT_MD),
             command=self._on_toggle_overlay,
             height=BUTTON_HEIGHT_LG,
             width=BUTTON_WIDTH_DEFAULT,
-            fg_color=overlay_color,
-            hover_color=overlay_hover,
+            **self._overlay_button_style(),
             corner_radius=RADIUS_MD,
         )
         self.overlay_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
@@ -393,30 +386,28 @@ class MainWindow(
         # Settings button - accent styling
         self.settings_button = ctk.CTkButton(
             self.controls_frame,
-            text="⚙  Settings",
+            text="Settings",
             font=ctk.CTkFont(size=FONT_MD),
             command=self._on_settings,
             height=BUTTON_HEIGHT_LG,
             width=BUTTON_WIDTH_DEFAULT,
-            fg_color=COLOR_PRIMARY,
-            hover_color=COLOR_PRIMARY_HOVER,
+            **neutral_button_style(),
             corner_radius=RADIUS_MD,
         )
         self.settings_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
 
         # Quick controls toggle button - always visible, toggles the slider panel
         self._quick_controls_visible = self.settings.get("quick_controls_visible", False)
-        qc_color = COLOR_PRIMARY if self._quick_controls_visible else COLOR_NEUTRAL_MEDIUM
-        qc_hover = COLOR_PRIMARY_HOVER if self._quick_controls_visible else COLOR_NEUTRAL
         self.controls_toggle_button = ctk.CTkButton(
             self.controls_frame,
-            text="🎚  Controls",
+            text="Controls",
             font=ctk.CTkFont(size=FONT_MD),
             command=self._toggle_quick_controls,
             height=BUTTON_HEIGHT_LG,
             width=BUTTON_WIDTH_DEFAULT,
-            fg_color=qc_color,
-            hover_color=qc_hover,
+            **self._get_toggle_button_theme_colors(
+                get_theme_colors(get_active_appearance_mode()), self._quick_controls_visible
+            ),
             corner_radius=RADIUS_MD,
         )
         self.controls_toggle_button.pack(side="left", padx=SPACING_SM, pady=SPACING_SM, expand=True)
@@ -746,6 +737,24 @@ class MainWindow(
         self.status_label.configure(text_color=colors["text_primary"])
         self.progress_label.configure(text_color=colors["text_muted"])
         self._apply_quick_controls_theme(mode)
+        self._apply_button_row_theme(mode)
+
+    def _overlay_button_style(self, mode: Optional[str] = None) -> ButtonColors:
+        """Indigo while the overlay is shown, neutral while hidden."""
+        if self._overlay_visible:
+            return {"fg_color": COLOR_PRIMARY, "hover_color": COLOR_PRIMARY_HOVER, "text_color": COLOR_ON_FILL}
+        return neutral_button_style(mode)
+
+    def _apply_button_row_theme(self, mode: str) -> None:
+        """Recolor the neutral buttons for *mode*; state colors (speaking, recording) are left alone."""
+        neutral = neutral_button_style(mode)
+        self.clear_button.configure(**neutral)
+        self.settings_button.configure(**neutral)
+        self.overlay_button.configure(**self._overlay_button_style(mode))
+        if not getattr(self, "_tts_speaking", False):
+            self.stop_button.configure(**neutral)
+        if self._stt_state == STTState.IDLE:
+            self.voice_button.configure(**neutral)
 
     def refresh_status(self):
         """Refresh status display (called after settings change)."""

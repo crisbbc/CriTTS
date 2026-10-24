@@ -11,6 +11,8 @@ from ..theme_constants import (
     BUTTON_HEIGHT,
     COLOR_PRIMARY,
     COLOR_PRIMARY_HOVER,
+    COLOR_ON_FILL,
+    COLOR_ON_WARNING,
     COLOR_WARNING,
     COLOR_WARNING_HOVER,
     FONT_SM,
@@ -198,6 +200,7 @@ class KeybindsTab(BaseTab):
                     text="Press keys...",
                     fg_color=COLOR_WARNING,
                     hover_color=COLOR_WARNING_HOVER,
+                    text_color=COLOR_ON_WARNING,
                 )
             else:
                 btn.configure(state="disabled")
@@ -295,7 +298,7 @@ class KeybindsTab(BaseTab):
         
         for action, btn in self.keybind_capture_buttons.items():
             if action == self._capturing_keybind:
-                btn.configure(text="Set", fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER)
+                btn.configure(text="Set", fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER, text_color=COLOR_ON_FILL)
             else:
                 btn.configure(state="normal")
         

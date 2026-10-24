@@ -369,7 +369,7 @@ class CoquiTTSProvider(TTSProvider):
                 except Exception as exc:
                     logger.warning("Coqui TTS: could not load model: %s", exc)
                     if self._status_callback:
-                        self._status_callback(f"❌  Coqui TTS: failed to load model — {exc}")
+                        self._status_callback(f"❌  Coqui TTS: failed to load model: {exc}")
         finally:
             self._end_model_operation()
 

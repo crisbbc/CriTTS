@@ -2,11 +2,12 @@
 from typing import Any
 import logging
 from ..theme_constants import (
-    COLOR_ACCENT,
-    COLOR_ACCENT_HOVER,
     COLOR_DANGER,
     COLOR_DANGER_HOVER,
+    COLOR_ON_FILL,
+    COLOR_ON_WARNING,
     COLOR_TRANSCRIBING,
+    neutral_button_style,
 )
 from ..gui_utils import STTState
 
@@ -66,6 +67,7 @@ class STTMixin:
                 text="⏹  Stop Voice",
                 fg_color=COLOR_DANGER,
                 hover_color=COLOR_DANGER_HOVER,
+                text_color=COLOR_ON_FILL,
                 state="normal"
             )
             # Sync overlay state
@@ -76,6 +78,7 @@ class STTMixin:
             self.voice_button.configure(
                 text="⏳  Transcribing...",
                 fg_color=COLOR_TRANSCRIBING,
+                text_color_disabled=COLOR_ON_WARNING,
                 state="disabled"
             )
             # Sync overlay state
@@ -94,6 +97,7 @@ class STTMixin:
                 text="⚠  Error",
                 fg_color=COLOR_DANGER,
                 hover_color=COLOR_DANGER_HOVER,
+                text_color=COLOR_ON_FILL,
                 state="normal"
             )
             # Sync overlay state
@@ -275,9 +279,8 @@ class STTMixin:
     def _restore_voice_button(self):
         """Restore voice button to idle state."""
         self.voice_button.configure(
-            text="🎙  Voice",
-            fg_color=COLOR_ACCENT,
-            hover_color=COLOR_ACCENT_HOVER,
+            text="Voice input",
+            **neutral_button_style(),
             state="normal"
         )
         # Sync overlay state
