@@ -161,7 +161,7 @@ class AudioOutputTab(BaseTab):
 
         self.create_sink_button = ctk.CTkButton(
             button_frame,
-            text="🔧 Create Null Sink",
+            text="Create Null Sink",
             font=ctk.CTkFont(size=FONT_MD),
             command=self._create_null_sink,
             height=BUTTON_HEIGHT,
@@ -275,7 +275,7 @@ class AudioOutputTab(BaseTab):
     def _after_sink_result(self, message: str, *, error: bool):
         """Schedule a UI update from the background thread."""
         def _apply():
-            self.create_sink_button.configure(state="normal", text="🔧 Create Null Sink")
+            self.create_sink_button.configure(state="normal", text="Create Null Sink")
             self.cleanup_sink_button.configure(state="normal", text="Remove")
             color = "#e74c3c" if error else "#27ae60"
             self.sink_status_label.configure(text=message, text_color=color)
@@ -285,7 +285,7 @@ class AudioOutputTab(BaseTab):
         except Exception:
             try:
                 self.create_sink_button.configure(
-                    state="normal", text="🔧 Create Null Sink"
+                    state="normal", text="Create Null Sink"
                 )
                 self.cleanup_sink_button.configure(
                     state="normal", text="Remove"

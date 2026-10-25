@@ -1,520 +1,175 @@
-### This is a personal project made for fun :)
+<p align="center">
+  <img src="assets/logo.svg" width="96" height="96" alt="CriTTS logo">
+</p>
 
-# CriTTS Recoded
+<h1 align="center">CriTTS Recoded</h1>
 
-A modern, free Text-to-Speech (TTS) application with a sleek GUI. CriTTS supports both **online** and **offline** TTS — it integrates Microsoft Edge's TTS engine (via edge-tts) for high-quality online speech, Piper TTS for fast local synthesis, and Coqui XTTS v2 for higher-quality offline speech. Audio can be routed to any output device, including virtual cables for Discord/VRChat integration.
+<p align="center">Type to talk. A desktop text-to-speech app that speaks into Discord, VRChat or any other app as a microphone.</p>
 
-## Features
+<p align="center">
+  <img src="assets/demo.gif" width="760" alt="Typing a sentence in CriTTS, speaking it, showing the speed, volume and pitch sliders, then browsing the Settings pages">
+</p>
 
-### Core TTS
+This is a personal project made for fun :)
 
-- **Free Online TTS Engine**: Uses Microsoft Edge's online TTS service (no API key required)
-- **Offline TTS Engines**: Choose [Piper TTS](https://github.com/rhasspy/piper) for fast local playback or Coqui XTTS v2 for higher-quality offline synthesis
-- **100+ Voices**: Access to all Microsoft Edge voices plus curated Piper and Coqui offline voices
-- **Voice Customization**: Adjust speech rate (-100 to +100), volume (0-100), and pitch (-100 to +100)
-- **Auto Language Detection**: Automatically detects text language and selects appropriate voice
-- **Custom Language Mappings**: Set preferred voices for each language
+## What it does
 
-### Audio Processing
+You type, CriTTS speaks. The audio can go to your speakers or to a virtual microphone, so people in a voice chat hear the voice you picked.
 
-- **Audio Routing**: Route TTS output to any audio device (VB-Cable on Windows, virtual sinks on Linux/macOS)
-- **Linux One-Click Setup**: Auto-creates a null sink + Discord-compatible virtual microphone — no terminal needed (Settings → Audio → Create Null Sink), auto-cleans on exit
-- **Microphone Passthrough**: Route your real microphone alongside TTS for voice mixing
-- **Processing Profiles**: Choose between Fast Preview, Balanced, or High Quality
-- **Audio Normalization**: Peak, RMS, or LUFS normalization for consistent volume
-- **High-Quality Resampling**: 48kHz with Kaiser-windowed anti-aliasing filters
-- **Stereo Enhancement**: Converts mono TTS to natural-sounding stereo
+- Three speech engines: Microsoft Edge voices (online, free, no API key, 300+ voices), Piper (offline and fast) and Coqui XTTS v2 (offline, higher quality, needs a big first download).
+- Speed, volume and pitch sliders, voice search with language, region and gender filters, favorite and recent voices.
+- Optional automatic language detection that picks a matching voice for what you typed.
+- Voice input: record from your microphone and turn it into text (Google Web Speech, needs internet), optionally spoken right away.
+- Abbreviations (`brb` becomes "be right back"), a soundboard (`[1]` in your text plays a sound file), and custom keybinds, including system-wide hotkeys.
+- VRChat over OSC: your text in the chatbox, a typing indicator while you write, and avatar lip-sync from the speech.
+- A disk cache, so phrases you repeat play instantly.
 
-### Performance
+## Install
 
-- **Persistent Audio Cache**: Generated audio is cached to disk for instant replay
-- **LRU Cache Eviction**: Configurable cache size with automatic cleanup
-- **Phrase Pre-generation**: Frequently used phrases can be pre-generated
-- **Streaming Playback**: Experimental low-latency mode starts playing before generation completes
+You need:
 
-### GUI
+- Python 3.10 or newer, with Tk. On Linux install it from your distro: `sudo pacman -S tk` (Arch), `sudo apt install python3-tk` (Debian/Ubuntu) or `sudo dnf install python3-tkinter` (Fedora).
+- ffmpeg on your `PATH`. Edge voices arrive as MP3 and CriTTS decodes them with ffmpeg.
+- On Linux, the PortAudio library (`libportaudio2` on Debian/Ubuntu, `portaudio` elsewhere).
 
-- **Modern Interface**: Built with CustomTkinter for a sleek, modern look
-- **Dark/Light Mode**: Switch between themes or follow system setting
-- **Voice Search & Filters**: Search by name, filter by language/region/gender
-- **Voice Favorites**: Save favorite voices for quick access
-- **Configurable Keybinds**: All keyboard shortcuts are customizable
-- **Recording Overlay**: Compact always-on-top overlay showing recording state with pulsing indicator (draggable, toggleable)
-
-### Voice Input (STT)
-
-- **Speech-to-Text**: Record microphone audio and transcribe using Google Web Speech API
-- **Auto-Speak**: Optionally speak transcribed text automatically
-- **Language Support**: Configure recognition language in Settings → Behavior
-
-### VRChat Integration
-
-- **OSC Chatbox**: Send TTS text to VRChat's in-game chatbox
-- **Viseme Animation**: Automatic lip-sync for your avatar
-- **Voice Amplitude**: Real-time mouth movement based on audio volume
-- **Typing Indicator**: Show typing animation in VRChat while composing
-
-## Installation
-
-### Prerequisites
-
-- Python 3.8 or higher
-- **Tkinter** (GUI toolkit — bundled with python.org installer on Windows/macOS; on Linux you may need a separate package)
-  - **Arch**: `sudo pacman -S tk`
-  - **Debian/Ubuntu**: `sudo apt install python3-tk`
-  - **Fedora**: `sudo dnf install python3-tkinter`
-- Windows, macOS, or Linux
-
-### Quick Start
+Then clone the repository and start it with the launcher:
 
 ```bash
-# Clone the repository
-git clone https://github.com/k1rk11/CriTTS.git
+git clone https://github.com/crisbbc/CriTTS.git
 cd CriTTS
+./run.sh        # Linux / macOS
+run.bat         # Windows
 ```
 
-**Using launcher scripts (recommended):**
+The launcher uses [uv](https://docs.astral.sh/uv/) when it is installed (it creates `.venv` and installs the locked dependencies from `uv.lock`) and falls back to a plain `venv` plus `pip` otherwise.
+
+Without the launcher:
 
 ```bash
-# Windows
-run.bat
-
-# Linux / macOS
-./run.sh
-```
-
-The launcher scripts handle everything automatically:
-
-1. **Use `uv` if available** — `uv run` auto-creates `.venv` and syncs deps from `uv.lock` (fast path, no fingerprint needed).
-2. **Fallback without uv** — creates `.venv` via `python -m venv`, installs `requirements.txt` only when the fingerprint mismatches or `customtkinter` import fails via `scripts/install_deps.py`.
-3. **Launch** `main.py` and fire-and-forget `scripts/update_check.py`.
-
-Requires Python 3.10+ and optionally `uv` (<https://docs.astral.sh/uv/>).
-
-**Manual installation (if not using launchers):**
-
-```bash
-# Create and activate a virtual environment (recommended)
 python -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-# .venv\Scripts\activate   # Windows
-
-# Install dependencies
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-
-# Run the application
 python main.py
 ```
 
-### Dependencies
+On Linux, uv is set to prefer your system Python (`python-preference = "system"` in `pyproject.toml`). The Pythons uv downloads ship a Tk without font smoothing, which makes the interface look pixelated.
 
-```
-customtkinter>=5.2.0
-edge-tts>=7.2.3
-piper-tts>=1.2.0
-coqui-tts[codec]>=0.27.5
-spacy[ja]>=3.7.0
-langid>=1.1.6
-sounddevice>=0.4.6
-soundfile>=0.12.0
-numpy>=1.21.0
-scipy>=1.9.0
-pyloudnorm>=0.1.0
-python-osc>=1.8.0
-SpeechRecognition>=3.10.0
-keyboard>=0.13.5
-```
+## Using it
 
-### Development
+Type in the text box and press Enter or click **Speak**. Shift+Enter adds a new line. The header shows which voice will speak; click it to change the voice.
 
-Lint and type-check with the configs in `pyproject.toml`:
+| Default shortcut | Action |
+| --- | --- |
+| `Enter` | Speak |
+| `Escape` | Stop |
+| `Ctrl+T` | Clear the text |
+| `Ctrl+,` | Open Settings |
+| `Ctrl+Shift+V` | Start or stop voice input |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next or previous Settings page |
 
-```
-uvx ruff check src/ main.py scripts/ tests/
-uvx mypy --python-executable .venv/bin/python src/config src/tts/text_preprocessor.py
-```
+Every shortcut except Enter and the Settings page keys can be changed in **Settings → Keybinds**. Turn on system-wide hotkeys there to use them while CriTTS is in the background.
 
-## Usage
+The **Speed, volume and pitch** switch under the buttons shows or hides the sliders. The **Recording overlay** switch shows a small always-on-top window that tells you when voice input is recording.
 
-### Basic Operation
+Settings is split into pages: Voice, Audio output, Appearance, Abbreviations, Keybinds, Behavior, Soundboard, VRChat, Advanced and TTS provider. Changes apply when you click **Apply** or **Save**.
 
-1. **Enter Text**: Type or paste text in the main text area
-2. **Speak**: Click "Speak" or press `Enter`
-3. **Stop**: Click "Stop" or press `Escape`
-4. **Clear**: Click "Clear" or press `Ctrl+T`
+## Sending the voice to Discord or VRChat
 
-### Voice Input
+CriTTS plays into a virtual audio device, and Discord or VRChat use that device's other end as a microphone.
 
-Click the **🎙 Voice** button (or press `Ctrl+Shift+V`) to start recording. Click again (or press the keybind again) to stop and transcribe.
+### Windows
 
-- Uses Google Web Speech API (free, requires internet)
-- Configure language and microphone in **Settings → Behavior**
-- Enable **Auto-Speak** to automatically speak transcribed text
+1. Install [VB-Cable](https://vb-audio.com/Cable/). CriTTS tells you if it is missing.
+2. In **Settings → Audio output**, pick `CABLE Input (VB-Audio Virtual Cable)`.
+3. In Discord (or VRChat), set the input device to `CABLE Output`.
 
-### Settings
+### Linux
 
-Access settings by clicking the "Settings" button or pressing `Ctrl+,`
+In **Settings → Audio output → PulseAudio Sink Routing**, click **Create Null Sink**. CriTTS creates:
 
-#### Voice Tab
+- a null sink, `crittssink`, that receives the speech, and
+- a virtual microphone, `CriTTS_Virtual_Mic`, that Discord and VRChat list as an input device.
 
-- Select voice from the list (100+ voices available)
-- Adjust rate, volume, and pitch
-- Preview voices before selecting
-- Manage favorite voices
+Pick `CriTTS_Virtual_Mic` as your microphone in Discord or VRChat. CriTTS moves its speech onto the null sink by itself, keeps voice previews on your speakers, and removes both devices when it exits (or when you click **Remove**). If Discord does not list the microphone, restart Discord; it reads the device list at startup.
 
-#### Audio Output Tab
-
-- Select output device
-- Enable/disable normalization
-- Choose normalization type (Peak, RMS, LUFS)
-- **Linux PulseAudio Sink Routing**: One-click null sink + virtual mic setup for Discord/VRChat
-- **Microphone Passthrough**: Route your real microphone to the output device alongside TTS (platform-adaptive)
-  - Enable/disable passthrough
-  - Select microphone device
-  - Select passthrough output device
-  - Adjust passthrough volume (0-200%)
-
-#### Appearance Tab
-
-- Switch between Dark, Light, or System theme
-- **Button Visibility**: Choose which buttons appear in the main window (Speak, Stop, Clear, Voice, Overlay). Settings button is always visible.
-
-#### Abbreviations Tab
-
-- Define text expansion shortcuts (e.g., "idk" → "I don't know")
-
-#### Keybinds Tab
-
-- Customize all keyboard shortcuts
-
-#### Behavior Tab
-
-- Configure speak mode (current line or all text)
-- Enable auto language detection
-- Set language-to-voice mappings
-
-#### Soundboard Tab
-
-- Map soundboard slots to local audio files
-- Enable or disable inline soundboard command parsing for tokens like `[1]`
-
-#### VRChat OSC Tab
-
-- Enable OSC integration
-- Configure chatbox settings
-- Set up viseme/amplitude for lip-sync
-
-#### Advanced Tab
-
-- Manage audio cache settings
-- **Phrase Pre-generation**: Enable/disable automatic phrase tracking, set minimum uses and max phrase counts, and pre-generate your most-used phrases so they play instantly
-- Select processing profile
-- Enable streaming playback (experimental)
-
-#### TTS Provider Tab
-
-- Switch between **Edge TTS (Online)**, **Piper TTS (Offline Fast)**, and **Coqui TTS (Offline High Quality)**
-- Review provider-specific capabilities before saving
-- Configure Coqui GPU selection and speech language when using Coqui TTS
-
-## Offline TTS Providers
-
-CriTTS includes built-in support for both offline providers:
-
-- [Piper TTS](https://github.com/rhasspy/piper) for fast, local neural text-to-speech with per-voice model downloads.
-- Coqui XTTS v2 for higher-quality offline synthesis with a larger first-use model download.
-
-### Switching Offline Providers
-
-1. Open **Settings → TTS Provider**
-2. Change **Active Provider** to **Piper TTS (Offline Fast)** or **Coqui TTS (Offline High Quality)**
-3. Choose a voice from the selected provider's voice list
-
-### First-Use Model Download
-
-Piper voice models are downloaded automatically the first time they are used and cached in `~/.critts/piper_voices/`. Model files range from a few MB (x-low quality) to ~100 MB (high quality).
-
-Coqui XTTS v2 downloads a larger shared model on first use (about 1.8 GB) and then runs fully offline.
-
-While a model is downloading or loading, the **status bar** at the bottom of the main window shows a live indicator. Subsequent uses of the same model are instant.
-
-> **Language-aware sentence splitting (Coqui)**: The "Language-aware sentence splitting" option in **Settings → TTS Provider** keeps long or unpunctuated text stable by splitting on real sentence boundaries before synthesis. It requires [spaCy](https://spacy.io/), which is included in `requirements.txt` as `spacy[ja]` (the `[ja]` extra also bundles SudachiPy so Japanese voices work). If spaCy is missing, Coqui silently falls back to its built-in chunker and logs a warning — install it with `pip install "spacy[ja]"` to enable the feature.
-
-### Available Piper Voices
-
-| Voice | Locale | Gender | Quality |
-| ------- | -------- | -------- | --------- |
-| English (US) – Lessac | en-US | Male | Medium |
-| English (US) – Ryan | en-US | Male | High |
-| English (US) – Amy | en-US | Female | Low |
-| English (US) – Ljspeech | en-US | Female | High |
-| English (GB) – Alan | en-GB | Male | Medium |
-| English (GB) – Jenny Dioco | en-GB | Female | Medium |
-| German – Thorsten | de-DE | Male | Medium |
-| Spanish (ES) – Carlfm | es-ES | Male | x-low |
-| Spanish (MX) – Claude | es-MX | Male | High |
-| French – Siwis | fr-FR | Female | Medium |
-| Italian – Riccardo | it-IT | Male | x-low |
-| Portuguese (BR) – Faber | pt-BR | Male | Medium |
-| Russian – Ruslan | ru-RU | Male | Medium |
-| Dutch – Mls | nl-NL | Female | Medium |
-| Polish – Mls 6892 | pl-PL | Female | Low |
-| Ukrainian – Lada | uk-UA | Female | x-low |
-| Vietnamese – Vivos | vi-VN | Female | x-low |
-| Turkish – Dfki | tr-TR | Male | Medium |
-| Romanian – Mihai | ro-RO | Male | Medium |
-
-> **Note**: Piper does not support pitch adjustment. Rate and volume controls work normally.
-
-## Audio Routing Setup
-
-CriTTS routes TTS audio to a selected output device so it can be used as a microphone input in applications like VRChat or Discord. The setup varies by platform.
-
-### Windows — VB-Cable
-
-To route TTS audio to Discord or other applications on Windows:
-
-1. **Install VB-Cable**
-   - Download from [VB-Audio Software](https://vb-audio.com/Cable/)
-   - Install the virtual audio cable
-   - CriTTS will automatically detect if VB-Cable is missing and prompt you to install it
-
-2. **Configure CriTTS**
-   - Open Settings > Audio Output
-   - Select "CABLE Input (VB-Audio Virtual Cable)"
-
-3. **Configure Discord**
-   - Open Discord Settings > Voice & Video
-   - Set Input Device to "CABLE Output"
-   - Disable "Automatically determine input sensitivity"
-
-### Linux — One-Click Null Sink + Virtual Mic
-
-CriTTS provides a **fully automatic one-click setup** for Linux audio routing. No terminal commands needed.
-
-**In Settings → Audio → "PulseAudio Sink Routing":**
-
-1. Click **"🔧 Create Null Sink"** — this creates:
-   - A null sink (`crittssink`) that accepts TTS audio silently
-   - A virtual microphone (**CriTTS_Virtual_Mic**) that Discord/VRChat can see as an input device
-2. In Discord/VRChat, set your microphone to **"CriTTS_Virtual_Mic"**
-3. Click **Speak** — TTS audio is automatically routed to the null sink (not your speakers) and appears as microphone input
-
-**What happens under the hood:**
-
-- TTS audio plays to the null sink via `pactl move-sink-input` (automatic, no user action needed)
-- The null sink's audio is mirrored to a virtual microphone via `module-remap-source`
-- Cleanup is automatic when CriTTS exits (no leftover modules)
-- Use the **"🗑 Remove"** button to clean up manually at any time
-- Voice **Preview** in the Voice tab plays through your speakers as normal (for testing)
-
-> **Why the virtual mic?** Discord and Chromium-based apps hide PulseAudio "monitor" sources from the input device list. CriTTS creates a virtual mic with the correct `media.class=Audio/Source` that Discord will show.
-
-> **Tip:** If Discord doesn't show "CriTTS_Virtual_Mic" right away, restart Discord — it caches the device list on startup.
-
-**Manual setup (if you prefer the terminal):**
+The same setup from a terminal:
 
 ```bash
-# Create the null sink
 pactl load-module module-null-sink sink_name=crittssink sink_properties=device.description=CriTTS_Null_Sink
-
-# Create Discord-compatible virtual mic
 pactl load-module module-remap-source source_name=crittssink_mic source_properties=device.description=CriTTS_Virtual_Mic master=crittssink.monitor
 ```
 
-### macOS — BlackHole / Loopback
+### macOS
 
-On macOS, CriTTS shows **all** audio output devices:
+Install [BlackHole](https://existential.audio/blackhole/) (free) or [Loopback](https://rogueamoeba.com/loopback/), pick it in **Settings → Audio output**, and pick the same device as the microphone in Discord or VRChat.
 
-1. Install [BlackHole](https://existential.audio/blackhole/) (free) or [Loopback](https://rogueamoeba.com/loopback/) (paid)
-2. Open Settings > Audio Output in CriTTS
-3. Select BlackHole/Loopback as the output device
-4. In Discord/VRChat, set your microphone to the same BlackHole/Loopback device
+### Talking and typing at the same time
 
-## Microphone Passthrough
+**Microphone passthrough** (Settings → Audio output) sends your real microphone to the same output as the speech, at 0 to 200% volume, so people hear both your voice and CriTTS.
 
-The Microphone Passthrough feature allows you to route your real microphone audio to the selected output device alongside TTS output. This is useful for mixing your voice with TTS in VRChat or Discord.
+## Offline voices
 
-### Setup
+Choose the engine in **Settings → TTS provider**.
 
-1. **Enable Passthrough**
-   - Open Settings > Audio Output
-   - Scroll to "Microphone Passthrough" section
-   - Check "Enable microphone passthrough to output device"
+- **Piper** downloads each voice the first time you use it (a few MB up to about 100 MB) into `~/.critts/piper_voices/`. It has 20 voices covering English (US and UK), German, Spanish (Spain and Mexico), French, Italian, Portuguese (Brazil), Russian, Dutch, Polish, Ukrainian, Vietnamese, Turkish and Romanian. Piper has no pitch control.
+- **Coqui XTTS v2** downloads one shared model of about 1.8 GB on first use and then runs offline. It has no pitch control either. Its "Language-aware sentence splitting" option uses spaCy, which is installed with the other dependencies.
 
-2. **Select Microphone**
-   - Choose your microphone device from the dropdown
-   - Use "Default (System)" to use your system's default microphone
+The status bar shows download and loading progress.
 
-3. **Select Passthrough Output**
-   - On Windows: choose the same VB-Cable device as your main output
-   - On Linux/macOS: choose the same virtual device as your main output
+## Audio processing
 
-4. **Adjust Volume**
-   - Set passthrough volume (0-200%)
-   - 100% = normal volume
-   - 200% = doubled volume (for quiet microphones)
-   - 0% = muted
+**Settings → Advanced** has three processing profiles:
 
-### How It Works
+| Profile | Sample rate | Anti-aliasing | Stereo widening |
+| --- | --- | --- | --- |
+| Fast preview | as generated | none | none |
+| Balanced (default) | 48 kHz | Kaiser, β = 5 | 0.15 |
+| High quality | 48 kHz | Kaiser, β = 8 | 0.25 |
 
-When enabled, CriTTS creates a real-time audio stream from your selected microphone to the chosen output device. This runs continuously in the background, allowing you to speak naturally while TTS plays.
+**Settings → Audio output** sets normalization: Peak (to -1 dBFS), RMS, LUFS (to -14 LUFS) or none. Advanced also has an experimental streaming mode for Edge voices, which starts playing before the whole sentence has been generated.
 
-## Audio Processing Profiles
+## VRChat
 
-| Profile | Sample Rate | Anti-Aliasing | Stereo Width | Best For |
-| --------- | ------------- | --------------- | -------------- | ---------- |
-| Fast Preview | Original | None | None | Quick testing |
-| Balanced | 48kHz | Kaiser β=5 | 0.3 | General use (default) |
-| High Quality | 48kHz | Kaiser β=8 | 0.5 | Important content |
-
-## Normalization Types
-
-| Type | Description | Best For |
-| ------ | ------------- | ---------- |
-| **Peak** | Limits maximum amplitude to -1dB | General use, prevents clipping |
-| **RMS** | Ensures consistent loudness | Multi-voice projects |
-| **LUFS** | Professional loudness standards (-14 LUFS) | Streaming, broadcast |
-| **None** | No processing | External audio workflows |
-
-## VRChat Integration
-
-### Setup
-
-1. Enable VRChat OSC in Settings > VRChat OSC
-2. Ensure OSC is enabled in VRChat (Settings > OSC > Enable OSC)
-3. Configure desired features:
-   - **Send to Chatbox**: Display TTS text in VRChat
-   - **Viseme Animation**: Animate avatar mouth
-   - **Voice Amplitude**: Real-time mouth movement
-
-### Features
-
-- **Chatbox Integration**: TTS text appears in VRChat's chatbox
-- **Lip-Sync**: Avatar mouth moves in sync with speech
-- **Typing Indicator**: Shows typing animation while composing
-
-### Limitations
-
-- Only incoming messages from other players can be monitored (VRChat limitation)
-- Your own typed messages in VRChat are not logged by VRChat
-
-## Project Structure
-
-```
-CriTTS/
-├── main.py                    # Application entry point
-├── requirements.txt           # Python dependencies
-├── README.md                  # This file
-└── src/
-    ├── config/
-    │   └── settings_manager.py    # JSON settings persistence
-    ├── tts/
-    │   ├── tts_engine.py          # TTS orchestration
-    │   ├── text_preprocessor.py   # Text cleaning & abbreviation expansion
-    │   ├── audio_cache.py         # Persistent LRU audio cache
-    │   └── providers/
-    │       ├── edge_tts_provider.py   # edge-tts integration (online)
-    │       └── piper_tts_provider.py  # Piper TTS integration (offline)
-    ├── audio/
-    │   └── audio_router.py        # Audio device routing & processing
-    ├── stt/
-    │   └── stt_engine.py          # Speech-to-text engine
-    ├── utils/
-    │   ├── language_detector.py   # Language detection for auto voice selection
-    │   └── keybind_utils.py       # Keybind utility functions
-    ├── gui/
-    │   ├── main_window.py         # Main application window
-    │   ├── settings_window.py     # Settings dialog
-    │   ├── keybind_manager.py     # Dynamic keybind registration
-    │   ├── theme_constants.py     # UI theme & layout constants
-    │   ├── recording_overlay.py   # Recording state overlay
-    │   └── settings_tabs/         # Settings tab components
-    │       ├── voice_tab.py           # Voice selection & customization
-    │       ├── audio_output_tab.py    # Audio device, normalization & Linux sink routing
-    │       ├── appearance_tab.py      # Theme & button visibility
-    │       ├── abbreviations_tab.py   # Text expansion shortcuts
-    │       ├── keybinds_tab.py        # Keyboard shortcuts
-    │       ├── behavior_tab.py        # Speak mode & language detection
-    │       ├── vrchat_osc_tab.py      # VRChat OSC integration
-    │       └── advanced_tab.py        # Cache & processing profiles
-    └── vrchat/
-        ├── osc_client.py          # VRChat OSC client
-        └── viseme_mapper.py       # Phoneme-to-viseme mapping
-```
-
-## Keyboard Shortcuts
-
-| Default Shortcut | Action |
-| ------------------ | -------- |
-| `Escape` | Stop playback |
-| `Ctrl+T` | Clear text |
-| `Ctrl+,` | Open Settings |
-| `Ctrl+Shift+V` | Voice input (toggle recording) |
-
-All shortcuts are customizable in Settings > Keybinds.
-
-**Global Hotkeys**: Enable the "Global Hotkeys" toggle in Settings > Keybinds to allow shortcuts to work even when the app is not focused. This requires the `keyboard` library (included in dependencies).
+1. In VRChat, turn on OSC (Action Menu → Options → OSC → Enabled).
+2. In **Settings → VRChat**, enable OSC. The defaults (`127.0.0.1`, port `9000`) match VRChat.
+3. Choose what to send: the chatbox message, the typing indicator, viseme lip-sync and mouth movement from the speech volume. **Test connection** sends a test message.
 
 ## Troubleshooting
 
-### No Audio Output
+**No sound.** Check the device in Settings → Audio output and that it is not muted in your system mixer.
 
-1. Check output device in Settings > Audio Output
-2. Ensure device is not muted in system settings
-3. Try "System Default" device
+**Edge voices fail.** Edge needs internet access. If every request fails with HTTP 403, update edge-tts (`uv sync` or `pip install -U edge-tts`): Microsoft rejects old versions of it.
 
-### Audio Routing Not Working
+**Discord does not hear CriTTS on Linux.** Check that both devices exist (`pactl list sinks short | grep crittssink` and `pactl list sources short | grep CriTTS_Virtual_Mic`), then restart Discord.
 
-**Windows:**
+**A Piper voice never finishes downloading.** The first use of each voice needs internet. Delete `~/.critts/piper_voices/` to force a fresh download.
 
-1. Verify VB-Cable is installed correctly
-2. Check Discord input device is "CABLE Output"
-3. Disable noise suppression in Discord
+**The interface looks pixelated on Linux.** Your Python's Tk has no font smoothing. Run CriTTS with the system Python (the launcher does this through uv).
 
-**Linux:**
+## Development
 
-1. Verify the null sink is loaded: `pactl list sinks short | grep crittssink`
-2. Verify the virtual mic exists: `pactl list sources short | grep CriTTS_Virtual_Mic`
-3. Restart Discord if it doesn't show "CriTTS_Virtual_Mic" in input devices
-4. Check that no other process is using the same sink
+```bash
+uv sync --group dev
+uv run ruff check .
+uv run pyright
+uv run pytest -q
+```
 
-### TTS Not Working
+GitHub Actions runs the same checks on every push and pull request (`.github/workflows/ci.yml`).
 
-1. Check internet connection (edge-tts requires internet)
-2. Verify firewall is not blocking Python
-3. Try refreshing voices in Settings
+The code lives in `src/`: `tts/` (engines and text preprocessing), `audio/` (playback, routing and the Linux virtual devices), `stt/` (voice input), `vrchat/` (OSC), `gui/` (windows and the Settings pages) and `config/` (settings stored in `~/.critts/config.json`).
 
-### Piper Model Download Stuck / Failed
+## AI usage
 
-1. Ensure you have an internet connection for the **first** use of a Piper voice (models are downloaded once from Hugging Face and cached locally)
-2. The status bar shows download progress — wait for "Loading Piper model…" to complete before speaking
-3. Cached models are stored in `~/.critts/piper_voices/` — delete the folder to force a fresh download
-
-### VRChat Integration Issues
-
-1. Ensure OSC is enabled in VRChat settings
-2. Check IP/port configuration (default: 127.0.0.1:9000)
-3. Use "Test Connection" in Settings > VRChat OSC
-
-## Performance Tips
-
-1. **Enable Audio Cache**: Reduces regeneration of repeated phrases
-2. **Use Balanced Profile**: Good quality without excessive processing
-3. **Pre-generate Phrases**: Common phrases load instantly
-4. **Enable Streaming**: Lower latency for long text (experimental)
+Large parts of the code, tests and documentation were written with AI coding assistants (Claude Code). I directed the work, tested the app and decide what ships. Commits made with AI help credit Claude as a co-author in the git history. It is a hobby project, so bugs may exist; issues are welcome.
 
 ## Credits
 
-- **GUI Framework**: [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)
-- **TTS Engine**: [edge-tts](https://github.com/rany2/edge-tts)
-- **Audio I/O**: [sounddevice](https://python-sounddevice.readthedocs.io/), [soundfile](https://pysoundfile.readthedocs.io/)
-- **Virtual Audio**: [VB-Audio Cable](https://vb-audio.com/Cable/) (Windows), PulseAudio/PipeWire null sinks (Linux), [BlackHole](https://existential.audio/blackhole/) (macOS)
+- Interface: [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)
+- Speech: [edge-tts](https://github.com/rany2/edge-tts), [Piper](https://github.com/rhasspy/piper), [Coqui TTS](https://github.com/idiap/coqui-ai-TTS)
+- Audio: [sounddevice](https://python-sounddevice.readthedocs.io/), [soundfile](https://pysoundfile.readthedocs.io/), [pyloudnorm](https://github.com/csteinmetz1/pyloudnorm)
+- Virtual audio: [VB-Cable](https://vb-audio.com/Cable/) (Windows), PulseAudio/PipeWire (Linux), [BlackHole](https://existential.audio/blackhole/) (macOS)
 
 ## License
 
-This project is open source. Feel free to modify and distribute.
-
----
-
-**Enjoy CriTTS Recoded!** 🎙️
+MIT, see [LICENSE](LICENSE).

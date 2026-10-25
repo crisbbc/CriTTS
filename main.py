@@ -6,6 +6,7 @@ and sounddevice for audio routing to virtual devices like VB-Cable.
 """
 import customtkinter as ctk
 import sys
+import tkinter
 import os
 import signal
 import atexit
@@ -24,6 +25,10 @@ logging.basicConfig(
 
 # Add src to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+ICON_ICO_PATH = os.path.join(ASSETS_DIR, "icon.ico")
+ICON_PNG_PATH = os.path.join(ASSETS_DIR, "icon-256.png")
 
 from src.config import SettingsManager
 from src.tts import TTSEngine
@@ -121,13 +126,23 @@ class CriTTSApp(ctk.CTk):
         self.geometry(f"{WINDOW_MAIN_WIDTH}x{WINDOW_MAIN_HEIGHT}")
         self.minsize(WINDOW_MAIN_MIN_WIDTH, WINDOW_MAIN_MIN_HEIGHT)
         
-        # Set icon if available
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "image.ico")
-        if os.path.exists(icon_path):
-            try:
-                self.iconbitmap(icon_path)
-            except Exception:
-                pass
+        self._apply_window_icon()
+
+    def _apply_window_icon(self):
+        """Use the CriTTS logo as the window icon.
+
+        Windows takes the .ico; Tk elsewhere cannot read .ico files, so it gets
+        the PNG through iconphoto (which also covers the Settings window).
+        """
+        try:
+            if sys.platform == "win32":
+                self.iconbitmap(ICON_ICO_PATH)
+            else:
+                # Keep a reference: Tk drops the image once Python frees it.
+                self._icon_image = tkinter.PhotoImage(file=ICON_PNG_PATH)
+                self.iconphoto(True, self._icon_image)
+        except Exception:
+            logging.getLogger(__name__).debug("Could not set the window icon", exc_info=True)
     
     def _create_main_window(self):
         """Create the main application window."""
@@ -137,7 +152,7 @@ class CriTTSApp(ctk.CTk):
             tts_engine=self.tts_engine,
             audio_router=self.audio_router,
             on_open_settings=self._open_settings,
-            icon_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "image.ico"),
+            icon_path=ICON_ICO_PATH if sys.platform == "win32" else None,
             stt_engine=self.stt_engine
         )
         
